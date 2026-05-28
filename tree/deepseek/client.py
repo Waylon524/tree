@@ -1,0 +1,68 @@
+"""Generic LLM client: per-role AsyncOpenAI instances with degradation support."""
+
+from __future__ import annotations
+
+from openai import AsyncOpenAI
+
+from tree.config import Settings
+from tree.observability.retry import DegradationTracker, retry_with_backoff
+
+
+class LLMClient:
+    """Multi-role LLM client. Each role gets its own AsyncOpenAI instance."""
+
+    def __init__(self, settings: Settings):
+        self._clients: dict[str, AsyncOpenAI] = {}
+        self._models: dict[str, str] = {}
+        self._degradation = DegradationTracker(
+            threshold=settings.pro_degradation_threshold,
+            cooldown_sec=settings.pro_degradation_cooldown_sec,
+        )
+        self._max_retries = settings.max_retries
+
+        for role_name, config in [
+            ("examiner", settings.examiner),
+            ("student", settings.student),
+            ("writer", settings.writer),
+            ("archivist", settings.archivist),
+        ]:
+            self._clients[role_name] = AsyncOpenAI(
+                api_key=config.api_key,
+                base_url=config.base_url,
+            )
+            self._models[role_name] = config.model
+
+    async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+        """Call LLM for a given role. Examiner uses degradation logic."""
+        client = self._clients[role]
+        model = self._models[role]
+
+        # Examiner: check if degraded to student model
+        if role == "examiner" and self._degradation.is_degraded:
+            client = self._clients["student"]
+            model = self._models["student"]
+
+        async def _call():
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            return resp.choices[0].message.content or ""
+
+        if role == "examiner":
+            try:
+                result = await retry_with_backoff(_call, max_retries=self._max_retries)
+                self._degradation.record_success()
+                return result
+            except Exception:
+                self._degradation.record_failure()
+                raise
+
+        return await retry_with_backoff(_call, max_retries=self._max_retries)
+
+    async def close(self) -> None:
+        for client in self._clients.values():
+            await client.close()

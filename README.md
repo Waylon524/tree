@@ -166,21 +166,33 @@ Step 4 重构草稿后，不回到 Step 1 重新命题，而是使用**同一份
 
 ```
 T.R.E.E/
-├── CLAUDE.md                          # 总场控逻辑 + Auto-Loop 协议（含 Step 0 ~ Step 4）
-├── .claude/
-│   └── agents/
-│       ├── faithfulness-examiner.md   # 考官：组卷 + 双重审计 + 上下文保留
-│       ├── evidence-based-student.md  # 学生：零基础盲测 + 预读协议 + 每次全新启动
-│       └── content-architect.md       # 教师：CREATE/OPTIMIZE + 规模检查 + Git 提交
+├── CLAUDE.md                          # 总场控逻辑 + Auto-Loop 协议
+├── .claude/agents/                    # Agent 提示词（examiner, student, writer, archivist）
+├── tree/                              # 独立编排引擎（pip install -e .）
+│   ├── cli.py                         # tree-run 命令行入口
+│   ├── engine.py                      # 核心编排循环
+│   ├── config.py                      # .env 配置加载
+│   ├── agents/                        # Agent 调用构建器
+│   ├── state/                         # Pydantic 模型 + pipeline-state.json
+│   ├── io/                            # 文件读写 + Git 操作
+│   ├── observability/                 # trace.jsonl + 迭代限制 + 重试降级
+│   └── deepseek/                      # LLM 客户端（Pro/Flash 降级）
+├── rag/                               # RAG 向量检索
+│   ├── server.py                      # bge-m3 本地嵌入服务 (FastAPI)
+│   ├── embed.py                       # 嵌入客户端
+│   └── chunker.py                     # Markdown 语义切分器
+├── ingest/                            # 文档摄入流水线
+│   ├── pipeline.py                    # 主编排器
+│   ├── ocr_engine.py                  # PaddleOCR-VL 1.5 API 客户端
+│   └── extractors/                    # PDF/图片/DOCX 提取器
+├── scripts/                           # 启动脚本
+│   ├── start-embed-server.sh          # Mac/Linux 嵌入服务启动
+│   ├── start-embed-server.bat         # Windows 嵌入服务启动
+│   ├── run-ingest.sh                  # 文档摄入
+│   └── setup-embedding.sh             # LM Studio 嵌入服务（旧）
 ├── drafts/                            # （运行时）待打磨的教材草稿
-│   └── <chapter>/
-│       └── NN.xxx.md                  # 按章节和序号组织的知识文件
 ├── exercises/                         # （运行时）配套习题库
-│   └── <chapter>-<章节名>.md          # 按章节组织的习题与标准答案
 ├── finished_outputs/                  # （运行时）满分通过的定稿
-│   └── <chapter>/
-│       └── NN.xxx.md                  # 已通过流水线的文件
-├── pipeline-temp/                     # （运行时）临时文件
 └── pipeline-state.json                # （运行时）全局进度状态
 ```
 
@@ -190,34 +202,260 @@ T.R.E.E/
 
 ### 前置条件
 
-- [Claude Code](https://claude.ai/code) CLI 已安装
-- 本仓库已克隆到本地
+- Python 3.12+
+- Git
 
-### 启动流水线
-
-1. 配置 `pipeline-state.json`（定义章节及初始状态）
-2. 将配套习题（含标准答案）放入 `/exercises`
-3. 在项目根目录启动 Claude Code：
+### 1. 安装
 
 ```bash
-cd T.R.E.E.
-claude
+git clone <repo-url> && cd T.R.E.E.
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+pip install -e ".[rag]"                              # 含 RAG 依赖；仅引擎: pip install -e .
 ```
 
-4. Claude Code 加载 `CLAUDE.md` 后会自动识别并启动 T.R.E.E. 流水线。
+### 2. 配置
 
-### 使用已配置的 Agent
+编辑 `.env`，填入 LLM API 密钥：
 
-你也可以单独调用各个角色：
+```bash
+# 至少设置一个默认密钥或角色专属密钥
+LLM_API_KEY=sk-...
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o
+
+# PaddleOCR（已内置，无需修改）
+PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs
+PADDLEOCR_API_TOKEN=your-token
+```
+
+### 3. 启动嵌入服务
+
+```bash
+# macOS / Linux
+./scripts/start-embed-server.sh
+
+# Windows
+scripts\start-embed-server.bat
+```
+
+### 4. 运行流水线
+
+```bash
+# 独立引擎（不依赖 Claude Code）
+tree-run run
+
+# 查看状态
+tree-run status
+
+# 从断点恢复
+tree-run resume
+```
+
+或使用 Claude Code 模式：
+
+```bash
+claude    # 加载 CLAUDE.md 后自动启动流水线
+```
+
+## RAG 向量检索：本地部署 bge-m3
+
+T.R.E.E. 使用 **BAAI/bge-m3** 多语言嵌入模型为教材内容建立向量索引，实现语义检索（RAG）。bge-m3 以本地服务方式运行，数据不离开本机。
+
+### 架构
 
 ```
-# 启动靶向重构
-Agent(content-architect, "根据这份 Bottleneck Report 重构 drafts/01-力学/03.运动学两类问题.md")
-
-# 并行处理多章节
-Agent(content-architect, "处理 03-电磁学 全部文件")
-Agent(content-architect, "处理 06-量子物理 全部文件")
+tree engine
+    │
+    ▼
+rag/embed.py  ──HTTP──▶  rag/server.py (FastAPI)
+    │                          │
+    │                          ▼
+    │                    sentence-transformers
+    │                          │
+    │                          ▼
+    │                    BAAI/bge-m3 (~2.2 GB)
+    │
+    ▼
+Cloudflare Vectorize (云端索引)
 ```
+
+### macOS 部署
+
+#### 1. 安装依赖
+
+```bash
+# 创建虚拟环境（如尚未创建）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 安装 RAG 依赖
+pip install -e ".[rag]"
+```
+
+> 首次安装会下载 PyTorch (~2 GB) + bge-m3 模型权重 (~2.2 GB)，共约 4.2 GB。
+
+#### 2. GPU 加速（Apple Silicon）
+
+Apple M1/M2/M3/M4 芯片支持 **MPS (Metal Performance Shaders)** 加速：
+
+```bash
+# 安装 Metal 版 PyTorch（替换默认 CPU 版）
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# 注意：macOS 上 pip 安装的 PyTorch 已自动支持 MPS，无需额外操作
+```
+
+启动时自动检测 Apple Silicon 并使用 MPS：
+
+```bash
+./scripts/start-embed-server.sh
+# 输出: Detected Apple Silicon — using MPS acceleration
+```
+
+Intel Mac 无 MPS 支持，自动回退 CPU。
+
+#### 3. 启动服务
+
+```bash
+# 自动检测设备（Apple Silicon → MPS，Intel → CPU）
+./scripts/start-embed-server.sh
+
+# 手动指定
+./scripts/start-embed-server.sh --device mps    # Apple Silicon GPU
+./scripts/start-embed-server.sh --device cpu    # 强制 CPU
+```
+
+服务启动后监听 `http://localhost:8788`。
+
+#### 4. 验证
+
+```bash
+# 健康检查
+curl http://localhost:8788/health
+
+# 测试嵌入
+curl -X POST http://localhost:8788/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model":"BAAI/bge-m3","input":"质点是在研究物体运动时忽略物体形状和大小的有质量的点"}'
+
+# Python 客户端
+python -c "from rag.embed import EmbeddingClient; print(EmbeddingClient().health_check())"
+```
+
+#### 5. 性能参考（macOS）
+
+| 设备 | 模型加载 | 单条嵌入 | 批量 64 条 |
+|------|---------|---------|-----------|
+| M2 Pro (CPU) | ~8s | ~12ms | ~180ms |
+| M2 Pro (MPS) | ~5s | ~4ms | ~60ms |
+| M4 Max (MPS) | ~3s | ~2ms | ~25ms |
+
+### Windows 部署
+
+#### 1. 安装依赖
+
+```powershell
+# 创建虚拟环境
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+
+# 安装 RAG 依赖
+pip install -e ".[rag]"
+```
+
+#### 2. GPU 加速（NVIDIA CUDA）
+
+如果有 NVIDIA 显卡，安装 CUDA 版 PyTorch 可获得 5-10x 加速：
+
+```powershell
+# 卸载 CPU 版 PyTorch
+pip uninstall torch torchvision -y
+
+# 安装 CUDA 12.4 版（需先安装 NVIDIA 驱动 + CUDA Toolkit 12.4）
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# 验证 CUDA 可用
+python -c "import torch; print(torch.cuda.is_available())"
+# 输出: True
+```
+
+无 NVIDIA 显卡则使用 CPU 模式（默认，无需额外操作）。
+
+#### 3. 启动服务
+
+```powershell
+# CPU 模式
+scripts\start-embed-server.bat
+
+# CUDA 模式（需已安装 CUDA 版 PyTorch）
+scripts\start-embed-server.bat --device cuda
+
+# 指定端口
+scripts\start-embed-server.bat --port 9090
+```
+
+服务启动后监听 `http://localhost:8788`。
+
+#### 4. 验证
+
+```powershell
+# 健康检查
+curl http://localhost:8788/health
+
+# 测试嵌入
+curl -X POST http://localhost:8788/v1/embeddings -H "Content-Type: application/json" -d "{\"model\":\"BAAI/bge-m3\",\"input\":\"化学平衡状态是正逆反应速率相等的状态\"}"
+
+# Python 客户端
+python -c "from rag.embed import EmbeddingClient; print(EmbeddingClient().health_check())"
+```
+
+#### 5. 性能参考（Windows）
+
+| 设备 | 模型加载 | 单条嵌入 | 批量 64 条 |
+|------|---------|---------|-----------|
+| i7-13700K (CPU) | ~12s | ~18ms | ~280ms |
+| RTX 4060 (CUDA) | ~4s | ~2ms | ~15ms |
+| RTX 4090 (CUDA) | ~3s | ~1ms | ~8ms |
+
+### 环境变量配置
+
+在 `.env` 中添加（可选，默认值已内置）：
+
+```bash
+# 嵌入服务地址（默认 http://localhost:8788）
+EMBED_API_URL=http://localhost:8788
+# 嵌入模型名称（默认 BAAI/bge-m3）
+EMBED_MODEL=BAAI/bge-m3
+# 服务端口（默认 8788）
+EMBED_PORT=8788
+# 计算设备：cpu / cuda / mps（默认自动检测）
+EMBED_DEVICE=mps
+```
+
+### 常见问题
+
+**Q: 首次启动很慢（几分钟）？**
+A: 首次运行需从 HuggingFace 下载 bge-m3 模型权重 (~2.2 GB)。后续启动会从本地缓存加载，通常 <10s。
+
+**Q: HuggingFace 下载失败 / 网络受限（GFW）？**
+A: 在 `.env` 中设置代理：
+```bash
+HTTP_PROXY=http://127.0.0.1:7890    # Clash 默认端口
+HTTPS_PROXY=http://127.0.0.1:7890
+```
+或使用 HuggingFace 镜像（需代理能访问 huggingface.co）：
+```bash
+HF_ENDPOINT=https://hf-mirror.com
+```
+启动脚本会自动读取 `.env` 中的代理设置。
+
+**Q: macOS 上 MPS 报错 `MPS backend not available`？**
+A: 需 macOS 12.3+ 且为 Apple Silicon (M1/M2/M3/M4)。Intel Mac 不支持 MPS，使用 `--device cpu`。
+
+**Q: Windows 上 CUDA 报错 `CUDA not available`？**
+A: 检查：① NVIDIA 驱动已安装 (`nvidia-smi` 可运行) ② CUDA Toolkit 12.x 已安装 ③ 安装了 `cu124` 版 PyTorch (`pip install torch --index-url https://download.pytorch.org/whl/cu124`)。
+
+**Q: 内存不足 (OOM)？**
+A: bge-m3 需约 2.5 GB 显存/内存。CPU 模式下确保有 ≥4 GB 可用内存；GPU 模式下确保显存 ≥4 GB。不足时可用 `BAAI/bge-small-zh-v1.5` 替代（仅 512 维，~300 MB）。
 
 ## 适用场景
 

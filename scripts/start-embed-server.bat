@@ -1,0 +1,34 @@
+@echo off
+REM Start local Qwen3-Embedding-4B-Q8_0 embedding server (Windows)
+REM
+REM Usage:
+REM   scripts\start-embed-server.bat                    all GPU layers (default)
+REM   scripts\start-embed-server.bat --n-gpu-layers 0   CPU only
+REM   scripts\start-embed-server.bat --n-gpu-layers -1  force all GPU
+
+setlocal
+
+set PROJECT_ROOT=%~dp0..
+cd /d "%PROJECT_ROOT%"
+
+REM Load .env if present
+if exist .env (
+    for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
+        if not "%%a"=="" if not "%%a:~0,1%"=="#" (
+            set "%%a=%%b"
+        )
+    )
+)
+
+if "%EMBED_PORT%"=="" set EMBED_PORT=8788
+if "%EMBED_N_GPU_LAYERS%"=="" set EMBED_N_GPU_LAYERS=-1
+
+REM Export proxy for HuggingFace downloads (if set in .env)
+if not "%HTTP_PROXY%"=="" set HTTPS_PROXY=%HTTP_PROXY%
+
+echo Starting Qwen3-Embedding-4B-Q8_0 embedding server on port %EMBED_PORT% (n_gpu_layers=%EMBED_N_GPU_LAYERS%)
+echo Model: Qwen/Qwen3-Embedding-4B-GGUF / Qwen3-Embedding-4B-Q8_0.gguf
+echo API endpoint: http://localhost:%EMBED_PORT%/v1/embeddings
+echo.
+
+python -m rag.server --port %EMBED_PORT% --n-gpu-layers %EMBED_N_GPU_LAYERS% %*

@@ -13,6 +13,16 @@
 
 # 本地配置
 .claude/settings.local.json
+.env
+.DS_Store
+/.venv/
 
 # 运行时记忆
 .claude/agent-memory/
+
+# Python / tooling cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

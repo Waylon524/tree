@@ -1,0 +1,200 @@
+"""Semantic chunker for T.R.E.E. textbook Markdown files.
+
+Chunks by heading boundaries and semantic blocks, preserving
+definition/proof/example integrity.
+
+Usage:
+    from rag.chunker import chunk_markdown
+
+    chunks = chunk_markdown("01.质点与参考系.md", markdown_text, chapter="01-力学")
+    for c in chunks:
+        print(c["chunk_id"], c["chunk_type"], c["text"][:50])
+"""
+
+import re
+from typing import Optional
+
+MAX_TOKENS = {
+    "def": 500,
+    "proof": 800,
+    "example": 600,
+    "narrative": 300,
+}
+
+# Rough token estimate: 1 token ≈ 1.5 Chinese chars or 4 English chars
+def _estimate_tokens(text: str) -> int:
+    cn = sum(1 for c in text if "一" <= c <= "鿿")
+    en = len(text) - cn
+    return int(cn / 1.5 + en / 4)
+
+
+def _detect_chunk_type(text: str) -> str:
+    """Classify a chunk by its content."""
+    lower = text[:200].lower()
+    if any(kw in lower for kw in ["定义", "定理", "定律", "公理", "definition", "theorem"]):
+        return "def"
+    if any(kw in lower for kw in ["推导", "证明", "证", "derivation", "proof"]):
+        return "proof"
+    if any(kw in lower for kw in ["例题", "例", "example", "解"]):
+        return "example"
+    return "narrative"
+
+
+def _extract_concepts(text: str) -> list[str]:
+    """Extract key concept names from text (bold markers, LaTeX symbols)."""
+    concepts = []
+    # Bold markers: **概念名**
+    for m in re.finditer(r"\*\*([^*]+)\*\*", text):
+        name = m.group(1).strip()
+        if len(name) <= 20 and not name.startswith("["):
+            concepts.append(name)
+    return concepts[:10]
+
+
+def _extract_formulas(text: str) -> list[str]:
+    """Extract LaTeX formulas from text."""
+    formulas = []
+    # Display math: $$...$$
+    for m in re.finditer(r"\$\$(.+?)\$\$", text, re.DOTALL):
+        formulas.append(m.group(1).strip())
+    # Inline math: $...$ (skip single-char like $x$)
+    for m in re.finditer(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)", text):
+        f = m.group(1).strip()
+        if len(f) > 3:
+            formulas.append(f)
+    return formulas[:10]
+
+
+def chunk_markdown(
+    file_seq: str,
+    text: str,
+    chapter: str = "",
+    is_draft: bool = False,
+) -> list[dict]:
+    """Chunk a Markdown file into semantic pieces.
+
+    Returns list of chunk dicts with keys:
+        chunk_id, text, chapter, file_seq, section_id,
+        concepts, formulas, chunk_type, is_draft, token_estimate
+    """
+    # Split by ## headings (preserve heading in chunk)
+    sections = re.split(r"(?=^##\s)", text, flags=re.MULTILINE)
+
+    chunks = []
+    chunk_idx = 0
+
+    for section in sections:
+        section = section.strip()
+        if not section:
+            continue
+
+        # Extract section heading for section_id
+        heading_match = re.match(r"^##\s+(.+)", section)
+        section_id = heading_match.group(1).strip() if heading_match else "intro"
+        # Clean section_id for use as anchor
+        section_id = re.sub(r"[^\w一-鿿-]", "-", section_id)[:50]
+
+        # Check for foldable blocks (> [!details])
+        foldable_parts = re.split(r"(?=> \[!details\])", section)
+
+        for part in foldable_parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            # If part starts with foldable marker, it's a proof/derivation
+            if part.startswith("> [!details"):
+                chunk_type = "proof"
+            else:
+                chunk_type = _detect_chunk_type(part)
+
+            max_tok = MAX_TOKENS[chunk_type]
+
+            # If within token limit, emit as single chunk
+            tok_est = _estimate_tokens(part)
+            if tok_est <= max_tok:
+                chunks.append(_make_chunk(
+                    file_seq, chapter, section_id, chunk_type,
+                    part, chunk_idx, is_draft, tok_est,
+                ))
+                chunk_idx += 1
+            else:
+                # Split by paragraphs
+                paragraphs = re.split(r"\n\n+", part)
+                buffer = ""
+                buffer_tokens = 0
+
+                for para in paragraphs:
+                    para = para.strip()
+                    if not para:
+                        continue
+                    para_tokens = _estimate_tokens(para)
+
+                    if buffer_tokens + para_tokens > max_tok and buffer:
+                        chunks.append(_make_chunk(
+                            file_seq, chapter, section_id, chunk_type,
+                            buffer, chunk_idx, is_draft, buffer_tokens,
+                        ))
+                        chunk_idx += 1
+                        buffer = para
+                        buffer_tokens = para_tokens
+                    else:
+                        buffer += "\n\n" + para if buffer else para
+                        buffer_tokens += para_tokens
+
+                if buffer:
+                    chunks.append(_make_chunk(
+                        file_seq, chapter, section_id, chunk_type,
+                        buffer, chunk_idx, is_draft, buffer_tokens,
+                    ))
+                    chunk_idx += 1
+
+    return chunks
+
+
+def _make_chunk(
+    file_seq: str, chapter: str, section_id: str,
+    chunk_type: str, text: str, idx: int,
+    is_draft: bool, token_estimate: int,
+) -> dict:
+    return {
+        "chunk_id": f"{file_seq}-{idx:03d}",
+        "text": text,
+        "chapter": chapter,
+        "file_seq": file_seq,
+        "section_id": section_id,
+        "concepts": _extract_concepts(text),
+        "formulas": _extract_formulas(text),
+        "chunk_type": chunk_type,
+        "is_draft": is_draft,
+        "token_estimate": token_estimate,
+    }
+
+
+if __name__ == "__main__":
+    sample = """## 质点与参考系
+
+**质点**是在研究物体运动时，忽略物体的形状和大小，把它简化为一个有质量的点。
+
+**参考系**是确定物体位置和运动状态时作为参考的物体或物体系。
+
+### 位置矢量
+
+位置矢量 $\\mathbf{r}$ 描述质点在空间中的位置：
+
+$$\\mathbf{r} = x\\hat{i} + y\\hat{j} + z\\hat{k}$$
+
+> [!details]- 推导过程
+> 由坐标定义直接得到。
+
+## 例题
+
+**例1**：一质点沿 x 轴运动，位置 $x = 3t^2 + 2t$，求 2s 时的速度。
+
+> [!details]- 查看解答
+> $v = dx/dt = 6t + 2$
+> 代入 $t = 2$：$v = 14$ m/s
+"""
+    chunks = chunk_markdown("01", sample, chapter="01-力学")
+    for c in chunks:
+        print(f"[{c['chunk_type']:8s}] {c['chunk_id']} | {c['token_estimate']:4d} tok | {c['text'][:40]}...")
