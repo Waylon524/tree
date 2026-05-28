@@ -55,6 +55,7 @@ class TreeEngine:
             self.client,
             self.loader,
             max_format_retries=settings.max_format_retries,
+            project_root=root,
         )
         self.student = StudentAgent(self.client, self.loader)
         self.writer = WriterAgent(self.client, self.loader)

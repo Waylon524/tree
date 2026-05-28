@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
+
 from tree.agents.loader import AgentLoader
 from tree.agents.parsers import (
     ParseError,
@@ -17,10 +20,17 @@ from tree.state.models import AuditResult, ExamSections, ExamTooBroadContext
 
 
 class ExaminerAgent:
-    def __init__(self, client: LLMClient, loader: AgentLoader, max_format_retries: int = 2):
+    def __init__(
+        self,
+        client: LLMClient,
+        loader: AgentLoader,
+        max_format_retries: int = 2,
+        project_root: Path | None = None,
+    ):
         self._client = client
         self._loader = loader
         self._max_format_retries = max_format_retries
+        self._project_root = project_root
 
     async def compose_exam(
         self,
@@ -70,6 +80,13 @@ class ExaminerAgent:
         if detect_chapter_complete(raw):
             return None, True
 
+        raw = await self._repair_exam_format_if_needed(
+            system,
+            user,
+            raw,
+            task_name="exam assembly",
+            repair_title="Repair the examiner exam assembly format",
+        )
         sections = parse_exam_output(raw)
         return sections, False
 
@@ -140,11 +157,15 @@ class ExaminerAgent:
         if detect_pipeline_complete(raw):
             return None, True
 
-        try:
-            sections = parse_exam_output(raw)
-            return sections.knowledge_point, False
-        except ParseError:
-            return raw.strip()[:50], False
+        raw = await self._repair_exam_format_if_needed(
+            system,
+            user,
+            raw,
+            task_name="chapter continuation scan",
+            repair_title="Repair the examiner chapter scan format",
+        )
+        sections = parse_exam_output(raw)
+        return sections.knowledge_point, False
 
     async def _repair_audit_format_if_needed(
         self,
@@ -174,6 +195,69 @@ class ExaminerAgent:
                 )
                 raw_output = await self._client.call("examiner", system_prompt, repair_prompt)
         return raw_output
+
+    async def _repair_exam_format_if_needed(
+        self,
+        system_prompt: str,
+        original_user_prompt: str,
+        raw_output: str,
+        task_name: str,
+        repair_title: str,
+    ) -> str:
+        for _ in range(self._max_format_retries):
+            try:
+                parse_exam_output(raw_output)
+                return raw_output
+            except ParseError as exc:
+                repair_prompt = (
+                    f"{repair_title}.\n\n"
+                    "Do not change the examiner's substantive decision, scope, questions, "
+                    "answers, or instructions unless needed to place existing content under "
+                    "the required headers. Return a complete parseable response with exactly "
+                    "these five sections:\n"
+                    "## [Next_Knowledge_Point]\n"
+                    "## [Blind_Exam]\n"
+                    "## [Student_Instructions]\n"
+                    "## [Answer_Key]\n"
+                    "## [Architect_Instructions]\n\n"
+                    f"Parser error: {exc}\n\n"
+                    f"Original {task_name} task:\n{original_user_prompt}\n\n"
+                    "Previous unparseable examiner output:\n"
+                    f"{raw_output}\n"
+                )
+                raw_output = await self._client.call("examiner", system_prompt, repair_prompt)
+
+        try:
+            parse_exam_output(raw_output)
+            return raw_output
+        except ParseError as exc:
+            self._write_format_failure(task_name, original_user_prompt, raw_output, str(exc))
+            raise
+
+    def _write_format_failure(
+        self,
+        task_name: str,
+        original_user_prompt: str,
+        raw_output: str,
+        error: str,
+    ) -> None:
+        if self._project_root is None:
+            return
+        out_dir = self._project_root / "pipeline-temp"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        safe_task = task_name.replace(" ", "-")
+        path = out_dir / f"examiner-format-failure-{timestamp}-{safe_task}.md"
+        path.write_text(
+            "# Examiner Format Failure\n\n"
+            f"Task: {task_name}\n\n"
+            f"Parser error: {error}\n\n"
+            "## Original Prompt\n\n"
+            f"{original_user_prompt}\n\n"
+            "## Final Unparseable Output\n\n"
+            f"{raw_output}\n",
+            encoding="utf-8",
+        )
 
 
 def _format_retrieved_context(retrieved_context: list[dict]) -> str:

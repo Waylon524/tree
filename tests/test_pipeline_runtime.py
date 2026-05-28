@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
 from tree.agents.loader import AgentLoader
+from tree.agents.parsers import ParseError
 from tree.cli import app
 from tree.config import Settings
 from tree.engine import TreeEngine, persist_writer_result
@@ -129,6 +130,117 @@ Write narrowly.
         self.assertEqual(result.exam_id, "01. 相变过程的标准自由能变化")
         self.assertEqual(len(client.calls), 2)
         self.assertIn("Repair the machine-readable audit format", client.calls[1][2])
+
+    def test_examiner_compose_repairs_missing_exam_sections(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, str]] = []
+
+            async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+                self.calls.append((role, system_prompt, user_prompt))
+                if len(self.calls) == 1:
+                    return "知识点：化学平衡状态\n题目：Q1\n答案：A1"
+                return """## [Next_Knowledge_Point]
+01. 化学平衡状态
+
+## [Blind_Exam]
+Q1
+
+## [Student_Instructions]
+Use learned evidence.
+
+## [Answer_Key]
+A1
+
+## [Architect_Instructions]
+Write narrowly.
+"""
+
+        client = FakeClient()
+        examiner = ExaminerAgent(client, AgentLoader(), max_format_retries=1)
+
+        sections, is_complete = asyncio.run(
+            examiner.compose_exam(
+                "01",
+                prior_file_contents=[],
+                prior_file_paths=[],
+            )
+        )
+
+        self.assertFalse(is_complete)
+        assert sections is not None
+        self.assertEqual(sections.knowledge_point, "01. 化学平衡状态")
+        self.assertEqual(len(client.calls), 2)
+        self.assertIn("Repair the examiner exam assembly format", client.calls[1][2])
+
+    def test_examiner_scan_repairs_bad_chapter_scan_output(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, str]] = []
+
+            async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+                self.calls.append((role, system_prompt, user_prompt))
+                if len(self.calls) == 1:
+                    return "下一章可以叫化学平衡，但是我没有写标准格式。"
+                return """## [Next_Knowledge_Point]
+化学平衡
+
+## [Blind_Exam]
+Q
+
+## [Student_Instructions]
+S
+
+## [Answer_Key]
+A
+
+## [Architect_Instructions]
+W
+"""
+
+        client = FakeClient()
+        examiner = ExaminerAgent(client, AgentLoader(), max_format_retries=1)
+
+        name, is_complete = asyncio.run(
+            examiner.scan_next_chapter(
+                "{}",
+                {"化学平衡": [{"path": "rag:source", "content": "平衡状态"}]},
+            )
+        )
+
+        self.assertFalse(is_complete)
+        self.assertEqual(name, "化学平衡")
+        self.assertEqual(len(client.calls), 2)
+        self.assertIn("Repair the examiner chapter scan format", client.calls[1][2])
+
+    def test_examiner_logs_unrepairable_exam_output_before_raising(self) -> None:
+        class FakeClient:
+            async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+                return "still invalid"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            examiner = ExaminerAgent(
+                FakeClient(),
+                AgentLoader(),
+                max_format_retries=1,
+                project_root=root,
+            )
+
+            with self.assertRaises(ParseError):
+                asyncio.run(
+                    examiner.compose_exam(
+                        "01",
+                        prior_file_contents=[],
+                        prior_file_paths=[],
+                    )
+                )
+
+            failure_files = sorted((root / "pipeline-temp").glob("examiner-format-failure-*.md"))
+            failure_text = failure_files[0].read_text(encoding="utf-8")
+
+        self.assertEqual(len(failure_files), 1)
+        self.assertIn("still invalid", failure_text)
 
     def test_engine_discovers_chapter_from_source_materials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
