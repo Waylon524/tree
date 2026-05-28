@@ -9,6 +9,7 @@
 # 运行时状态
 /pipeline-state.json
 /pipeline-temp/
+/rag-store/
 
 # 本地配置
 .claude/settings.local.json

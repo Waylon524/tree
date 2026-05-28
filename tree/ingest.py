@@ -21,11 +21,18 @@ class MarkdownStructurer(Protocol):
         """Return structured Markdown for raw OCR text."""
 
 
+class SourceIndexer(Protocol):
+    def index_source_file(self, root: Path, collection: str, path: Path) -> int:
+        """Index one structured source Markdown file."""
+
+
 async def ingest_path(
     input_path: Path,
     output_dir: Path,
     settings: Settings,
     archivist: MarkdownStructurer | None = None,
+    collection: str | None = None,
+    indexer: SourceIndexer | None = None,
 ) -> list[Path]:
     """Ingest one file or a directory into structured source Markdown files."""
     _configure_ocr(settings)
@@ -34,7 +41,9 @@ async def ingest_path(
 
     if input_path.is_file():
         out = await ingest_file(input_path, output_dir, archivist=archivist)
-        return [out] if out else []
+        outputs = [out] if out else []
+        _index_outputs(settings.project_root, collection, outputs, indexer)
+        return outputs
     if input_path.is_dir():
         outputs = []
         for path in sorted(input_path.iterdir()):
@@ -42,6 +51,7 @@ async def ingest_path(
                 out = await ingest_file(path, output_dir, archivist=archivist)
                 if out:
                     outputs.append(out)
+        _index_outputs(settings.project_root, collection, outputs, indexer)
         return outputs
     raise FileNotFoundError(f"Input not found: {input_path}")
 
@@ -76,3 +86,15 @@ def _configure_ocr(settings: Settings) -> None:
         token=settings.paddleocr_api_token or None,
         model=settings.paddleocr_model,
     )
+
+
+def _index_outputs(
+    root: Path,
+    collection: str | None,
+    outputs: list[Path],
+    indexer: SourceIndexer | None,
+) -> None:
+    if not indexer or not collection:
+        return
+    for path in outputs:
+        indexer.index_source_file(root, collection, path)

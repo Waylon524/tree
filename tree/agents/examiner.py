@@ -28,6 +28,7 @@ class ExaminerAgent:
         prior_file_paths: list[str],
         source_material_contents: list[str] | None = None,
         source_material_paths: list[str] | None = None,
+        retrieved_context: list[dict] | None = None,
         exam_too_broad_ctx: ExamTooBroadContext | None = None,
     ) -> tuple[ExamSections | None, bool]:
         system = self._loader.load("examiner")
@@ -48,6 +49,8 @@ class ExaminerAgent:
             parts.append("Source material contents:\n")
             for i, content in enumerate(source_material_contents):
                 parts.append(f"--- Source {i + 1} ---\n{content}\n")
+        if retrieved_context:
+            parts.append(_format_retrieved_context(retrieved_context))
         if exam_too_broad_ctx:
             parts.append(
                 f"⚠ EXAM_TOO_BROAD return from writer.\n"
@@ -132,3 +135,14 @@ class ExaminerAgent:
             return sections.knowledge_point, False
         except ParseError:
             return raw.strip()[:50], False
+
+
+def _format_retrieved_context(retrieved_context: list[dict]) -> str:
+    parts = ["Retrieved RAG context (supporting excerpts, verify against source paths):\n"]
+    for i, hit in enumerate(retrieved_context, start=1):
+        metadata = hit.get("metadata") or {}
+        source = metadata.get("path") or metadata.get("filename") or metadata.get("doc_id") or "unknown"
+        score = hit.get("score")
+        score_text = f", score={score:.4f}" if isinstance(score, float) else ""
+        parts.append(f"--- RAG Hit {i}: {source}{score_text} ---\n{hit.get('text', '')}\n")
+    return "\n".join(parts)

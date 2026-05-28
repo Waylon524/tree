@@ -23,6 +23,7 @@ class WriterAgent:
         draft_text: str | None = None,
         previous_bottleneck: str | None = None,
         architect_instructions: str | None = None,
+        retrieved_context: list[dict] | None = None,
     ) -> ArchitectResult:
         system = self._loader.load("writer")
         mode = "OPTIMIZE" if draft_text else "CREATE"
@@ -40,6 +41,8 @@ class WriterAgent:
             parts.append("Current draft: 尚未创建 (CREATE from scratch)\n")
         if architect_instructions:
             parts.append(f"[Architect_Instructions]:\n{architect_instructions}\n")
+        if retrieved_context:
+            parts.append(_format_retrieved_context(retrieved_context))
         parts.append(
             "Prior completed file paths:\n"
             + "\n".join(f"  - {p}" for p in prior_file_paths)
@@ -58,3 +61,14 @@ class WriterAgent:
             return ArchitectResult(is_exam_too_broad=True, bloat_description=bloat)
 
         return ArchitectResult(is_exam_too_broad=False, draft_content=raw)
+
+
+def _format_retrieved_context(retrieved_context: list[dict]) -> str:
+    parts = ["Retrieved RAG context (use as supporting source excerpts):\n"]
+    for i, hit in enumerate(retrieved_context, start=1):
+        metadata = hit.get("metadata") or {}
+        source = metadata.get("path") or metadata.get("filename") or metadata.get("doc_id") or "unknown"
+        score = hit.get("score")
+        score_text = f", score={score:.4f}" if isinstance(score, float) else ""
+        parts.append(f"--- RAG Hit {i}: {source}{score_text} ---\n{hit.get('text', '')}\n")
+    return "\n".join(parts)

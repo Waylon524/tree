@@ -87,6 +87,7 @@ def ingest(
     collection: str | None = typer.Option(None, "--collection", "-c", help="Source collection name"),
     output_dir: Path | None = typer.Option(None, "--output", "-o", help="Output source-material directory"),
     no_structure: bool = typer.Option(False, "--no-structure", help="Skip Archivist cleanup"),
+    no_index: bool = typer.Option(False, "--no-index", help="Skip RAG indexing for generated source files"),
 ) -> None:
     """Run PaddleOCR ingest, then optionally structure OCR output with Archivist."""
     from tree.config import Settings
@@ -95,14 +96,40 @@ def ingest(
 
     target_dir = output_dir or Path.cwd() / "source_materials" / (collection or input_path.stem)
 
+    indexer = None
+    if not no_index:
+        from tree.rag.client import RAGClient
+        from tree.rag.indexer import RAGIndexer
+
+        indexer = RAGIndexer(RAGClient())
+
+    collection_name = collection or input_path.stem
+
     if no_structure:
         settings = Settings.from_env(require_llm=False)
-        outputs = asyncio.run(ingest_path(input_path, target_dir, settings, archivist=None))
+        outputs = asyncio.run(
+            ingest_path(
+                input_path,
+                target_dir,
+                settings,
+                archivist=None,
+                collection=collection_name,
+                indexer=indexer,
+            )
+        )
     else:
         settings = Settings.from_env()
         engine = TreeEngine(settings)
         try:
-            outputs = asyncio.run(engine.ingest(input_path, target_dir, use_archivist=True))
+            outputs = asyncio.run(
+                engine.ingest(
+                    input_path,
+                    target_dir,
+                    use_archivist=True,
+                    collection=collection_name,
+                    indexer=indexer,
+                )
+            )
         finally:
             asyncio.run(engine.close())
 

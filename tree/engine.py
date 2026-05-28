@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
@@ -41,6 +42,9 @@ class TreeEngine:
         self.archivist = ArchivistAgent(self.client, self.loader)
         self.tracer = TraceLogger(root / "pipeline-temp" / "trace.jsonl")
         self.limiter = IterationLimiter(settings.max_iterations)
+        self.rag_client = None
+        self.rag_indexer = None
+        self._init_rag()
 
     async def run(self) -> None:
         """Entry point for `tree run`."""
@@ -63,7 +67,14 @@ class TreeEngine:
 
             await self.process_chapter(chapter.chapter_name)
 
-    async def ingest(self, input_path: Path, output_dir: Path, use_archivist: bool = True) -> list[Path]:
+    async def ingest(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        use_archivist: bool = True,
+        collection: str | None = None,
+        indexer: object | None = None,
+    ) -> list[Path]:
         """Run the integrated PaddleOCR → Archivist ingest pipeline."""
         from tree.ingest import ingest_path
 
@@ -72,6 +83,8 @@ class TreeEngine:
             output_dir,
             self.settings,
             archivist=self.archivist if use_archivist else None,
+            collection=collection,
+            indexer=indexer,
         )
 
     async def process_chapter(self, chapter_name: str) -> None:
@@ -178,12 +191,22 @@ class TreeEngine:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, ch_name)]
         prior_contents = file_ops.read_prior_files(self.settings.project_root, ch_name)
         source_docs = source_ops.read_collection(self.settings.project_root, source_collection)
+        retrieved_context = self._rag_query(
+            f"{ch_name}\n{next_seq}\n下一知识点命题",
+            filters={
+                "content_kind": "source",
+                "source_collection": source_collection,
+            },
+            top_k=8,
+            include_drafts=False,
+        )
         return await self.examiner.compose_exam(
             next_seq,
             prior_contents,
             prior_paths,
             source_material_contents=[doc.content for doc in source_docs],
             source_material_paths=[str(doc.path) for doc in source_docs],
+            retrieved_context=retrieved_context,
             exam_too_broad_ctx=exam_too_broad_ctx,
         )
 
@@ -226,6 +249,28 @@ class TreeEngine:
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
         arch_instructions = iter_state.exam_sections.architect_instructions if iter_state.exam_sections else None
+        source_collection = self._source_collection_for_chapter(iter_state.chapter)
+        query_text = f"{iter_state.knowledge_point}\n{audit.bottleneck_report}"
+        retrieved_context = (
+            self._rag_query(
+                query_text,
+                filters={
+                    "content_kind": "source",
+                    "source_collection": source_collection,
+                },
+                top_k=5,
+                include_drafts=False,
+            )
+            + self._rag_query(
+                query_text,
+                filters={
+                    "content_kind": "finished",
+                    "chapter": iter_state.chapter,
+                },
+                top_k=5,
+                include_drafts=False,
+            )
+        )
         return await self.writer.create_or_optimize(
             iter_state.knowledge_point,
             iter_state.file_seq,
@@ -235,6 +280,7 @@ class TreeEngine:
             draft_text,
             iter_state.previous_bottleneck,
             arch_instructions,
+            retrieved_context=retrieved_context,
         )
 
     # --- Handlers ---
@@ -251,6 +297,15 @@ class TreeEngine:
                 f"docs({filename}): PASS — {iter_state.knowledge_point}",
                 cwd=self.settings.project_root,
             )
+            if rag_indexer := getattr(self, "rag_indexer", None):
+                try:
+                    rag_indexer.index_finished_file(
+                        self.settings.project_root,
+                        iter_state.chapter,
+                        dst,
+                    )
+                except Exception:
+                    pass
             state = self.state_mgr.load()
             state = self.state_mgr.add_file_completed(state, iter_state.chapter, filename)
             self.state_mgr.save(state)
@@ -292,6 +347,54 @@ class TreeEngine:
 
     async def close(self) -> None:
         await self.client.close()
+
+    def _init_rag(self) -> None:
+        """Initialize optional local RAG components when dependencies are installed."""
+        try:
+            from tree.rag.client import RAGClient
+            from tree.rag.indexer import RAGIndexer
+        except ImportError:
+            return
+
+        try:
+            self.rag_client = RAGClient(store_path=self.settings.project_root / "rag-store")
+            self.rag_indexer = RAGIndexer(self.rag_client)
+        except Exception:
+            self.rag_client = None
+            self.rag_indexer = None
+
+    def _rag_query(
+        self,
+        query_text: str,
+        filters: dict[str, Any],
+        top_k: int = 5,
+        include_drafts: bool = True,
+    ) -> list[dict]:
+        rag_client = getattr(self, "rag_client", None)
+        if rag_client is None:
+            return []
+        try:
+            return rag_client.query(
+                query_text,
+                top_k=top_k,
+                filters=filters,
+                include_drafts=include_drafts,
+            )
+        except Exception:
+            return []
+
+    def _source_collection_for_chapter(self, chapter_name: str) -> str:
+        state_mgr = getattr(self, "state_mgr", None)
+        if state_mgr is None:
+            return chapter_name
+        try:
+            state = state_mgr.load()
+        except Exception:
+            return chapter_name
+        for chapter in state.chapters:
+            if chapter.chapter_name == chapter_name:
+                return chapter.source_collection or chapter.chapter_name
+        return chapter_name
 
 
 def persist_writer_result(

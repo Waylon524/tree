@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from qdrant_client import QdrantClient, models
 from rag.chunker import chunk_markdown
@@ -27,6 +27,11 @@ _COLLECTION = "tree-knowledge"
 _DEFAULT_DIMENSIONS = 2560  # Qwen3-Embedding-4B-Q8_0 full dimensions
 
 
+class Embedder(Protocol):
+    def embed(self, texts: str | list[str]) -> list[list[float]]:
+        """Embed one or more texts."""
+
+
 class RAGClient:
     def __init__(
         self,
@@ -34,9 +39,10 @@ class RAGClient:
         embed_url: str | None = None,
         embed_model: str | None = None,
         dimensions: int = _DEFAULT_DIMENSIONS,
+        embedder: Embedder | None = None,
     ):
         self.dimensions = dimensions
-        self.embedder = EmbeddingClient(base_url=embed_url, model=embed_model)
+        self.embedder = embedder or EmbeddingClient(base_url=embed_url, model=embed_model)
         self._client = QdrantClient(path=str(store_path))
         self._ensure_collection()
 
@@ -60,18 +66,24 @@ class RAGClient:
         text: str,
         chapter: str = "",
         is_draft: bool = False,
+        content_kind: str = "finished",
+        source_collection: str = "",
+        path: str = "",
+        doc_id: str | None = None,
     ) -> int:
         """Chunk, embed, and upsert a file into the vector store.
 
         Deletes any existing vectors for this file_seq before re-indexing.
         Returns the number of chunks indexed.
         """
-        # Delete old chunks for this file
+        doc_id = doc_id or self.make_doc_id(content_kind, source_collection or chapter, path or filename)
+
+        # Delete old chunks for this document
         self._client.delete(
             collection_name=_COLLECTION,
             points_selector=models.FilterSelector(
                 filter=models.Filter(
-                    must=[models.FieldCondition(key="file_seq", match=models.MatchValue(value=file_seq))]
+                    must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
                 )
             ),
         )
@@ -88,7 +100,7 @@ class RAGClient:
         # Upsert
         points = []
         for chunk, vector in zip(chunks, vectors):
-            point_id = self._make_point_id(file_seq, chunk["chunk_id"])
+            point_id = self._make_point_id(doc_id, chunk["chunk_id"])
             points.append(
                 models.PointStruct(
                     id=point_id,
@@ -101,9 +113,13 @@ class RAGClient:
                         "section_id": chunk["section_id"],
                         "chunk_type": chunk["chunk_type"],
                         "is_draft": chunk["is_draft"],
+                        "content_kind": content_kind,
+                        "source_collection": source_collection,
                         "concepts": chunk["concepts"],
                         "formulas": chunk["formulas"],
                         "filename": filename,
+                        "path": path,
+                        "doc_id": doc_id,
                     },
                 )
             )
@@ -144,7 +160,20 @@ class RAGClient:
                 "score": point.score,
                 "metadata": {
                     k: payload[k]
-                    for k in ("chapter", "file_seq", "section_id", "chunk_type", "is_draft", "concepts", "formulas", "filename")
+                    for k in (
+                        "chapter",
+                        "file_seq",
+                        "section_id",
+                        "chunk_type",
+                        "is_draft",
+                        "content_kind",
+                        "source_collection",
+                        "concepts",
+                        "formulas",
+                        "filename",
+                        "path",
+                        "doc_id",
+                    )
                     if k in payload
                 },
             })
@@ -204,9 +233,14 @@ class RAGClient:
 
     @staticmethod
     def _make_point_id(file_seq: str, chunk_id: str) -> int:
-        """Deterministic integer ID from file_seq + chunk_id."""
+        """Deterministic integer ID from doc identity + chunk_id."""
         h = hashlib.md5(f"{file_seq}:{chunk_id}".encode()).hexdigest()
         return int(h[:16], 16)
+
+    @staticmethod
+    def make_doc_id(content_kind: str, collection: str, path: str) -> str:
+        """Stable document identifier across source/finished/draft namespaces."""
+        return f"{content_kind}:{collection}:{path}"
 
     @staticmethod
     def _build_filters(
@@ -217,7 +251,17 @@ class RAGClient:
         if not filters:
             filters = {}
         for key, value in filters.items():
-            if key in ("chapter", "file_seq", "chunk_type", "section_id", "filename"):
+            if key in (
+                "chapter",
+                "file_seq",
+                "chunk_type",
+                "section_id",
+                "filename",
+                "content_kind",
+                "source_collection",
+                "path",
+                "doc_id",
+            ):
                 conditions.append(
                     models.FieldCondition(key=key, match=models.MatchValue(value=value))
                 )
