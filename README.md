@@ -75,43 +75,77 @@ rag-store/              # embedded Qdrant 数据库
 
 ### 安装
 
-要求：
+安装前需要准备：
 
-- Python `>=3.12`
-- 一个 OpenAI-compatible Chat Completions API
-- PaddleOCR API token
-- 本地 embedding server 所需的 RAG 依赖
+- Python `>=3.12`。终端中运行 `python3.12 --version` 能看到版本号即可。
+- Git。终端中运行 `git --version` 能看到版本号即可。
+- 一个 OpenAI-compatible Chat Completions API key。DeepSeek、OpenAI 或自托管兼容网关都可以。
+- PaddleOCR API token。
+- 能访问 Hugging Face 或已配置代理，因为首次启动 embedding server 会下载本地 embedding 模型。
 
-创建虚拟环境：
+如果本机还没有 Python 或 Git，先安装 [Python](https://www.python.org/downloads/) 和 [Git](https://git-scm.com/downloads)。安装后重新打开终端，再运行上面的版本检查命令。
+
+1. 克隆仓库：
+
+```bash
+git clone https://github.com/Waylon524/tree.git
+cd tree
+```
+
+2. 创建并进入 Python 虚拟环境：
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
+```
+
+Windows PowerShell 使用：
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+3. 升级基础安装工具：
+
+```bash
 pip install -U pip
 ```
 
-安装引擎：
-
-```bash
-pip install -e .
-```
-
-安装 RAG/embedding 依赖：
+4. 安装 tree 引擎和 RAG/embedding 依赖：
 
 ```bash
 pip install -e ".[rag]"
 ```
 
-开发依赖：
+这个命令会把当前仓库安装为可编辑模式，并注册 `tree-run` 命令。后续修改源码后无需重新安装。
+
+如果你只是开发或调试，也可以安装开发依赖：
 
 ```bash
 pip install -e ".[rag,dev]"
 ```
 
-如果你在源码目录中调试，并且 `tree-run` 入口尚未安装，也可以使用：
+5. 确认 CLI 可用：
+
+```bash
+tree-run --help
+```
+
+如果 `tree-run` 暂时不可用，说明当前 shell 还没有识别虚拟环境中的命令。先确认已经执行 `source .venv/bin/activate`，也可以临时使用：
 
 ```bash
 PYTHONPATH=. python -m tree.cli --help
+```
+
+6. 安装并启动本地 embedding server。继续阅读下一节“本地 Embedding 模型”。
+
+7. 配置 API key 和模型。继续阅读“环境变量”一节；第一次运行 `tree-run run` 时也会自动弹出配置向导。
+
+8. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+
+```bash
+tree-run run
 ```
 
 ### 本地 Embedding 模型
@@ -503,43 +537,77 @@ rag-store/
 
 ### Installation
 
-Requirements:
+Before installation, prepare:
 
-- Python `>=3.12`
-- An OpenAI-compatible Chat Completions provider
-- A PaddleOCR API token
-- Local RAG/embedding dependencies
+- Python `>=3.12`. `python3.12 --version` should print a version number.
+- Git. `git --version` should print a version number.
+- An OpenAI-compatible Chat Completions API key. DeepSeek, OpenAI, or a self-hosted compatible gateway can be used.
+- A PaddleOCR API token.
+- Access to Hugging Face, or a configured proxy, because the local embedding model is downloaded on first start.
 
-Create a virtual environment:
+If Python or Git is missing, install [Python](https://www.python.org/downloads/) and [Git](https://git-scm.com/downloads/) first. Reopen your terminal after installation, then run the version checks above.
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/Waylon524/tree.git
+cd tree
+```
+
+2. Create and activate a Python virtual environment:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+3. Upgrade the base installer:
+
+```bash
 pip install -U pip
 ```
 
-Install the engine:
-
-```bash
-pip install -e .
-```
-
-Install RAG/embedding dependencies:
+4. Install the tree engine and RAG/embedding dependencies:
 
 ```bash
 pip install -e ".[rag]"
 ```
 
-Install development dependencies:
+This installs the current checkout in editable mode and registers the `tree-run` command. Source changes take effect without reinstalling.
+
+For development and linting, install the development extras:
 
 ```bash
 pip install -e ".[rag,dev]"
 ```
 
-If you are debugging directly from a source checkout before the console script is installed, use:
+5. Confirm that the CLI is available:
+
+```bash
+tree-run --help
+```
+
+If `tree-run` is not found, make sure the virtual environment is active. You can also use this source-checkout fallback:
 
 ```bash
 PYTHONPATH=. python -m tree.cli --help
+```
+
+6. Install and start the local embedding server. See the next section, "Local Embedding Model".
+
+7. Configure API keys and model names. See "Environment"; the first `tree-run run` also starts the setup wizard automatically.
+
+8. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+
+```bash
+tree-run run
 ```
 
 ### Local Embedding Model
