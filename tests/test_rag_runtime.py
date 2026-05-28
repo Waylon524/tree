@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -225,6 +226,56 @@ class RAGRuntimeTests(unittest.TestCase):
         self.assertEqual(len(outputs), 1)
         self.assertEqual(indexer.calls, [(root, "化学平衡", outputs[0])])
         self.assertFalse(outputs[0].exists())
+
+    def test_ingest_path_indexes_large_source_material_chunks_separately(self) -> None:
+        class FakeArchivist:
+            async def structure(self, raw_text: str) -> str:
+                return raw_text
+
+        class FakeIndexer:
+            def __init__(self) -> None:
+                self.calls: list[tuple[Path, str, Path]] = []
+
+            def index_source_file(self, root: Path, collection: str, path: Path) -> int:
+                self.calls.append((root, collection, path))
+                return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "lesson.pdf"
+            input_path.write_bytes(b"%PDF")
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_archivist_chunk_chars=80,
+            )
+            indexer = FakeIndexer()
+            raw_text = (
+                "# 课件\n"
+                "## 第一节\n"
+                f"{'A' * 100}\n"
+                "## 第二节\n"
+                f"{'B' * 100}\n"
+            )
+
+            with (
+                patch("tree.ingest.get_engine"),
+                patch("tree.ingest.extract_text", return_value=raw_text),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(
+                        input_path,
+                        root / "source_materials" / "化学平衡",
+                        settings,
+                        archivist=FakeArchivist(),
+                        collection="化学平衡",
+                        indexer=indexer,
+                    )
+                )
+
+        self.assertEqual([path.name for path in outputs], ["lesson__part-01.md", "lesson__part-02.md"])
+        self.assertEqual([call[2].name for call in indexer.calls], ["lesson__part-01.md", "lesson__part-02.md"])
+        self.assertFalse(outputs[0].exists())
+        self.assertFalse(outputs[1].exists())
 
     def test_handle_pass_indexes_finished_output_when_indexer_exists(self) -> None:
         class FakeIndexer:

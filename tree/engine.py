@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
+import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -116,17 +117,26 @@ class TreeEngine:
 
         if pending:
             print(f"Source ingest: {len(pending)} new or changed raw material(s) detected.")
-        for raw_path, collection in pending:
-            output_dir = source_ops.source_root(root) / collection
-            outputs = await self.ingest(
-                raw_path,
-                output_dir,
-                use_archivist=True,
-                collection=collection,
-                indexer=getattr(self, "rag_indexer", None),
-            )
-            _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
-            _save_source_manifest(root, manifest)
+        if pending:
+            ingest_sem = asyncio.Semaphore(max(1, self.settings.source_ingest_concurrency))
+
+            async def ingest_one(raw_path: Path, collection: str) -> tuple[Path, str, list[Path]]:
+                async with ingest_sem:
+                    output_dir = source_ops.source_root(root) / collection
+                    outputs = await self.ingest(
+                        raw_path,
+                        output_dir,
+                        use_archivist=True,
+                        collection=collection,
+                        indexer=None,
+                    )
+                    return raw_path, collection, outputs
+
+            tasks = [asyncio.create_task(ingest_one(raw_path, collection)) for raw_path, collection in pending]
+            for task in asyncio.as_completed(tasks):
+                raw_path, collection, outputs = await task
+                _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
+                _save_source_manifest(root, manifest)
 
         self._ensure_all_source_materials_embedded()
         _mark_manifest_outputs_embedded(manifest)

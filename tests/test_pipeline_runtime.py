@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import threading
+import time
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -321,7 +324,7 @@ W
 
             async def fake_ingest(input_path, output_dir, use_archivist=True, collection=None, indexer=None):
                 ingest_calls.append((input_path, output_dir, collection, indexer))
-                output_dir.mkdir(parents=True)
+                output_dir.mkdir(parents=True, exist_ok=True)
                 output = output_dir / f"{input_path.stem}.md"
                 output.write_text("# structured", encoding="utf-8")
                 return [output]
@@ -340,10 +343,51 @@ W
         self.assertEqual(ingest_calls[0][0], raw_file)
         self.assertEqual(ingest_calls[0][1], root / "source_materials" / "化学平衡")
         self.assertEqual(ingest_calls[0][2], "化学平衡")
-        self.assertIs(ingest_calls[0][3], engine.rag_indexer)
+        self.assertIsNone(ingest_calls[0][3])
         self.assertEqual(engine.rag_indexer.calls, [(root, "化学平衡", output)])
         self.assertTrue(manifest_exists)
         self.assertFalse(output_exists)
+
+    def test_engine_ingests_pending_raw_materials_concurrently(self) -> None:
+        class FakeIndexer:
+            def is_source_file_indexed(self, root: Path, collection: str, path: Path) -> bool:
+                return False
+
+            def index_source_file(self, root: Path, collection: str, path: Path) -> int:
+                return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw_dir = root / "raw_materials" / "课件"
+            raw_dir.mkdir(parents=True)
+            for idx in range(3):
+                (raw_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
+
+            engine = object.__new__(TreeEngine)
+            engine.settings = Settings.from_env(root, require_llm=False)
+            engine.rag_indexer = FakeIndexer()
+            active = 0
+            max_active = 0
+            lock = asyncio.Lock()
+
+            async def fake_ingest(input_path, output_dir, use_archivist=True, collection=None, indexer=None):
+                nonlocal active, max_active
+                async with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                await asyncio.sleep(0.05)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output = output_dir / f"{input_path.stem}.md"
+                output.write_text("# structured", encoding="utf-8")
+                async with lock:
+                    active -= 1
+                return [output]
+
+            engine.ingest = fake_ingest
+
+            asyncio.run(TreeEngine._prepare_source_materials_for_loop(engine))
+
+        self.assertGreater(max_active, 1)
 
     def test_engine_indexes_existing_source_materials_before_loop(self) -> None:
         class FakeIndexer:
@@ -572,6 +616,140 @@ W
         self.assertEqual(archivist.raw_text, "raw OCR text")
         self.assertEqual(len(outputs), 1)
         self.assertEqual(output_text, "# Clean Markdown\n")
+
+    def test_ingest_path_runs_directory_ocr_concurrently(self) -> None:
+        class FakeArchivist:
+            async def structure(self, raw_text: str) -> str:
+                return f"# {raw_text}\n"
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_extract(path: Path) -> str:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return path.stem
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "raw"
+            input_dir.mkdir()
+            for idx in range(3):
+                (input_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
+            settings = Settings.from_env(root, require_llm=False)
+
+            with (
+                patch("tree.ingest.get_engine"),
+                patch("tree.ingest.extract_text", side_effect=fake_extract),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(
+                        input_dir,
+                        root / "source_materials" / "课件",
+                        settings,
+                        archivist=FakeArchivist(),
+                    )
+                )
+
+        self.assertEqual(len(outputs), 3)
+        self.assertGreater(max_active, 1)
+
+    def test_ingest_path_runs_archivist_calls_concurrently(self) -> None:
+        class FakeArchivist:
+            async def structure(self, raw_text: str) -> str:
+                nonlocal active, max_active
+                async with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                await asyncio.sleep(0.05)
+                async with lock:
+                    active -= 1
+                return f"# {raw_text}\n"
+
+        active = 0
+        max_active = 0
+        lock = asyncio.Lock()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "raw"
+            input_dir.mkdir()
+            for idx in range(6):
+                (input_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
+            settings = Settings.from_env(root, require_llm=False)
+
+            with (
+                patch("tree.ingest.get_engine"),
+                patch("tree.ingest.extract_text", side_effect=lambda path: path.stem),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(
+                        input_dir,
+                        root / "source_materials" / "课件",
+                        settings,
+                        archivist=FakeArchivist(),
+                    )
+                )
+
+        self.assertEqual(len(outputs), 6)
+        self.assertEqual(max_active, 6)
+
+    def test_ingest_path_splits_large_ocr_text_by_headings_without_merging(self) -> None:
+        class FakeArchivist:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def structure(self, raw_text: str) -> str:
+                self.calls.append(raw_text)
+                return f"STRUCTURED:\n{raw_text}"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "lesson.pdf"
+            input_path.write_bytes(b"%PDF")
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_archivist_chunk_chars=120,
+            )
+            archivist = FakeArchivist()
+            raw_text = (
+                "# 化学平衡通论\n"
+                "课程导言\n\n"
+                "## 第一节 化学平衡状态\n"
+                f"{'A' * 180}\n"
+                "### 判断标志\n"
+                f"{'B' * 80}\n\n"
+                "## 第二节 平衡常数\n"
+                f"{'C' * 100}\n"
+            )
+
+            with (
+                patch("tree.ingest.get_engine"),
+                patch("tree.ingest.extract_text", return_value=raw_text),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(
+                        input_path,
+                        root / "source_materials" / "课件",
+                        settings,
+                        archivist=archivist,
+                    )
+                )
+            output_text = outputs[0].read_text(encoding="utf-8")
+
+        self.assertEqual([path.name for path in outputs], ["lesson__part-01.md", "lesson__part-02.md"])
+        self.assertEqual(len(archivist.calls), 2)
+        self.assertIn("## 第一节 化学平衡状态", archivist.calls[0])
+        self.assertIn("### 判断标志", archivist.calls[0])
+        self.assertNotIn("## 第二节 平衡常数", archivist.calls[0])
+        self.assertIn("## 第二节 平衡常数", archivist.calls[1])
+        self.assertTrue(output_text.startswith("STRUCTURED:"))
 
     def test_status_does_not_require_llm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

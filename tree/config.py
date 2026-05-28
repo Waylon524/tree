@@ -38,6 +38,11 @@ class Settings:
     max_iterations: int = 5
     max_retries: int = 3
     max_format_retries: int = 2
+    source_ingest_concurrency: int = 16
+    source_ocr_concurrency: int = 16
+    source_archivist_concurrency: int = 16
+    source_embedding_concurrency: int = 1
+    source_archivist_chunk_chars: int = 24000
     pro_degradation_threshold: int = 3
     pro_degradation_cooldown_sec: int = 600
     project_root: Path = field(default_factory=lambda: Path.cwd())
@@ -77,6 +82,11 @@ class Settings:
             max_iterations=_env_int("MAX_ITERATIONS", 5),
             max_retries=_env_int("MAX_RETRIES", 3),
             max_format_retries=_env_int("MAX_FORMAT_RETRIES", 2),
+            source_ingest_concurrency=_env_int("SOURCE_INGEST_CONCURRENCY", 16),
+            source_ocr_concurrency=_env_int("SOURCE_OCR_CONCURRENCY", 16),
+            source_archivist_concurrency=_env_int("SOURCE_ARCHIVIST_CONCURRENCY", 16),
+            source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
+            source_archivist_chunk_chars=_env_int("SOURCE_ARCHIVIST_CHUNK_CHARS", 24000),
             pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
             pro_degradation_cooldown_sec=_env_int("PRO_DEGRADATION_COOLDOWN_SEC", 600),
             project_root=root,
