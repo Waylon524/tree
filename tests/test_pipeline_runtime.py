@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import threading
@@ -284,7 +285,10 @@ W
                         }
                     ]
 
-            settings = Settings.from_env(root, require_llm=False)
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0,
+            )
             engine = object.__new__(TreeEngine)
             engine.settings = settings
             engine.examiner = FakeExaminer()
@@ -497,7 +501,10 @@ W
                         }
                     ]
 
-            settings = Settings.from_env(root, require_llm=False)
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0,
+            )
             engine = object.__new__(TreeEngine)
             engine.settings = settings
             engine.examiner = FakeExaminer()
@@ -586,6 +593,61 @@ W
         self.assertEqual(settings.paddleocr_api_token, "token-123")
         self.assertEqual(settings.paddleocr_model, "PaddleOCR-VL-test")
 
+    def test_settings_default_to_paddleocr_vl_16_and_rate_limited_uploads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key != "PADDLEOCR_MODEL" and key != "SOURCE_OCR_UPLOAD_INTERVAL_SEC"
+            }
+            with patch.dict(os.environ, env, clear=True):
+                settings = Settings.from_env(Path(tmp), require_llm=False)
+
+        self.assertEqual(settings.paddleocr_model, "PaddleOCR-VL-1.6")
+        self.assertEqual(settings.source_ocr_upload_interval_sec, 5.0)
+
+    def test_ocr_engine_submits_paddleocr_vl_16_payload(self) -> None:
+        from ingest.ocr_engine import OCREngine
+
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {"data": {"jobId": "job-1"}}
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.data = None
+
+            def post(self, url, headers=None, data=None, files=None, json=None):
+                self.data = data
+                return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {key: value for key, value in os.environ.items() if key != "PADDLEOCR_MODEL"}
+            with patch.dict(os.environ, env, clear=True):
+                OCREngine._instance = None
+                engine = OCREngine(token="token")
+                fake_client = FakeClient()
+                engine._client = fake_client
+                input_path = Path(tmp) / "lesson.pdf"
+                input_path.write_bytes(b"%PDF")
+
+                job_id = engine._submit_local(str(input_path))
+
+        self.assertEqual(job_id, "job-1")
+        self.assertEqual(fake_client.data["model"], "PaddleOCR-VL-1.6")
+        self.assertEqual(
+            json.loads(fake_client.data["optionalPayload"]),
+            {
+                "useDocOrientationClassify": False,
+                "useDocUnwarping": False,
+                "useChartRecognition": False,
+            },
+        )
+        OCREngine._instance = None
+
     def test_ingest_path_runs_paddleocr_then_archivist_and_writes_markdown(self) -> None:
         class FakeArchivist:
             def __init__(self) -> None:
@@ -600,7 +662,10 @@ W
             input_path = root / "lesson.pdf"
             input_path.write_bytes(b"%PDF")
             output_dir = root / "source_materials"
-            settings = Settings.from_env(root, require_llm=False)
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0,
+            )
             archivist = FakeArchivist()
 
             with (
@@ -642,7 +707,10 @@ W
             input_dir.mkdir()
             for idx in range(3):
                 (input_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
-            settings = Settings.from_env(root, require_llm=False)
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0,
+            )
 
             with (
                 patch("tree.ingest.get_engine"),
@@ -659,6 +727,44 @@ W
 
         self.assertEqual(len(outputs), 3)
         self.assertGreater(max_active, 1)
+
+    def test_ingest_path_rate_limits_ocr_upload_starts(self) -> None:
+        starts: list[float] = []
+        lock = threading.Lock()
+
+        def fake_extract(path: Path) -> str:
+            with lock:
+                starts.append(time.perf_counter())
+            return path.stem
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_dir = root / "raw"
+            input_dir.mkdir()
+            for idx in range(3):
+                (input_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0.02,
+            )
+
+            with (
+                patch("tree.ingest.get_engine"),
+                patch("tree.ingest.extract_text", side_effect=fake_extract),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(
+                        input_dir,
+                        root / "source_materials" / "课件",
+                        settings,
+                        archivist=None,
+                    )
+                )
+
+        self.assertEqual(len(outputs), 3)
+        starts.sort()
+        gaps = [later - earlier for earlier, later in zip(starts, starts[1:])]
+        self.assertTrue(all(gap >= 0.015 for gap in gaps), gaps)
 
     def test_ingest_path_runs_archivist_calls_concurrently(self) -> None:
         class FakeArchivist:
@@ -682,7 +788,10 @@ W
             input_dir.mkdir()
             for idx in range(6):
                 (input_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
-            settings = Settings.from_env(root, require_llm=False)
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0,
+            )
 
             with (
                 patch("tree.ingest.get_engine"),
@@ -716,6 +825,7 @@ W
             settings = replace(
                 Settings.from_env(root, require_llm=False),
                 source_archivist_chunk_chars=120,
+                source_ocr_upload_interval_sec=0,
             )
             archivist = FakeArchivist()
             raw_text = (

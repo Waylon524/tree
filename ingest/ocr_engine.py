@@ -1,4 +1,4 @@
-"""PaddleOCR-VL 1.5 API client (async job model).
+"""PaddleOCR-VL API client (async job model).
 
 Workflow: submit job → poll status → download JSONL results.
 
@@ -7,7 +7,7 @@ Authentication: Authorization: bearer {TOKEN}
 Configuration via environment variables (or .env):
   - PADDLEOCR_API_URL:   Job endpoint URL
   - PADDLEOCR_API_TOKEN: API access token
-  - PADDLEOCR_MODEL:     Model name (default: PaddleOCR-VL-1.5)
+  - PADDLEOCR_MODEL:     Model name (default: PaddleOCR-VL-1.6)
 
 Usage:
   engine = get_engine()
@@ -26,37 +26,19 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
-_DEFAULT_MODEL = "PaddleOCR-VL-1.5"
+_DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT = 600
 
 _DEFAULT_OPTIONS = {
-    "markdownIgnoreLabels": [
-        "header", "header_image", "footer", "footer_image",
-        "number", "footnote", "aside_text",
-    ],
     "useDocOrientationClassify": False,
     "useDocUnwarping": False,
-    "useLayoutDetection": True,
     "useChartRecognition": False,
-    "useSealRecognition": True,
-    "useOcrForImageBlock": False,
-    "mergeTables": True,
-    "relevelTitles": True,
-    "layoutShapeMode": "auto",
-    "promptLabel": "ocr",
-    "repetitionPenalty": 1,
-    "temperature": 0,
-    "topP": 1,
-    "minPixels": 147384,
-    "maxPixels": 2822400,
-    "layoutNms": True,
-    "restructurePages": True,
 }
 
 
 class OCREngine:
-    """Async-job client for Baidu AI Studio PaddleOCR-VL 1.5."""
+    """Async-job client for Baidu AI Studio PaddleOCR-VL."""
 
     _instance = None
 

@@ -32,7 +32,7 @@ class Settings:
     # PaddleOCR
     paddleocr_api_url: str = ""
     paddleocr_api_token: str = ""
-    paddleocr_model: str = "PaddleOCR-VL-1.5"
+    paddleocr_model: str = "PaddleOCR-VL-1.6"
 
     # Pipeline
     max_iterations: int = 5
@@ -40,6 +40,7 @@ class Settings:
     max_format_retries: int = 2
     source_ingest_concurrency: int = 16
     source_ocr_concurrency: int = 16
+    source_ocr_upload_interval_sec: float = 5.0
     source_archivist_concurrency: int = 16
     source_embedding_concurrency: int = 1
     source_archivist_chunk_chars: int = 24000
@@ -78,12 +79,13 @@ class Settings:
             archivist=archivist,
             paddleocr_api_url=os.environ.get("PADDLEOCR_API_URL", ""),
             paddleocr_api_token=os.environ.get("PADDLEOCR_API_TOKEN", ""),
-            paddleocr_model=os.environ.get("PADDLEOCR_MODEL", "PaddleOCR-VL-1.5"),
+            paddleocr_model=os.environ.get("PADDLEOCR_MODEL", "PaddleOCR-VL-1.6"),
             max_iterations=_env_int("MAX_ITERATIONS", 5),
             max_retries=_env_int("MAX_RETRIES", 3),
             max_format_retries=_env_int("MAX_FORMAT_RETRIES", 2),
             source_ingest_concurrency=_env_int("SOURCE_INGEST_CONCURRENCY", 16),
             source_ocr_concurrency=_env_int("SOURCE_OCR_CONCURRENCY", 16),
+            source_ocr_upload_interval_sec=_env_float("SOURCE_OCR_UPLOAD_INTERVAL_SEC", 5.0),
             source_archivist_concurrency=_env_int("SOURCE_ARCHIVIST_CONCURRENCY", 16),
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
             source_archivist_chunk_chars=_env_int("SOURCE_ARCHIVIST_CHUNK_CHARS", 24000),
@@ -113,3 +115,11 @@ def _env_int(name: str, default: int) -> int:
         return default
     value = value.split("#", 1)[0].strip()
     return int(value) if value else default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    value = value.split("#", 1)[0].strip()
+    return float(value) if value else default

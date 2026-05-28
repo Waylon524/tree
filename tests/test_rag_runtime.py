@@ -205,7 +205,10 @@ class RAGRuntimeTests(unittest.TestCase):
             root = Path(tmp)
             input_path = root / "lesson.pdf"
             input_path.write_bytes(b"%PDF")
-            settings = Settings.from_env(root, require_llm=False)
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_ocr_upload_interval_sec=0,
+            )
             indexer = FakeIndexer()
 
             with (
@@ -247,6 +250,7 @@ class RAGRuntimeTests(unittest.TestCase):
             settings = replace(
                 Settings.from_env(root, require_llm=False),
                 source_archivist_chunk_chars=80,
+                source_ocr_upload_interval_sec=0,
             )
             indexer = FakeIndexer()
             raw_text = (

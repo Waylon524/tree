@@ -32,6 +32,8 @@ _IMPLICIT_HEADING_RE = re.compile(
     r"\d+(?:\.\d+)+\s+\S|"
     r"\d+[、.．]\s+\S)"
 )
+_ocr_upload_locks: dict[int, asyncio.Lock] = {}
+_last_ocr_upload_at = 0.0
 
 
 async def ingest_path(
@@ -99,6 +101,7 @@ async def _ingest_file_pipeline(
         input_path,
         output_dir,
         settings.source_archivist_chunk_chars,
+        settings.source_ocr_upload_interval_sec,
         archivist=archivist,
         ocr_sem=ocr_sem,
         archivist_sem=archivist_sem,
@@ -112,6 +115,7 @@ async def ingest_file(
     input_path: Path,
     output_dir: Path,
     archivist_chunk_chars: int,
+    ocr_upload_interval_sec: float,
     archivist: MarkdownStructurer | None = None,
     ocr_sem: asyncio.Semaphore | None = None,
     archivist_sem: asyncio.Semaphore | None = None,
@@ -119,9 +123,11 @@ async def ingest_file(
     """Process one file using PaddleOCR extraction and optional archivist cleanup."""
     start = time.time()
     if ocr_sem is None:
+        await _wait_for_ocr_upload_slot(ocr_upload_interval_sec)
         raw_text = await asyncio.to_thread(extract_text, input_path)
     else:
         async with ocr_sem:
+            await _wait_for_ocr_upload_slot(ocr_upload_interval_sec)
             raw_text = await asyncio.to_thread(extract_text, input_path)
     if not raw_text.strip():
         logger.warning("No text extracted from %s, skipping", input_path.name)
@@ -165,6 +171,22 @@ async def _structure_chunk(
         return await archivist.structure(raw_text)
     async with archivist_sem:
         return await archivist.structure(raw_text)
+
+
+async def _wait_for_ocr_upload_slot(interval_sec: float) -> None:
+    """Rate-limit PaddleOCR job submission starts across concurrent ingest tasks."""
+    if interval_sec <= 0:
+        return
+    global _last_ocr_upload_at
+    loop = asyncio.get_running_loop()
+    lock = _ocr_upload_locks.setdefault(id(loop), asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        wait_sec = _last_ocr_upload_at + interval_sec - now
+        if wait_sec > 0:
+            await asyncio.sleep(wait_sec)
+            now = time.monotonic()
+        _last_ocr_upload_at = now
 
 
 def _split_raw_text_by_headings(raw_text: str, max_chars: int) -> list[str]:
