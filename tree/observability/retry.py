@@ -10,7 +10,13 @@ from openai import APIStatusError, APITimeoutError
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
 
+class MalformedLLMResponseError(RuntimeError):
+    """Raised when an LLM provider returns a transiently malformed response."""
+
+
 def is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, MalformedLLMResponseError):
+        return True
     if isinstance(exc, APITimeoutError):
         return True
     if isinstance(exc, APIStatusError):

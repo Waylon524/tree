@@ -123,6 +123,21 @@ The supplied [Writer_Instructions] override defaults here. Respect its scope, re
 - Every inference step, assumption, substitution, and boundary condition must be explicit.
 - Reference prior concepts as [概念名](filename.md#section) when possible.
 
+## LaTeX Rendering Contract
+The final Markdown must render in a standard Markdown + KaTeX/MathJax renderer.
+- Inline math must use single-dollar delimiters: `$...$`.
+- Display math must use double-dollar delimiters: `$$...$$`.
+- Do not use `\\(...\\)` or `\\[...\\]` delimiters anywhere.
+- Every display math block must be on its own lines, with a blank line before and after it:
+  `$$`
+  `formula`
+  `$$`
+- Display math must not be indented, must not be placed inside list items, blockquotes, tables, or code fences, and must not share a line with prose.
+- Do not wrap LaTeX in backticks. Use code formatting only for literal filenames, commands, or plain-text tokens.
+- Preserve LaTeX command spelling exactly: `\\Delta`, `\\ln`, `\\frac`, `\\rightleftharpoons`, `\\mathrm{...}`, `\\text{...}`.
+- Chemical formulas inside math should use `\\mathrm{...}` for species names, for example `$\\mathrm{NO_2}$`.
+- Before returning, scan the draft for math delimiters. If any `\\(`, `\\)`, `\\[`, or `\\]` remains, rewrite it to `$...$` or `$$...$$`.
+
 ## Size Check
 Before writing, estimate output length. If covering all listed defects would exceed the limit in [Writer_Instructions] (default 500 lines), output:
 EXAM_TOO_BROAD

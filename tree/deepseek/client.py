@@ -5,7 +5,11 @@ from __future__ import annotations
 from openai import AsyncOpenAI
 
 from tree.config import Settings
-from tree.observability.retry import DegradationTracker, retry_with_backoff
+from tree.observability.retry import (
+    DegradationTracker,
+    MalformedLLMResponseError,
+    retry_with_backoff,
+)
 
 
 class LLMClient:
@@ -50,7 +54,7 @@ class LLMClient:
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            return resp.choices[0].message.content or ""
+            return _extract_chat_content(resp)
 
         if role == "examiner":
             try:
@@ -66,3 +70,15 @@ class LLMClient:
     async def close(self) -> None:
         for client in self._clients.values():
             await client.close()
+
+
+def _extract_chat_content(resp) -> str:
+    choices = getattr(resp, "choices", None)
+    if choices is None:
+        raise MalformedLLMResponseError("LLM response missing choices")
+    if not choices:
+        raise MalformedLLMResponseError("LLM response contained no choices")
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        raise MalformedLLMResponseError("LLM response choice missing message")
+    return getattr(message, "content", None) or ""
