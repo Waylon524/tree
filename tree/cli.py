@@ -82,6 +82,35 @@ def status(
 
 
 @app.command()
+def ingest(
+    input_path: Path = typer.Option(..., "--input", "-i", exists=True, help="Input file or directory"),
+    collection: str | None = typer.Option(None, "--collection", "-c", help="Source collection name"),
+    output_dir: Path | None = typer.Option(None, "--output", "-o", help="Output source-material directory"),
+    no_structure: bool = typer.Option(False, "--no-structure", help="Skip Archivist cleanup"),
+) -> None:
+    """Run PaddleOCR ingest, then optionally structure OCR output with Archivist."""
+    from tree.config import Settings
+    from tree.engine import TreeEngine
+    from tree.ingest import ingest_path
+
+    target_dir = output_dir or Path.cwd() / "source_materials" / (collection or input_path.stem)
+
+    if no_structure:
+        settings = Settings.from_env(require_llm=False)
+        outputs = asyncio.run(ingest_path(input_path, target_dir, settings, archivist=None))
+    else:
+        settings = Settings.from_env()
+        engine = TreeEngine(settings)
+        try:
+            outputs = asyncio.run(engine.ingest(input_path, target_dir, use_archivist=True))
+        finally:
+            asyncio.run(engine.close())
+
+    for path in outputs:
+        rprint(f"[green]Wrote[/green] {path}")
+
+
+@app.command()
 def step(
     chapter: str = typer.Option(..., help="Chapter name"),
     step_num: int = typer.Option(..., help="Step number (1-4)"),

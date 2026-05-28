@@ -26,7 +26,8 @@ class ExaminerAgent:
         next_seq: str,
         prior_file_contents: list[str],
         prior_file_paths: list[str],
-        exercise_bank: str | None = None,
+        source_material_contents: list[str] | None = None,
+        source_material_paths: list[str] | None = None,
         exam_too_broad_ctx: ExamTooBroadContext | None = None,
     ) -> tuple[ExamSections | None, bool]:
         system = self._loader.load("examiner")
@@ -37,8 +38,16 @@ class ExaminerAgent:
             + "\n".join(f"  - {p}" for p in prior_file_paths)
             + "\n",
         ]
-        if exercise_bank:
-            parts.append(f"Exercise bank:\n{exercise_bank}\n")
+        if source_material_paths:
+            parts.append(
+                "Source material paths:\n"
+                + "\n".join(f"  - {p}" for p in source_material_paths)
+                + "\n"
+            )
+        if source_material_contents:
+            parts.append("Source material contents:\n")
+            for i, content in enumerate(source_material_contents):
+                parts.append(f"--- Source {i + 1} ---\n{content}\n")
         if exam_too_broad_ctx:
             parts.append(
                 f"⚠ EXAM_TOO_BROAD return from writer.\n"
@@ -101,20 +110,18 @@ class ExaminerAgent:
     async def scan_next_chapter(
         self,
         pipeline_state_text: str,
-        exercise_files: list[str],
-        exercise_contents: list[tuple[object, str]] | None = None,
+        source_payload: dict[str, list[dict[str, str]]],
     ) -> tuple[str | None, bool]:
         system = self._loader.load("examiner")
         user = (
             "## Task: Chapter Continuation Scan (Phase C)\n\n"
             f"pipeline-state.json:\n{pipeline_state_text}\n\n"
-            f"Exercise files:\n"
-            + "\n".join(f"  - {f}" for f in exercise_files)
+            "Structured source material collections:\n"
         )
-        if exercise_contents:
-            user += "\n\nExercise file contents:\n"
-            for path, content in exercise_contents:
-                user += f"\n--- {path} ---\n{content}\n"
+        for collection, docs in source_payload.items():
+            user += f"\n# Collection: {collection}\n"
+            for doc in docs:
+                user += f"\n--- {doc['path']} ---\n{doc['content']}\n"
         raw = await self._client.call("examiner", system, user)
 
         if detect_pipeline_complete(raw):

@@ -6,13 +6,12 @@ with fallback to LLM_API_KEY/LLM_BASE_URL/LLM_MODEL defaults.
 
 import logging
 import os
-from pathlib import Path
 
 from openai import OpenAI
 
-logger = logging.getLogger(__name__)
+from tree.agents.prompts import ARCHIVIST_PROMPT
 
-PROMPT_TEMPLATE = (Path(__file__).parent / "prompts" / "structurer.txt").read_text()
+logger = logging.getLogger(__name__)
 
 
 def structure(raw_text: str, model: str | None = None) -> str:
@@ -38,16 +37,14 @@ def structure(raw_text: str, model: str | None = None) -> str:
         or "gpt-4o"
     )
 
-    prompt = PROMPT_TEMPLATE.replace("{raw_text}", raw_text)
-
     client = OpenAI(api_key=api_key, base_url=base_url)
 
     logger.info("Calling archivist LLM: model=%s, input_len=%d", model, len(raw_text))
     resp = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "你是文档结构化专家，输出纯Markdown。"},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": ARCHIVIST_PROMPT},
+            {"role": "user", "content": f"## Raw OCR Text\n{raw_text}"},
         ],
         temperature=0.1,
     )

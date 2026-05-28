@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import tempfile
@@ -9,13 +10,230 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
+from tree.agents.archivist import ArchivistAgent
+from tree.agents.examiner import ExaminerAgent
+from tree.agents.loader import AgentLoader
 from tree.cli import app
-from tree.engine import persist_writer_result
+from tree.config import Settings
+from tree.engine import TreeEngine, persist_writer_result
+from tree.ingest import ingest_path
+from tree.io import source_ops
 from tree.io.git_ops import git_add_commit
-from tree.state.models import ArchitectResult, ExamSections, IterationState
+from tree.state.manager import StateManager
+from tree.state.models import ArchitectResult, ChapterRecord, ExamSections, IterationState, PipelineState
 
 
 class PipelineRuntimeTests(unittest.TestCase):
+    def test_source_ops_lists_collections_and_reads_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chapter_dir = root / "source_materials" / "化学平衡"
+            chapter_dir.mkdir(parents=True)
+            (chapter_dir / "5. 化学平衡通论.md").write_text("# 化学平衡\n内容A", encoding="utf-8")
+            (chapter_dir / "notes.txt").write_text("ignore", encoding="utf-8")
+
+            self.assertEqual(source_ops.list_collections(root), ["化学平衡"])
+            docs = source_ops.read_collection(root, "化学平衡")
+
+        self.assertEqual(docs[0].path.name, "5. 化学平衡通论.md")
+        self.assertEqual(docs[0].content, "# 化学平衡\n内容A")
+
+    def test_state_records_source_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = StateManager(Path(tmp) / "pipeline-state.json")
+            state = mgr.add_chapter(
+                PipelineState(),
+                "化学平衡",
+                source_collection="化学平衡",
+            )
+
+        self.assertEqual(state.chapters[0].chapter_name, "化学平衡")
+        self.assertEqual(state.chapters[0].source_collection, "化学平衡")
+
+    def test_examiner_compose_receives_source_materials(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.user_prompt = ""
+
+            async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+                self.user_prompt = user_prompt
+                return """## [Next_Knowledge_Point]
+01. 化学平衡状态
+
+## [Blind_Exam]
+Q1
+
+## [Student_Instructions]
+Use evidence.
+
+## [Answer_Key]
+A1
+
+## [Architect_Instructions]
+Write narrowly.
+"""
+
+        client = FakeClient()
+        examiner = ExaminerAgent(client, AgentLoader())
+        asyncio.run(
+            examiner.compose_exam(
+                "01",
+                prior_file_contents=[],
+                prior_file_paths=[],
+                source_material_contents=["# 化学平衡\n可逆反应达到平衡。"],
+                source_material_paths=["source_materials/化学平衡/5.md"],
+            )
+        )
+
+        self.assertIn("Source material paths", client.user_prompt)
+        self.assertIn("可逆反应达到平衡", client.user_prompt)
+
+    def test_engine_discovers_chapter_from_source_materials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "source_materials" / "化学平衡"
+            source_dir.mkdir(parents=True)
+            (source_dir / "5.md").write_text("# 化学平衡\n内容", encoding="utf-8")
+
+            class FakeExaminer:
+                def __init__(self) -> None:
+                    self.source_payload = {}
+
+                async def scan_next_chapter(
+                    self,
+                    pipeline_state_text: str,
+                    source_payload: dict[str, list[dict[str, str]]],
+                ) -> tuple[str, bool]:
+                    self.source_payload = source_payload
+                    return "化学平衡", False
+
+            settings = Settings.from_env(root, require_llm=False)
+            engine = object.__new__(TreeEngine)
+            engine.settings = settings
+            engine.examiner = FakeExaminer()
+
+            name = asyncio.run(TreeEngine._scan_next_chapter(engine, PipelineState()))
+
+        self.assertEqual(name, "化学平衡")
+        self.assertIn("化学平衡", engine.examiner.source_payload)
+        self.assertEqual(engine.examiner.source_payload["化学平衡"][0]["content"], "# 化学平衡\n内容")
+
+    def test_step1_reads_current_chapter_source_materials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "source_materials" / "化学平衡"
+            source_dir.mkdir(parents=True)
+            (source_dir / "5.md").write_text("# 化学平衡\n源内容", encoding="utf-8")
+
+            chapter = ChapterRecord(
+                chapter_name="化学平衡",
+                status="in_progress",
+                source_collection="化学平衡",
+            )
+
+            class FakeExaminer:
+                def __init__(self) -> None:
+                    self.source_material_contents: list[str] = []
+
+                async def compose_exam(self, *args, **kwargs):
+                    self.source_material_contents = kwargs["source_material_contents"]
+                    return ExamSections(
+                        knowledge_point="01. 化学平衡状态",
+                        blind_exam="Q",
+                        student_instructions="S",
+                        answer_key="A",
+                        architect_instructions="W",
+                    ), False
+
+            settings = Settings.from_env(root, require_llm=False)
+            engine = object.__new__(TreeEngine)
+            engine.settings = settings
+            engine.examiner = FakeExaminer()
+
+            asyncio.run(TreeEngine._step1_compose(engine, chapter, "01"))
+
+        self.assertEqual(engine.examiner.source_material_contents, ["# 化学平衡\n源内容"])
+
+    def test_agent_prompts_are_builtin_without_claude_directory(self) -> None:
+        loader = AgentLoader()
+
+        self.assertIn("Examiner", loader.load("examiner"))
+        self.assertIn("Evidence-Based Student", loader.load("student"))
+        self.assertIn("Content Architect", loader.load("writer"))
+        self.assertIn("Archivist", loader.load("archivist"))
+
+    def test_archivist_agent_uses_builtin_prompt(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, str]] = []
+
+            async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+                self.calls.append((role, system_prompt, user_prompt))
+                return "# structured"
+
+        client = FakeClient()
+        agent = ArchivistAgent(client, AgentLoader())
+
+        result = asyncio.run(agent.structure("raw OCR text"))
+
+        self.assertEqual(result, "# structured")
+        self.assertEqual(client.calls[0][0], "archivist")
+        self.assertIn("document structuring specialist", client.calls[0][1])
+        self.assertIn("raw OCR text", client.calls[0][2])
+
+    def test_settings_can_load_ocr_only_without_llm_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "PADDLEOCR_API_URL=https://ocr.example.test/jobs\n"
+                "PADDLEOCR_API_TOKEN=token-123\n"
+                "PADDLEOCR_MODEL=PaddleOCR-VL-test\n",
+                encoding="utf-8",
+            )
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.endswith("_API_KEY") and key != "LLM_API_KEY"
+            }
+
+            with patch.dict(os.environ, env, clear=True):
+                settings = Settings.from_env(root, require_llm=False)
+
+        self.assertEqual(settings.paddleocr_api_url, "https://ocr.example.test/jobs")
+        self.assertEqual(settings.paddleocr_api_token, "token-123")
+        self.assertEqual(settings.paddleocr_model, "PaddleOCR-VL-test")
+
+    def test_ingest_path_runs_paddleocr_then_archivist_and_writes_markdown(self) -> None:
+        class FakeArchivist:
+            def __init__(self) -> None:
+                self.raw_text = ""
+
+            async def structure(self, raw_text: str) -> str:
+                self.raw_text = raw_text
+                return "# Clean Markdown\n"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "lesson.pdf"
+            input_path.write_bytes(b"%PDF")
+            output_dir = root / "source_materials"
+            settings = Settings.from_env(root, require_llm=False)
+            archivist = FakeArchivist()
+
+            with (
+                patch("tree.ingest.get_engine") as get_engine,
+                patch("tree.ingest.extract_text", return_value="raw OCR text"),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(input_path, output_dir, settings, archivist=archivist)
+                )
+            output_text = outputs[0].read_text(encoding="utf-8")
+
+        get_engine.assert_called_once()
+        self.assertEqual(archivist.raw_text, "raw OCR text")
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(output_text, "# Clean Markdown\n")
+
     def test_status_does_not_require_llm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

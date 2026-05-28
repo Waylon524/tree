@@ -5,33 +5,23 @@ using remote PaddleOCR-VL v1.5 API service for all file types.
 
 Usage:
     python -m ingest.pipeline --input raw_materials/ --output source_materials/01-化学/
-    python -m ingest.pipeline --input test/课件/5.\ 化学平衡通论.pdf
+    python -m ingest.pipeline --input "test/课件/5. 化学平衡通论.pdf"
 """
 
 import argparse
 import logging
-import os
 import sys
 import time
 from pathlib import Path
 
-# Load .env from project root
-_project_root = Path(__file__).resolve().parent.parent
-_env_file = _project_root / ".env"
-if _env_file.exists():
-    for line in _env_file.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip()
-        if key and key not in os.environ:
-            os.environ[key] = value
+from dotenv import load_dotenv
 
 from ingest.extractors import docx_extractor, image_extractor, pdf_extractor
 from ingest.math_fix import fix_math_symbols
 from ingest.ocr_engine import get_engine
 from ingest.structurer import structure
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 

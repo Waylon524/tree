@@ -43,16 +43,16 @@ class Settings:
     project_root: Path = field(default_factory=lambda: Path.cwd())
 
     @classmethod
-    def from_env(cls, project_root: Path | None = None) -> Settings:
+    def from_env(cls, project_root: Path | None = None, require_llm: bool = True) -> Settings:
         root = project_root or Path.cwd()
-        load_dotenv(root / ".env")
+        load_dotenv(root / ".env", override=True)
 
         # Default LLM config (fallback for all roles)
         default_key = os.environ.get("LLM_API_KEY", "")
         default_url = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
         default_model = os.environ.get("LLM_MODEL", "gpt-4o")
 
-        if not default_key:
+        if require_llm and not default_key:
             # Check if any role-specific key is set
             any_key = any(os.environ.get(f"{r}_API_KEY") for r in ("EXAMINER", "STUDENT", "WRITER", "ARCHIVIST"))
             if not any_key:
@@ -74,11 +74,11 @@ class Settings:
             paddleocr_api_url=os.environ.get("PADDLEOCR_API_URL", ""),
             paddleocr_api_token=os.environ.get("PADDLEOCR_API_TOKEN", ""),
             paddleocr_model=os.environ.get("PADDLEOCR_MODEL", "PaddleOCR-VL-1.5"),
-            max_iterations=int(os.environ.get("MAX_ITERATIONS", "5")),
-            max_retries=int(os.environ.get("MAX_RETRIES", "3")),
-            max_format_retries=int(os.environ.get("MAX_FORMAT_RETRIES", "2")),
-            pro_degradation_threshold=int(os.environ.get("PRO_DEGRADATION_THRESHOLD", "3")),
-            pro_degradation_cooldown_sec=int(os.environ.get("PRO_DEGRADATION_COOLDOWN_SEC", "600")),
+            max_iterations=_env_int("MAX_ITERATIONS", 5),
+            max_retries=_env_int("MAX_RETRIES", 3),
+            max_format_retries=_env_int("MAX_FORMAT_RETRIES", 2),
+            pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
+            pro_degradation_cooldown_sec=_env_int("PRO_DEGRADATION_COOLDOWN_SEC", 600),
             project_root=root,
         )
 
@@ -95,3 +95,11 @@ def _role_config(
         base_url=os.environ.get(f"{role}_BASE_URL", default_url),
         model=os.environ.get(f"{role}_MODEL", default_model),
     )
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    value = value.split("#", 1)[0].strip()
+    return int(value) if value else default

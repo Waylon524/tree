@@ -50,30 +50,3 @@ def move_draft_to_finished(root: Path, chapter: str, filename: str) -> Path:
     dst = dst_dir / filename
     shutil.move(str(src), str(dst))
     return dst
-
-
-def list_exercises(root: Path) -> list[Path]:
-    """List all files in exercises/."""
-    ex_dir = root / "exercises"
-    if not ex_dir.exists():
-        return []
-    return sorted(ex_dir.glob("*"))
-
-
-def read_exercise_files(root: Path) -> list[tuple[Path, str]]:
-    """Read all regular files in exercises/ with their paths."""
-    return [
-        (path, path.read_text(encoding="utf-8"))
-        for path in list_exercises(root)
-        if path.is_file()
-    ]
-
-
-def read_exercise_bank(root: Path, chapter: str) -> str | None:
-    """Read exercises/{chapter}-*.md if it exists."""
-    ex_dir = root / "exercises"
-    if not ex_dir.exists():
-        return None
-    for path in ex_dir.glob(f"{chapter}-*.md"):
-        return path.read_text(encoding="utf-8")
-    return None

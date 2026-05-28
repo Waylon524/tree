@@ -29,8 +29,19 @@ class StateManager:
                 return ch
         return None
 
-    def add_chapter(self, state: PipelineState, name: str) -> PipelineState:
-        chapters = list(state.chapters) + [ChapterRecord(chapter_name=name, status="in_progress")]
+    def add_chapter(
+        self,
+        state: PipelineState,
+        name: str,
+        source_collection: str | None = None,
+    ) -> PipelineState:
+        chapters = list(state.chapters) + [
+            ChapterRecord(
+                chapter_name=name,
+                status="in_progress",
+                source_collection=source_collection,
+            )
+        ]
         return PipelineState(chapters=chapters)
 
     def complete_chapter(self, state: PipelineState, name: str) -> PipelineState:

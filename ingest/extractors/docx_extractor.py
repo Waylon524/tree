@@ -9,7 +9,6 @@ import tempfile
 from pathlib import Path
 
 from docx import Document
-from docx.opc.constants import RELATIONSHIP_TYPE as RT
 
 from ingest.ocr_engine import get_engine
 

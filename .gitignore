@@ -1,7 +1,7 @@
-# 输入数据
+# 输入/结构化资料
+/raw_materials/
+/source_materials/
 /drafts/
-/exercises/*.md
-!/exercises/*.py
 
 # 产出结果
 /finished_outputs/
@@ -9,7 +9,6 @@
 # 运行时状态
 /pipeline-state.json
 /pipeline-temp/
-/exercises/scope-mismatch-log.md
 
 # 本地配置
 .claude/settings.local.json

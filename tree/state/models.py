@@ -12,6 +12,7 @@ class ChapterRecord(BaseModel):
     chapter_name: str
     status: str  # "in_progress" | "completed"
     files_completed: list[str] = []
+    source_collection: str | None = None
 
 
 class PipelineState(BaseModel):

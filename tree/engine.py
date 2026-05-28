@@ -6,12 +6,14 @@ import re
 import time
 from pathlib import Path
 
+from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
+from tree.agents.loader import AgentLoader
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
 from tree.config import Settings
 from tree.deepseek.client import LLMClient
-from tree.io import file_ops, git_ops
+from tree.io import file_ops, git_ops, source_ops
 from tree.observability.limiter import IterationLimiter
 from tree.observability.logger import TraceLogger
 from tree.state.manager import StateManager
@@ -30,13 +32,13 @@ class TreeEngine:
         self.settings = settings
         root = settings.project_root
         self.client = LLMClient(settings)
-        from tree.agents.loader import AgentLoader
 
-        self.loader = AgentLoader(root / ".claude" / "agents")
+        self.loader = AgentLoader()
         self.state_mgr = StateManager(root / "pipeline-state.json")
         self.examiner = ExaminerAgent(self.client, self.loader)
         self.student = StudentAgent(self.client, self.loader)
         self.writer = WriterAgent(self.client, self.loader)
+        self.archivist = ArchivistAgent(self.client, self.loader)
         self.tracer = TraceLogger(root / "pipeline-temp" / "trace.jsonl")
         self.limiter = IterationLimiter(settings.max_iterations)
 
@@ -51,15 +53,26 @@ class TreeEngine:
                 scan_result = await self._scan_next_chapter(state)
                 if scan_result is None:
                     self.tracer.log_pipeline_complete()
-                    print("PIPELINE_COMPLETE — all exercises covered.")
+                    print("PIPELINE_COMPLETE — all source materials covered.")
                     return
                 new_name = scan_result
-                state = self.state_mgr.add_chapter(state, new_name)
+                state = self.state_mgr.add_chapter(state, new_name, source_collection=new_name)
                 self.state_mgr.save(state)
                 chapter = self.state_mgr.find_in_progress(state)
                 print(f"New chapter discovered: {new_name}")
 
             await self.process_chapter(chapter.chapter_name)
+
+    async def ingest(self, input_path: Path, output_dir: Path, use_archivist: bool = True) -> list[Path]:
+        """Run the integrated PaddleOCR → Archivist ingest pipeline."""
+        from tree.ingest import ingest_path
+
+        return await ingest_path(
+            input_path,
+            output_dir,
+            self.settings,
+            archivist=self.archivist if use_archivist else None,
+        )
 
     async def process_chapter(self, chapter_name: str) -> None:
         """Run Step 0→1→2→3→4 loop for one chapter until CHAPTER_COMPLETE."""
@@ -159,11 +172,19 @@ class TreeEngine:
 
         ch = chapter if isinstance(chapter, ChapterRecord) else None
         ch_name = ch.chapter_name if ch else getattr(chapter, "chapter_name", "")
+        source_collection = (
+            ch.source_collection if ch and ch.source_collection else ch_name
+        )
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, ch_name)]
         prior_contents = file_ops.read_prior_files(self.settings.project_root, ch_name)
-        exercise_bank = file_ops.read_exercise_bank(self.settings.project_root, ch_name)
+        source_docs = source_ops.read_collection(self.settings.project_root, source_collection)
         return await self.examiner.compose_exam(
-            next_seq, prior_contents, prior_paths, exercise_bank, exam_too_broad_ctx
+            next_seq,
+            prior_contents,
+            prior_paths,
+            source_material_contents=[doc.content for doc in source_docs],
+            source_material_paths=[str(doc.path) for doc in source_docs],
+            exam_too_broad_ctx=exam_too_broad_ctx,
         )
 
     async def _step2_blind_test(self, iter_state: IterationState) -> str:
@@ -252,15 +273,18 @@ class TreeEngine:
         return iter_state
 
     async def _scan_next_chapter(self, state: object) -> str | None:
-        """Scan exercises for next chapter. Returns chapter name or None (pipeline complete)."""
+        """Scan source materials for next chapter. Returns chapter name or None."""
         from tree.state.models import PipelineState
 
         s = state if isinstance(state, PipelineState) else None
         state_text = s.model_dump_json(indent=2) if s else "{}"
-        exercise_files = [str(p) for p in file_ops.list_exercises(self.settings.project_root)]
-        exercise_contents = file_ops.read_exercise_files(self.settings.project_root)
+        collections = source_ops.read_all_collections(self.settings.project_root)
+        source_payload = {
+            name: [{"path": str(doc.path), "content": doc.content} for doc in docs]
+            for name, docs in collections.items()
+        }
         name, is_complete = await self.examiner.scan_next_chapter(
-            state_text, exercise_files, exercise_contents
+            state_text, source_payload
         )
         if is_complete:
             return None
