@@ -17,9 +17,10 @@ from tree.state.models import AuditResult, ExamSections, ExamTooBroadContext
 
 
 class ExaminerAgent:
-    def __init__(self, client: LLMClient, loader: AgentLoader):
+    def __init__(self, client: LLMClient, loader: AgentLoader, max_format_retries: int = 2):
         self._client = client
         self._loader = loader
+        self._max_format_retries = max_format_retries
 
     async def compose_exam(
         self,
@@ -81,6 +82,7 @@ class ExaminerAgent:
         prior_file_contents: list[str],
         prior_file_paths: list[str],
         previous_bottleneck: str | None = None,
+        retrieved_context: list[dict] | None = None,
     ) -> AuditResult:
         system = self._loader.load("examiner")
         parts = [
@@ -101,9 +103,17 @@ class ExaminerAgent:
             parts.append("Prior completed file contents:\n")
             for i, content in enumerate(prior_file_contents):
                 parts.append(f"--- File {i + 1} ---\n{content}\n")
+        if retrieved_context:
+            parts.append(_format_retrieved_context(retrieved_context))
+        parts.append(
+            "You must end the response with exactly these two machine-readable lines:\n"
+            "ROUTE: PASS or ROUTE: FAIL_KNOWLEDGE_GAP\n"
+            "EXAM_ID: <knowledge point name>\n"
+        )
 
         user = "\n".join(parts)
         raw = await self._client.call("examiner", system, user)
+        raw = await self._repair_audit_format_if_needed(system, user, raw)
 
         route = parse_route(raw)
         exam_id = parse_exam_id(raw)
@@ -135,6 +145,35 @@ class ExaminerAgent:
             return sections.knowledge_point, False
         except ParseError:
             return raw.strip()[:50], False
+
+    async def _repair_audit_format_if_needed(
+        self,
+        system_prompt: str,
+        original_user_prompt: str,
+        raw_output: str,
+    ) -> str:
+        for _ in range(self._max_format_retries):
+            try:
+                parse_route(raw_output)
+                parse_exam_id(raw_output)
+                return raw_output
+            except ParseError:
+                repair_prompt = (
+                    "Repair the machine-readable audit format for the previous examiner output.\n\n"
+                    "Do not change the audit judgment or invent new analysis. Preserve the Bottleneck "
+                    "Report meaning, but return a complete parseable response that ends with exactly:\n"
+                    "ROUTE: PASS\n"
+                    "EXAM_ID: <knowledge point name>\n"
+                    "or:\n"
+                    "ROUTE: FAIL_KNOWLEDGE_GAP\n"
+                    "EXAM_ID: <knowledge point name>\n\n"
+                    "Original audit task:\n"
+                    f"{original_user_prompt}\n\n"
+                    "Previous unparseable examiner output:\n"
+                    f"{raw_output}\n"
+                )
+                raw_output = await self._client.call("examiner", system_prompt, repair_prompt)
+        return raw_output
 
 
 def _format_retrieved_context(retrieved_context: list[dict]) -> str:

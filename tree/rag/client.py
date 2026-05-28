@@ -179,6 +179,23 @@ class RAGClient:
             })
         return hits
 
+    def scroll_chunks(
+        self,
+        filters: dict[str, Any] | None = None,
+        limit: int = 10000,
+        include_drafts: bool = True,
+    ) -> list[dict]:
+        """Read indexed chunk payloads without opening source/finished files."""
+        conditions = self._build_filters(filters, include_drafts)
+        records, _ = self._client.scroll(
+            collection_name=_COLLECTION,
+            limit=limit,
+            scroll_filter=models.Filter(must=conditions) if conditions else None,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [_point_to_hit(point) for point in records]
+
     def delete_file(self, file_seq: str) -> int:
         """Delete all vectors for a given file_seq. Returns count deleted."""
         self._client.delete(
@@ -191,6 +208,19 @@ class RAGClient:
         )
         logger.info("Deleted vectors for file_seq=%s", file_seq)
         return 0  # Qdrant delete doesn't return count directly
+
+    def document_indexed(self, doc_id: str) -> bool:
+        """Return True when at least one vector exists for a document id."""
+        records, _ = self._client.scroll(
+            collection_name=_COLLECTION,
+            limit=1,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+            ),
+            with_payload=False,
+            with_vectors=False,
+        )
+        return bool(records)
 
     def get_chapter_ledger(self, chapter: str) -> list[dict]:
         """Get a summary of all indexed files in a chapter (for auto-briefing)."""
@@ -270,3 +300,30 @@ class RAGClient:
                 models.FieldCondition(key="is_draft", match=models.MatchValue(value=False))
             )
         return conditions
+
+
+def _point_to_hit(point: models.Record) -> dict:
+    payload = point.payload or {}
+    return {
+        "chunk_id": payload.get("chunk_id", ""),
+        "text": payload.get("text", ""),
+        "score": getattr(point, "score", None),
+        "metadata": {
+            k: payload[k]
+            for k in (
+                "chapter",
+                "file_seq",
+                "section_id",
+                "chunk_type",
+                "is_draft",
+                "content_kind",
+                "source_collection",
+                "concepts",
+                "formulas",
+                "filename",
+                "path",
+                "doc_id",
+            )
+            if k in payload
+        },
+    }

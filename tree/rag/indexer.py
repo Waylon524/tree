@@ -34,6 +34,12 @@ class RAGIndexer:
             path=rel_path,
         )
 
+    def is_source_file_indexed(self, root: Path, collection: str, path: Path) -> bool:
+        """Return whether this structured source file already has vectors."""
+        rel_path = _relative_path(root, path)
+        doc_id = self.rag.make_doc_id("source", collection, rel_path)
+        return self.rag.document_indexed(doc_id)
+
     def index_finished_file(self, root: Path, chapter: str, path: Path) -> int:
         """Index one finished output Markdown file."""
         text = path.read_text(encoding="utf-8")

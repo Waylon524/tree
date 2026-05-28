@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,20 @@ from tree.state.models import (
     Route,
 )
 
+RAW_MATERIAL_EXTENSIONS = {
+    ".bmp",
+    ".docx",
+    ".jpeg",
+    ".jpg",
+    ".md",
+    ".pdf",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".txt",
+    ".webp",
+}
+
 
 class TreeEngine:
     def __init__(self, settings: Settings):
@@ -36,7 +51,11 @@ class TreeEngine:
 
         self.loader = AgentLoader()
         self.state_mgr = StateManager(root / "pipeline-state.json")
-        self.examiner = ExaminerAgent(self.client, self.loader)
+        self.examiner = ExaminerAgent(
+            self.client,
+            self.loader,
+            max_format_retries=settings.max_format_retries,
+        )
         self.student = StudentAgent(self.client, self.loader)
         self.writer = WriterAgent(self.client, self.loader)
         self.archivist = ArchivistAgent(self.client, self.loader)
@@ -49,6 +68,7 @@ class TreeEngine:
     async def run(self) -> None:
         """Entry point for `tree run`."""
         self.tracer.log_pipeline_start()
+        await self._prepare_source_materials_for_loop()
         while True:
             state = self.state_mgr.load()
             chapter = self.state_mgr.find_in_progress(state)
@@ -86,6 +106,57 @@ class TreeEngine:
             collection=collection,
             indexer=indexer,
         )
+
+    async def _prepare_source_materials_for_loop(self) -> None:
+        """Ingest new uploads and ensure every source material is embedded."""
+        root = self.settings.project_root
+        manifest = _load_source_manifest(root)
+        pending = _pending_raw_materials(root, manifest)
+
+        if pending:
+            print(f"Source ingest: {len(pending)} new or changed raw material(s) detected.")
+        for raw_path, collection in pending:
+            output_dir = source_ops.source_root(root) / collection
+            outputs = await self.ingest(
+                raw_path,
+                output_dir,
+                use_archivist=True,
+                collection=collection,
+                indexer=getattr(self, "rag_indexer", None),
+            )
+            _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
+            _save_source_manifest(root, manifest)
+
+        self._ensure_all_source_materials_embedded()
+        _mark_manifest_outputs_embedded(manifest)
+        _save_source_manifest(root, manifest)
+
+    def _ensure_all_source_materials_embedded(self) -> None:
+        """Block the TREE loop until all structured source materials are indexed."""
+        root = self.settings.project_root
+        collections = source_ops.read_all_collections(root)
+        docs = [(collection, doc.path) for collection, items in collections.items() for doc in items]
+        if not docs:
+            return
+
+        indexer = getattr(self, "rag_indexer", None)
+        if indexer is None:
+            raise RuntimeError(
+                "Source materials exist but RAG indexer is unavailable. "
+                "Start the embedding service and ensure RAG dependencies are installed before running TREE."
+            )
+
+        indexed = 0
+        for collection, path in docs:
+            is_indexed = getattr(indexer, "is_source_file_indexed", None)
+            if is_indexed is not None and is_indexed(root, collection, path):
+                path.unlink(missing_ok=True)
+                continue
+            indexer.index_source_file(root, collection, path)
+            path.unlink(missing_ok=True)
+            indexed += 1
+        if indexed:
+            print(f"Source ingest: embedded {indexed} source material file(s).")
 
     async def process_chapter(self, chapter_name: str) -> None:
         """Run Step 0→1→2→3→4 loop for one chapter until CHAPTER_COMPLETE."""
@@ -189,8 +260,6 @@ class TreeEngine:
             ch.source_collection if ch and ch.source_collection else ch_name
         )
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, ch_name)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, ch_name)
-        source_docs = source_ops.read_collection(self.settings.project_root, source_collection)
         query_text = f"{ch_name}\n{next_seq}\n下一知识点命题"
         retrieved_context = (
             self._rag_query(
@@ -214,17 +283,16 @@ class TreeEngine:
         )
         return await self.examiner.compose_exam(
             next_seq,
-            prior_contents,
+            [],
             prior_paths,
-            source_material_contents=[doc.content for doc in source_docs],
-            source_material_paths=[str(doc.path) for doc in source_docs],
+            source_material_contents=[],
+            source_material_paths=self._source_paths_from_rag(source_collection),
             retrieved_context=retrieved_context,
             exam_too_broad_ctx=exam_too_broad_ctx,
         )
 
     async def _step2_blind_test(self, iter_state: IterationState) -> str:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -246,7 +314,7 @@ class TreeEngine:
         return await self.student.blind_test(
             iter_state.exam_sections.blind_exam,
             iter_state.exam_sections.student_instructions,
-            prior_contents,
+            [],
             prior_paths,
             draft_text,
             retrieved_context=retrieved_context,
@@ -254,7 +322,6 @@ class TreeEngine:
 
     async def _step3_audit(self, iter_state: IterationState, answer: str) -> AuditResult:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -264,14 +331,22 @@ class TreeEngine:
             iter_state.exam_sections.answer_key,
             answer,
             draft_text,
-            prior_contents,
+            [],
             prior_paths,
             iter_state.previous_bottleneck,
+            retrieved_context=self._rag_query(
+                f"{iter_state.knowledge_point}\n{iter_state.exam_sections.blind_exam}\n{answer}",
+                filters={
+                    "content_kind": "finished",
+                    "chapter": iter_state.chapter,
+                },
+                top_k=5,
+                include_drafts=False,
+            ),
         )
 
     async def _step4_writer(self, iter_state: IterationState, audit: AuditResult) -> ArchitectResult:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -302,7 +377,7 @@ class TreeEngine:
             iter_state.knowledge_point,
             iter_state.file_seq,
             audit.bottleneck_report,
-            prior_contents,
+            [],
             prior_paths,
             draft_text,
             iter_state.previous_bottleneck,
@@ -360,11 +435,7 @@ class TreeEngine:
 
         s = state if isinstance(state, PipelineState) else None
         state_text = s.model_dump_json(indent=2) if s else "{}"
-        collections = source_ops.read_all_collections(self.settings.project_root)
-        source_payload = {
-            name: [{"path": str(doc.path), "content": doc.content} for doc in docs]
-            for name, docs in collections.items()
-        }
+        source_payload = self._source_payload_from_rag()
         name, is_complete = await self.examiner.scan_next_chapter(
             state_text, source_payload
         )
@@ -422,6 +493,131 @@ class TreeEngine:
             if chapter.chapter_name == chapter_name:
                 return chapter.source_collection or chapter.chapter_name
         return chapter_name
+
+    def _source_payload_from_rag(self) -> dict[str, list[dict[str, str]]]:
+        rag_client = getattr(self, "rag_client", None)
+        if rag_client is None:
+            return {}
+        try:
+            chunks = rag_client.scroll_chunks(
+                filters={"content_kind": "source"},
+                include_drafts=False,
+            )
+        except Exception:
+            return {}
+        grouped: dict[str, dict[str, list[str]]] = {}
+        for hit in chunks:
+            metadata = hit.get("metadata") or {}
+            collection = metadata.get("source_collection") or metadata.get("chapter") or ""
+            if not collection:
+                continue
+            path = metadata.get("path") or metadata.get("filename") or metadata.get("doc_id") or "indexed-source"
+            grouped.setdefault(collection, {}).setdefault(path, []).append(hit.get("text", ""))
+        return {
+            collection: [
+                {"path": path, "content": "\n\n".join(parts)}
+                for path, parts in sorted(docs.items())
+            ]
+            for collection, docs in sorted(grouped.items())
+        }
+
+    def _source_paths_from_rag(self, collection: str) -> list[str]:
+        payload = self._source_payload_from_rag()
+        return [doc["path"] for doc in payload.get(collection, [])]
+
+
+def _pending_raw_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[Path, str]]:
+    raw_root = root / "raw_materials"
+    if not raw_root.exists():
+        return []
+
+    pending = []
+    for path in sorted(raw_root.rglob("*")):
+        if not _is_supported_raw_material(path):
+            continue
+        collection = _collection_for_raw_material(raw_root, path)
+        output = source_ops.source_root(root) / collection / f"{path.stem}.md"
+        rel = _relative_to_root(root, path)
+        entry = manifest.get(rel, {})
+        same_fingerprint = entry.get("fingerprint") == _file_fingerprint(path)
+        if same_fingerprint and (entry.get("embedded") is True or output.exists()):
+            continue
+        if not same_fingerprint or not output.exists():
+            pending.append((path, collection))
+    return pending
+
+
+def _is_supported_raw_material(path: Path) -> bool:
+    return (
+        path.is_file()
+        and not path.name.startswith(".")
+        and path.suffix.lower() in RAW_MATERIAL_EXTENSIONS
+    )
+
+
+def _collection_for_raw_material(raw_root: Path, path: Path) -> str:
+    rel = path.relative_to(raw_root)
+    return rel.parts[0] if len(rel.parts) > 1 else path.stem
+
+
+def _file_fingerprint(path: Path) -> str:
+    stat = path.stat()
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def _load_source_manifest(root: Path) -> dict[str, Any]:
+    path = _source_manifest_path(root)
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _save_source_manifest(root: Path, manifest: dict[str, Any]) -> None:
+    path = _source_manifest_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _source_manifest_path(root: Path) -> Path:
+    return root / "pipeline-temp" / "source-ingest-manifest.json"
+
+
+def _mark_raw_material_ingested(
+    root: Path,
+    manifest: dict[str, Any],
+    raw_path: Path,
+    collection: str,
+    outputs: list[Path],
+) -> None:
+    manifest[_relative_to_root(root, raw_path)] = {
+        "collection": collection,
+        "embedded": False,
+        "fingerprint": _file_fingerprint(raw_path),
+        "outputs": [_relative_to_root(root, output) for output in outputs],
+    }
+
+
+def _mark_manifest_outputs_embedded(manifest: dict[str, Any]) -> None:
+    for entry in manifest.values():
+        if not isinstance(entry, dict):
+            continue
+        outputs = entry.get("outputs") or []
+        if outputs:
+            entry["embedded"] = True
+
+
+def _relative_to_root(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def persist_writer_result(

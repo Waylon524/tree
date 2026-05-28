@@ -249,17 +249,16 @@ scripts\start-embed-server.bat
 ### 4. 运行流水线
 
 ```bash
-# 摄入原始课件/作业：PaddleOCR 识别后交给 Archivist 清洗为 Markdown
+# 将原始课件/作业放入 raw_materials/<collection>/ 后直接启动
+# run 会先自动执行 OCR → Archivist → source_materials → RAG embedding
+# source Markdown 是中间产物，成功 embedding 后会自动删除
+tree-run run
+
+# 也可以手动摄入指定文件或目录
 tree-run ingest --input test/课件 --collection 化学平衡
 
-# 默认会把生成的 source_materials 写入本地 RAG；若嵌入服务未启动可跳过索引
-tree-run ingest --input test/课件 --collection 化学平衡 --no-index
-
-# 仅 OCR，不调用 Archivist LLM
+# 调试摄入：仅 OCR，不调用 Archivist LLM
 tree-run ingest --input test/课件 --collection 化学平衡 --no-structure
-
-# 从结构化资料启动以考促写流水线
-tree-run run
 
 # 查看状态
 tree-run status
@@ -276,7 +275,9 @@ claude    # 加载 CLAUDE.md 后自动启动流水线
 
 ## RAG 向量检索：本地 Qwen3 Embedding + Qdrant
 
-T.R.E.E. 使用本地 **Qwen3-Embedding-4B-Q8_0** 嵌入服务和 embedded Qdrant 为资料建立向量索引。`tree-run ingest` 默认会把生成的 `source_materials/<collection>/*.md` 索引为 `content_kind=source`；PASS 后的 `finished_outputs` 会通过引擎 hook 索引为 `content_kind=finished`。
+T.R.E.E. 使用本地 **Qwen3-Embedding-4B-Q8_0** 嵌入服务和 embedded Qdrant 为资料建立向量索引。`tree-run run` 每次启动都会先检查 `raw_materials/` 是否有新增或变更资料；若有，会先完成 OCR、Archivist 结构化和 source embedding。只有当全部 `source_materials/<collection>/*.md` 都完成 embedding 后，引擎才会进入以考促写循环。
+
+source Markdown 只是入库中间产物，成功 embedding 后会删除；后续 Examiner/Writer 通过 RAG payload 读取 source chunk，不再读取 `source_materials/` 文件。`finished_outputs/` 原文件会保留，但 Student/Examiner/Writer 运行时也只读取其 embedding 后的 RAG chunk，不再读取 finished Markdown 全文。
 
 ### 架构
 

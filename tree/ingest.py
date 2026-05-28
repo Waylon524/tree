@@ -96,3 +96,4 @@ def _index_outputs(
         return
     for path in outputs:
         indexer.index_source_file(root, collection, path)
+        path.unlink(missing_ok=True)

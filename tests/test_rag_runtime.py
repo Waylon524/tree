@@ -20,6 +20,8 @@ from tree.state.models import (
     PipelineState,
     Route,
 )
+from rag import server as embedding_server
+from rag.chunker import MAX_TOKENS, chunk_markdown
 
 
 class FakeEmbedder:
@@ -33,6 +35,100 @@ class FakeEmbedder:
 
 
 class RAGRuntimeTests(unittest.TestCase):
+    def test_chunker_splits_long_paragraphs_under_type_limits(self) -> None:
+        long_text = "## 相变\n\n" + (
+            "固态氨的标准熔化焓和标准熔化熵用于计算相变过程的标准自由能变化。"
+            "学生必须依据教材中的公式和单位换算完成判断。"
+        ) * 16
+
+        chunks = chunk_markdown("01", long_text, chapter="化学热力学")
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertLessEqual(
+                chunk["token_estimate"],
+                MAX_TOKENS[chunk["chunk_type"]],
+            )
+
+    def test_chunker_uses_semantic_budgets_for_long_context_embeddings(self) -> None:
+        self.assertEqual(MAX_TOKENS["def"], 500)
+        self.assertEqual(MAX_TOKENS["proof"], 800)
+        self.assertEqual(MAX_TOKENS["example"], 600)
+        self.assertEqual(MAX_TOKENS["narrative"], 300)
+
+    def test_embedding_server_embeds_batch_items_sequentially(self) -> None:
+        class FakeModel:
+            def __init__(self) -> None:
+                self.inputs: list[str] = []
+
+            def create_embedding(self, text: str) -> dict:
+                if isinstance(text, list):
+                    raise AssertionError("batch embedding should be split")
+                self.inputs.append(text)
+                return {
+                    "object": "list",
+                    "data": [
+                        {
+                            "object": "embedding",
+                            "embedding": [float(len(text))],
+                            "index": 0,
+                        }
+                    ],
+                    "model": "fake",
+                    "usage": {"prompt_tokens": len(text), "total_tokens": len(text)},
+                }
+
+        fake = FakeModel()
+        with patch.object(embedding_server, "_model", fake):
+            response = embedding_server._create_embedding_response(["aa", "bbbb"])
+
+        self.assertEqual(fake.inputs, ["aa", "bbbb"])
+        self.assertEqual([item["index"] for item in response["data"]], [0, 1])
+        self.assertEqual([item["embedding"] for item in response["data"]], [[2.0], [4.0]])
+        self.assertEqual(response["usage"]["total_tokens"], 6)
+
+    def test_embedding_server_limits_parallel_sequences_during_model_load(self) -> None:
+        observed: list[int] = []
+        original = embedding_server.llama_module.llama_cpp.llama_max_parallel_sequences
+
+        class FakeLlama:
+            @classmethod
+            def from_pretrained(cls, **kwargs):
+                observed.append(embedding_server.llama_module.llama_cpp.llama_max_parallel_sequences())
+                return {"kwargs": kwargs}
+
+        with (
+            patch.object(embedding_server, "Llama", FakeLlama),
+            patch.object(embedding_server, "_resolve_model_path", return_value=None),
+        ):
+            model = embedding_server._load_llama_model(n_gpu_layers=0, n_ctx=32768, n_seq_max=1)
+
+        self.assertEqual(observed, [1])
+        self.assertIs(embedding_server.llama_module.llama_cpp.llama_max_parallel_sequences, original)
+        self.assertEqual(model["kwargs"]["n_ctx"], 32768)
+        self.assertEqual(model["kwargs"]["n_batch"], 32768)
+
+    def test_embedding_server_prefers_local_model_path_when_available(self) -> None:
+        calls: list[dict] = []
+
+        class FakeLlama:
+            def __init__(self, **kwargs) -> None:
+                calls.append(kwargs)
+
+            @classmethod
+            def from_pretrained(cls, **kwargs):
+                raise AssertionError("should not hit HuggingFace when local model exists")
+
+        with (
+            patch.object(embedding_server, "Llama", FakeLlama),
+            patch.object(embedding_server, "_resolve_model_path", return_value=Path("/models/qwen.gguf")),
+        ):
+            embedding_server._load_llama_model(n_gpu_layers=0, n_ctx=32768, n_seq_max=1)
+
+        self.assertEqual(calls[0]["model_path"], "/models/qwen.gguf")
+        self.assertEqual(calls[0]["n_ctx"], 32768)
+        self.assertEqual(calls[0]["n_batch"], 32768)
+
     def test_rag_indexes_source_and_finished_with_distinct_doc_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             rag = RAGClient(
@@ -89,6 +185,7 @@ class RAGRuntimeTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(hits[0]["metadata"]["content_kind"], "source")
         self.assertEqual(hits[0]["metadata"]["source_collection"], "化学平衡")
+        self.assertTrue(indexer.is_source_file_indexed(root, "化学平衡", source_dir / "lesson.md"))
 
     def test_ingest_path_indexes_source_materials_when_indexer_is_supplied(self) -> None:
         class FakeArchivist:
@@ -127,6 +224,7 @@ class RAGRuntimeTests(unittest.TestCase):
 
         self.assertEqual(len(outputs), 1)
         self.assertEqual(indexer.calls, [(root, "化学平衡", outputs[0])])
+        self.assertFalse(outputs[0].exists())
 
     def test_handle_pass_indexes_finished_output_when_indexer_exists(self) -> None:
         class FakeIndexer:
@@ -213,6 +311,18 @@ class RAGRuntimeTests(unittest.TestCase):
                 self.calls.append((query_text, top_k, filters, include_drafts))
                 return [{"text": f"{filters['content_kind']} chunk", "metadata": filters}]
 
+            def scroll_chunks(self, filters, include_drafts=False):
+                return [
+                    {
+                        "text": "source chunk",
+                        "metadata": {
+                            "content_kind": "source",
+                            "source_collection": "化学平衡",
+                            "path": "source_materials/化学平衡/5.md",
+                        },
+                    }
+                ]
+
         class FakeExaminer:
             def __init__(self) -> None:
                 self.retrieved_context = []
@@ -294,7 +404,8 @@ class RAGRuntimeTests(unittest.TestCase):
                 ),
             )
 
-            answer = asyncio.run(TreeEngine._step2_blind_test(engine, iter_state))
+            with patch("tree.io.file_ops.read_prior_files", side_effect=AssertionError("finished files must be read through RAG")):
+                answer = asyncio.run(TreeEngine._step2_blind_test(engine, iter_state))
 
         self.assertEqual(answer, "student answer")
         self.assertEqual(
@@ -342,7 +453,8 @@ class RAGRuntimeTests(unittest.TestCase):
                 bottleneck_report="缺少平衡状态定义",
             )
 
-            asyncio.run(TreeEngine._step4_writer(engine, iter_state, audit))
+            with patch("tree.io.file_ops.read_prior_files", side_effect=AssertionError("finished files must be read through RAG")):
+                asyncio.run(TreeEngine._step4_writer(engine, iter_state, audit))
 
         self.assertEqual(
             [hit["text"] for hit in engine.writer.retrieved_context],

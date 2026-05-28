@@ -134,7 +134,10 @@ def ingest(
             asyncio.run(engine.close())
 
     for path in outputs:
-        rprint(f"[green]Wrote[/green] {path}")
+        if path.exists():
+            rprint(f"[green]Wrote[/green] {path}")
+        else:
+            rprint(f"[green]Indexed[/green] {path} [dim](intermediate source Markdown removed)[/dim]")
 
 
 @app.command()

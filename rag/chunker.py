@@ -12,7 +12,6 @@ Usage:
 """
 
 import re
-from typing import Optional
 
 MAX_TOKENS = {
     "def": 500,
@@ -20,6 +19,7 @@ MAX_TOKENS = {
     "example": 600,
     "narrative": 300,
 }
+TOKEN_SAFETY_MARGIN = 8
 
 # Rough token estimate: 1 token ≈ 1.5 Chinese chars or 4 English chars
 def _estimate_tokens(text: str) -> int:
@@ -128,19 +128,20 @@ def chunk_markdown(
                     para = para.strip()
                     if not para:
                         continue
-                    para_tokens = _estimate_tokens(para)
+                    for segment in _split_long_paragraph(para, max_tok):
+                        segment_tokens = _estimate_tokens(segment)
 
-                    if buffer_tokens + para_tokens > max_tok and buffer:
-                        chunks.append(_make_chunk(
-                            file_seq, chapter, section_id, chunk_type,
-                            buffer, chunk_idx, is_draft, buffer_tokens,
-                        ))
-                        chunk_idx += 1
-                        buffer = para
-                        buffer_tokens = para_tokens
-                    else:
-                        buffer += "\n\n" + para if buffer else para
-                        buffer_tokens += para_tokens
+                        if buffer_tokens + segment_tokens > max_tok and buffer:
+                            chunks.append(_make_chunk(
+                                file_seq, chapter, section_id, chunk_type,
+                                buffer, chunk_idx, is_draft, buffer_tokens,
+                            ))
+                            chunk_idx += 1
+                            buffer = segment
+                            buffer_tokens = segment_tokens
+                        else:
+                            buffer += "\n\n" + segment if buffer else segment
+                            buffer_tokens += segment_tokens
 
                 if buffer:
                     chunks.append(_make_chunk(
@@ -150,6 +151,41 @@ def chunk_markdown(
                     chunk_idx += 1
 
     return chunks
+
+
+def _split_long_paragraph(paragraph: str, max_tokens: int) -> list[str]:
+    """Split a paragraph when it alone exceeds the embedding-safe token budget."""
+    safe_limit = max(1, max_tokens - TOKEN_SAFETY_MARGIN)
+    if _estimate_tokens(paragraph) <= safe_limit:
+        return [paragraph]
+
+    pieces = [
+        piece.strip()
+        for piece in re.split(r"(?<=[。！？；;.!?])", paragraph)
+        if piece.strip()
+    ] or [paragraph]
+
+    chunks = []
+    buffer = ""
+    for piece in pieces:
+        for atom in _split_oversized_text(piece, safe_limit):
+            merged = f"{buffer}{atom}" if buffer else atom
+            merged_tokens = _estimate_tokens(merged)
+            if buffer and merged_tokens > safe_limit:
+                chunks.append(buffer)
+                buffer = atom
+            else:
+                buffer = merged
+    if buffer:
+        chunks.append(buffer)
+    return chunks
+
+
+def _split_oversized_text(text: str, max_tokens: int) -> list[str]:
+    if _estimate_tokens(text) <= max_tokens:
+        return [text]
+    max_chars = max(60, int(max_tokens * 1.2))
+    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
 def _make_chunk(
