@@ -27,9 +27,8 @@ class Route(str, Enum):
 class ExamSections(BaseModel):
     knowledge_point: str
     blind_exam: str
-    student_instructions: str
     answer_key: str
-    architect_instructions: str
+    writer_instructions: str
 
 
 class AuditResult(BaseModel):
@@ -38,11 +37,14 @@ class AuditResult(BaseModel):
     bottleneck_report: str
 
 
-class ArchitectResult(BaseModel):
+class WriterResult(BaseModel):
     is_exam_too_broad: bool = False
     bloat_description: str = ""
     draft_content: str = ""
     draft_path: Path | None = None
+
+
+ArchitectResult = WriterResult
 
 
 class ExamTooBroadContext(BaseModel):

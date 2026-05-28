@@ -14,7 +14,6 @@ class StudentAgent:
     async def blind_test(
         self,
         blind_exam: str,
-        student_instructions: str,
         prior_file_contents: list[str],
         prior_file_paths: list[str],
         draft_text: str | None = None,
@@ -38,7 +37,6 @@ class StudentAgent:
         if retrieved_context:
             parts.append(_format_retrieved_context(retrieved_context))
 
-        parts.append(f"\n## [Student_Instructions]\n{student_instructions}\n")
         parts.append(f"\n## [Blind_Exam]\n{blind_exam}\n")
 
         user = "\n".join(parts)

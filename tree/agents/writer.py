@@ -5,7 +5,7 @@ from __future__ import annotations
 from tree.agents.loader import AgentLoader
 from tree.agents.parsers import detect_exam_too_broad
 from tree.deepseek.client import LLMClient
-from tree.state.models import ArchitectResult
+from tree.state.models import WriterResult
 
 
 class WriterAgent:
@@ -22,9 +22,9 @@ class WriterAgent:
         prior_file_paths: list[str],
         draft_text: str | None = None,
         previous_bottleneck: str | None = None,
-        architect_instructions: str | None = None,
+        writer_instructions: str | None = None,
         retrieved_context: list[dict] | None = None,
-    ) -> ArchitectResult:
+    ) -> WriterResult:
         system = self._loader.load("writer")
         mode = "OPTIMIZE" if draft_text else "CREATE"
         parts = [
@@ -39,8 +39,8 @@ class WriterAgent:
             parts.append(f"Current draft (OPTIMIZE this):\n{draft_text}\n")
         else:
             parts.append("Current draft: 尚未创建 (CREATE from scratch)\n")
-        if architect_instructions:
-            parts.append(f"[Architect_Instructions]:\n{architect_instructions}\n")
+        if writer_instructions:
+            parts.append(f"[Writer_Instructions]:\n{writer_instructions}\n")
         if retrieved_context:
             parts.append(_format_retrieved_context(retrieved_context))
         parts.append(
@@ -58,9 +58,9 @@ class WriterAgent:
 
         is_broad, bloat = detect_exam_too_broad(raw)
         if is_broad:
-            return ArchitectResult(is_exam_too_broad=True, bloat_description=bloat)
+            return WriterResult(is_exam_too_broad=True, bloat_description=bloat)
 
-        return ArchitectResult(is_exam_too_broad=False, draft_content=raw)
+        return WriterResult(is_exam_too_broad=False, draft_content=raw)
 
 
 def _format_retrieved_context(retrieved_context: list[dict]) -> str:

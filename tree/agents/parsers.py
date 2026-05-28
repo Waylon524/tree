@@ -62,15 +62,13 @@ def parse_exam_output(text: str) -> ExamSections:
     """Parse examiner Phase A output into structured sections."""
     kp = extract_section(text, "Next_Knowledge_Point")
     be = extract_section(text, "Blind_Exam")
-    si = extract_section(text, "Student_Instructions")
     ak = extract_section(text, "Answer_Key")
-    ai = extract_section(text, "Architect_Instructions")
+    wi = extract_section(text, "Writer_Instructions")
     return ExamSections(
         knowledge_point=kp,
         blind_exam=be,
-        student_instructions=si,
         answer_key=ak,
-        architect_instructions=ai,
+        writer_instructions=wi,
     )
 
 

@@ -13,12 +13,12 @@ from tree.rag.indexer import RAGIndexer
 from tree.rag.client import RAGClient
 from tree.state.manager import StateManager
 from tree.state.models import (
-    ArchitectResult,
     AuditResult,
     ExamSections,
     IterationState,
     PipelineState,
     Route,
+    WriterResult,
 )
 from rag import server as embedding_server
 from rag.chunker import MAX_TOKENS, chunk_markdown
@@ -332,9 +332,8 @@ class RAGRuntimeTests(unittest.TestCase):
                 return ExamSections(
                     knowledge_point="01. 平衡状态",
                     blind_exam="Q",
-                    student_instructions="S",
                     answer_key="A",
-                    architect_instructions="W",
+                    writer_instructions="W",
                 ), False
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -398,9 +397,8 @@ class RAGRuntimeTests(unittest.TestCase):
                 exam_sections=ExamSections(
                     knowledge_point="01. 平衡状态",
                     blind_exam="平衡状态是什么？",
-                    student_instructions="引用材料作答",
                     answer_key="A",
-                    architect_instructions="W",
+                    writer_instructions="W",
                 ),
             )
 
@@ -427,7 +425,7 @@ class RAGRuntimeTests(unittest.TestCase):
 
             async def create_or_optimize(self, *args, **kwargs):
                 self.retrieved_context = kwargs["retrieved_context"]
-                return ArchitectResult(draft_content="# draft")
+                return WriterResult(draft_content="# draft")
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -442,9 +440,8 @@ class RAGRuntimeTests(unittest.TestCase):
                 exam_sections=ExamSections(
                     knowledge_point="01. 平衡状态",
                     blind_exam="Q",
-                    student_instructions="S",
                     answer_key="A",
-                    architect_instructions="W",
+                    writer_instructions="W",
                 ),
             )
             audit = AuditResult(

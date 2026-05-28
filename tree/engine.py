@@ -20,12 +20,12 @@ from tree.observability.limiter import IterationLimiter
 from tree.observability.logger import TraceLogger
 from tree.state.manager import StateManager
 from tree.state.models import (
-    ArchitectResult,
     AuditResult,
     ExamSections,
     ExamTooBroadContext,
     IterationState,
     Route,
+    WriterResult,
 )
 
 RAW_MATERIAL_EXTENSIONS = {
@@ -226,7 +226,7 @@ class TreeEngine:
 
             # Step 4: Writer creates/optimizes draft
             t0 = time.time()
-            arch_result = await self._step4_writer(iter_state, audit)
+            writer_result = await self._step4_writer(iter_state, audit)
             self.tracer.log_step(
                 "S4", chapter_name, iter_state.file_seq, "writer",
                 "optimize_draft" if iter_state.draft_path else "create_draft",
@@ -234,15 +234,15 @@ class TreeEngine:
                 iteration=iter_state.iteration,
             )
 
-            if arch_result.is_exam_too_broad:
+            if writer_result.is_exam_too_broad:
                 print("  Step 4: EXAM_TOO_BROAD — returning to Step 1")
-                iter_state = await self._handle_exam_too_broad(iter_state, arch_result)
+                iter_state = await self._handle_exam_too_broad(iter_state, writer_result)
                 continue
 
-            arch_result = persist_writer_result(self.settings.project_root, iter_state, arch_result)
+            writer_result = persist_writer_result(self.settings.project_root, iter_state, writer_result)
             # Draft written → back to Step 2 (same exam)
             iter_state.previous_bottleneck = audit.bottleneck_report
-            iter_state.draft_path = arch_result.draft_path
+            iter_state.draft_path = writer_result.draft_path
             print("  Step 4: draft written → back to Step 2")
 
     # --- Step implementations ---
@@ -300,7 +300,6 @@ class TreeEngine:
         assert iter_state.exam_sections is not None
         query_text = (
             f"{iter_state.knowledge_point}\n"
-            f"{iter_state.exam_sections.student_instructions}\n"
             f"{iter_state.exam_sections.blind_exam}"
         )
         retrieved_context = self._rag_query(
@@ -314,7 +313,6 @@ class TreeEngine:
         )
         return await self.student.blind_test(
             iter_state.exam_sections.blind_exam,
-            iter_state.exam_sections.student_instructions,
             [],
             prior_paths,
             draft_text,
@@ -346,12 +344,12 @@ class TreeEngine:
             ),
         )
 
-    async def _step4_writer(self, iter_state: IterationState, audit: AuditResult) -> ArchitectResult:
+    async def _step4_writer(self, iter_state: IterationState, audit: AuditResult) -> WriterResult:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
-        arch_instructions = iter_state.exam_sections.architect_instructions if iter_state.exam_sections else None
+        writer_instructions = iter_state.exam_sections.writer_instructions if iter_state.exam_sections else None
         source_collection = self._source_collection_for_chapter(iter_state.chapter)
         query_text = f"{iter_state.knowledge_point}\n{audit.bottleneck_report}"
         retrieved_context = (
@@ -382,7 +380,7 @@ class TreeEngine:
             prior_paths,
             draft_text,
             iter_state.previous_bottleneck,
-            arch_instructions,
+            writer_instructions,
             retrieved_context=retrieved_context,
         )
 
@@ -414,14 +412,14 @@ class TreeEngine:
             self.state_mgr.save(state)
 
     async def _handle_exam_too_broad(
-        self, iter_state: IterationState, arch_result: ArchitectResult
+        self, iter_state: IterationState, writer_result: WriterResult
     ) -> IterationState:
         """Return to Step 1 with narrowed scope."""
         exam_sections, _ = await self._step1_compose(
             type("Ch", (), {"chapter_name": iter_state.chapter})(),
             iter_state.file_seq,
             ExamTooBroadContext(
-                bloat_description=arch_result.bloat_description,
+                bloat_description=writer_result.bloat_description,
                 knowledge_point_name=iter_state.knowledge_point,
             ),
         )
@@ -624,12 +622,12 @@ def _relative_to_root(root: Path, path: Path) -> str:
 def persist_writer_result(
     root: Path,
     iter_state: IterationState,
-    arch_result: ArchitectResult,
-) -> ArchitectResult:
+    writer_result: WriterResult,
+) -> WriterResult:
     """Persist writer Markdown into drafts/{chapter}/{NN}.{title}.md."""
-    if arch_result.is_exam_too_broad:
-        return arch_result
-    if not arch_result.draft_content.strip():
+    if writer_result.is_exam_too_broad:
+        return writer_result
+    if not writer_result.draft_content.strip():
         raise ValueError("Writer returned no draft content")
 
     filename = _draft_filename(iter_state.file_seq, iter_state.knowledge_point)
@@ -637,9 +635,9 @@ def persist_writer_result(
         root,
         iter_state.chapter,
         filename,
-        arch_result.draft_content,
+        writer_result.draft_content,
     )
-    return arch_result.model_copy(update={"draft_path": draft_path})
+    return writer_result.model_copy(update={"draft_path": draft_path})
 
 
 def _draft_filename(file_seq: str, knowledge_point: str) -> str:

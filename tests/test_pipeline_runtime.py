@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
 from tree.agents.loader import AgentLoader
-from tree.agents.parsers import ParseError
+from tree.agents.parsers import ParseError, parse_exam_output
 from tree.cli import app
 from tree.config import Settings
 from tree.engine import TreeEngine, persist_writer_result
@@ -22,12 +22,12 @@ from tree.io import source_ops
 from tree.io.git_ops import git_add_commit
 from tree.state.manager import StateManager
 from tree.state.models import (
-    ArchitectResult,
     ChapterRecord,
     ExamSections,
     IterationState,
     PipelineState,
     Route,
+    WriterResult,
 )
 
 
@@ -71,13 +71,10 @@ class PipelineRuntimeTests(unittest.TestCase):
 ## [Blind_Exam]
 Q1
 
-## [Student_Instructions]
-Use evidence.
-
 ## [Answer_Key]
 A1
 
-## [Architect_Instructions]
+## [Writer_Instructions]
 Write narrowly.
 """
 
@@ -95,6 +92,25 @@ Write narrowly.
 
         self.assertIn("Source material paths", client.user_prompt)
         self.assertIn("可逆反应达到平衡", client.user_prompt)
+
+    def test_exam_output_contract_uses_writer_instructions_without_student_instructions(self) -> None:
+        sections = parse_exam_output("""## [Next_Knowledge_Point]
+01. 化学平衡状态
+
+## [Blind_Exam]
+Q1
+
+## [Answer_Key]
+A1
+
+## [Writer_Instructions]
+Write narrowly.
+""")
+
+        self.assertEqual(sections.knowledge_point, "01. 化学平衡状态")
+        self.assertEqual(sections.writer_instructions, "Write narrowly.")
+        self.assertFalse(hasattr(sections, "student_instructions"))
+        self.assertFalse(hasattr(sections, "architect_instructions"))
 
     def test_examiner_audit_repairs_missing_route_format(self) -> None:
         class FakeClient:
@@ -146,13 +162,10 @@ Write narrowly.
 ## [Blind_Exam]
 Q1
 
-## [Student_Instructions]
-Use learned evidence.
-
 ## [Answer_Key]
 A1
 
-## [Architect_Instructions]
+## [Writer_Instructions]
 Write narrowly.
 """
 
@@ -188,13 +201,10 @@ Write narrowly.
 ## [Blind_Exam]
 Q
 
-## [Student_Instructions]
-S
-
 ## [Answer_Key]
 A
 
-## [Architect_Instructions]
+## [Writer_Instructions]
 W
 """
 
@@ -423,9 +433,8 @@ W
                     return ExamSections(
                         knowledge_point="01. 化学平衡状态",
                         blind_exam="Q",
-                        student_instructions="S",
                         answer_key="A",
-                        architect_instructions="W",
+                        writer_instructions="W",
                     ), False
 
             class FakeRag:
@@ -461,8 +470,36 @@ W
 
         self.assertIn("Examiner", loader.load("examiner"))
         self.assertIn("Evidence-Based Student", loader.load("student"))
-        self.assertIn("Content Architect", loader.load("writer"))
+        self.assertIn("Content Writer", loader.load("writer"))
         self.assertIn("Archivist", loader.load("archivist"))
+
+    def test_student_agent_uses_builtin_instructions_not_examiner_supplied_instructions(self) -> None:
+        from tree.agents.student import StudentAgent
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.system_prompt = ""
+                self.user_prompt = ""
+
+            async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+                self.system_prompt = system_prompt
+                self.user_prompt = user_prompt
+                return "answer"
+
+        client = FakeClient()
+        agent = StudentAgent(client, AgentLoader())
+
+        asyncio.run(
+            agent.blind_test(
+                blind_exam="Q",
+                prior_file_contents=[],
+                prior_file_paths=[],
+            )
+        )
+
+        self.assertIn("Mandatory Answer Protocol", client.system_prompt)
+        self.assertNotIn("Student_Instructions", client.system_prompt)
+        self.assertNotIn("Student_Instructions", client.user_prompt)
 
     def test_archivist_agent_uses_builtin_prompt(self) -> None:
         class FakeClient:
@@ -562,12 +599,11 @@ W
                 exam_sections=ExamSections(
                     knowledge_point="01. 质点与参考系",
                     blind_exam="exam",
-                    student_instructions="student",
                     answer_key="answer",
-                    architect_instructions="architect",
+                    writer_instructions="writer",
                 ),
             )
-            result = ArchitectResult(draft_content="# 01. 质点与参考系\n")
+            result = WriterResult(draft_content="# 01. 质点与参考系\n")
 
             persisted = persist_writer_result(root, iter_state, result)
 
