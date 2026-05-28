@@ -1,8 +1,8 @@
-"""PDF extractor using PaddleOCR-VL v1.5.
+"""PDF extractor using PaddleOCR-VL 1.6.
 
 All PDFs go through PaddleOCR-VL for OCR + formula recognition.
-No PyMuPDF text extraction shortcut — even PDFs with embedded text
-are fully OCR'd to ensure formula accuracy.
+No embedded-text extraction shortcut is used — even PDFs with embedded text
+are fully OCR'd to keep formula extraction consistent.
 """
 
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract(pdf_path: str | Path) -> str:
-    """Extract text from PDF via PaddleOCR-VL v1.5.
+    """Extract text from PDF via PaddleOCR-VL 1.6.
 
     Returns raw markdown text with OCR results and LaTeX formulas.
     """
@@ -22,7 +22,7 @@ def extract(pdf_path: str | Path) -> str:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    logger.info("OCR-ing PDF with PaddleOCR-VL v1.5: %s", pdf_path.name)
+    logger.info("OCR-ing PDF with PaddleOCR-VL 1.6: %s", pdf_path.name)
     engine = get_engine()
     text = engine.ocr_file(pdf_path)
 

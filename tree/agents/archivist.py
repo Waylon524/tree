@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tree.agents.loader import AgentLoader
-from tree.deepseek.client import LLMClient
+from tree.model.client import LLMClient
 
 
 class ArchivistAgent:

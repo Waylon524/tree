@@ -1,4 +1,4 @@
-"""Image extractor using PaddleOCR-VL v1.5 API.
+"""Image extractor using PaddleOCR-VL 1.6 API.
 
 Sends images directly to the remote PaddleOCR-VL service for
 OCR + formula recognition. Preprocessing (orientation, dewarping)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract(image_path: str | Path) -> str:
-    """Extract text from image via PaddleOCR-VL v1.5 API.
+    """Extract text from image via PaddleOCR-VL 1.6 API.
 
     Args:
         image_path: Path to image file.

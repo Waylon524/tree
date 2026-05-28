@@ -1,25 +1,53 @@
-"""CLI entry point: tree run / resume / status / step."""
+"""CLI entry point for the T.R.E.E. engine."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shutil
+import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import typer
 from rich import print as rprint
 from rich.panel import Panel
+from rich.table import Table
 
 app = typer.Typer(name="tree", help="T.R.E.E. independent orchestration engine")
+rag_app = typer.Typer(help="Inspect and query the local RAG index")
+app.add_typer(rag_app, name="rag")
+
+_ROLE_NAMES = ("EXAMINER", "STUDENT", "WRITER", "ARCHIVIST")
+_DEFAULT_ENV = {
+    "LLM_BASE_URL": "https://api.deepseek.com/v1",
+    "LLM_MODEL": "deepseek-v4-flash",
+    "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
+    "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
+    "SOURCE_INGEST_CONCURRENCY": "16",
+    "SOURCE_OCR_CONCURRENCY": "16",
+    "SOURCE_OCR_UPLOAD_INTERVAL_SEC": "5",
+    "SOURCE_ARCHIVIST_CONCURRENCY": "16",
+    "SOURCE_EMBEDDING_CONCURRENCY": "1",
+    "SOURCE_ARCHIVIST_CHUNK_CHARS": "24000",
+    "EMBED_API_URL": "http://localhost:8788",
+    "EMBED_MODEL": "Qwen3-Embedding-4B-Q8_0",
+    "EMBED_PORT": "8788",
+    "EMBED_N_CTX": "32768",
+    "EMBED_N_GPU_LAYERS": "-1",
+    "EMBED_N_SEQ_MAX": "1",
+}
 
 
 @app.command()
-def run(
-    dry_run: bool = typer.Option(False, "--dry-run", help="Print prompts without calling API"),
-) -> None:
+def run() -> None:
     """Start the T.R.E.E. pipeline from current state."""
     from tree.config import Settings
     from tree.engine import TreeEngine
 
+    _ensure_workspace_config(Path.cwd())
     settings = Settings.from_env()
     engine = TreeEngine(settings)
     try:
@@ -36,6 +64,7 @@ def resume() -> None:
     from tree.config import Settings
     from tree.engine import TreeEngine
 
+    _ensure_workspace_config(Path.cwd())
     settings = Settings.from_env()
     engine = TreeEngine(settings)
     try:
@@ -82,6 +111,263 @@ def status(
 
 
 @app.command()
+def doctor() -> None:
+    """Check local configuration, runtime directories, services, and Git state."""
+    from tree.config import Settings
+
+    root = Path.cwd()
+    _ensure_workspace_config(root)
+    settings = Settings.from_env(require_llm=False)
+    table = Table(title="T.R.E.E. Doctor")
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Details")
+
+    _add_check(table, "Project root", (root / "pyproject.toml").exists(), str(root))
+    _add_check(table, ".env", (root / ".env").exists(), "loaded if present")
+    _add_check(
+        table,
+        "LLM API key",
+        _has_any_llm_key(),
+        "LLM_API_KEY or role-specific *_API_KEY",
+    )
+    _add_check(
+        table,
+        "PaddleOCR token",
+        bool(settings.paddleocr_api_token),
+        settings.paddleocr_model,
+    )
+    _add_check(table, "raw_materials", (root / "raw_materials").exists(), "user uploads")
+    _add_check(table, "pipeline-state.json", (root / "pipeline-state.json").exists(), "resume state")
+    _add_check(table, "rag-store", (root / "rag-store").exists(), "embedded Qdrant store")
+
+    embed_ok, embed_detail = _embedding_health()
+    _add_check(table, "Embedding server", embed_ok, embed_detail)
+
+    git_ok, git_detail = _git_status_summary(root)
+    _add_check(table, "Git", git_ok, git_detail)
+
+    rprint(table)
+
+
+@app.command()
+def materials() -> None:
+    """Show raw material ingest and embedding status from the local manifest."""
+    from tree.engine import (
+        _collection_for_raw_material,
+        _file_fingerprint,
+        _is_supported_raw_material,
+        _load_source_manifest,
+    )
+
+    root = Path.cwd()
+    raw_root = root / "raw_materials"
+    manifest = _load_source_manifest(root)
+    if not raw_root.exists():
+        rprint("[yellow]raw_materials/ does not exist yet.[/yellow]")
+        return
+
+    rows = []
+    for path in sorted(raw_root.rglob("*")):
+        if not _is_supported_raw_material(path):
+            continue
+        rel = _relative_to_root(root, path)
+        collection = _collection_for_raw_material(raw_root, path)
+        entry = manifest.get(rel, {})
+        fingerprint = _file_fingerprint(path)
+        if not entry:
+            status_text = "[yellow]new[/yellow]"
+        elif entry.get("fingerprint") != fingerprint:
+            status_text = "[yellow]changed[/yellow]"
+        elif entry.get("embedded") is True:
+            status_text = "[green]embedded[/green]"
+        elif entry.get("outputs"):
+            status_text = "[cyan]ocr/structure done[/cyan]"
+        else:
+            status_text = "[red]pending[/red]"
+        rows.append((rel, collection, status_text, _format_bytes(path.stat().st_size)))
+
+    if not rows:
+        rprint("[dim]No supported raw materials found.[/dim]")
+        return
+
+    table = Table(title="Raw Materials")
+    table.add_column("Path")
+    table.add_column("Collection")
+    table.add_column("Status")
+    table.add_column("Size", justify="right")
+    for row in rows:
+        table.add_row(*row)
+    rprint(table)
+
+
+@app.command()
+def logs(
+    tail: int = typer.Option(20, "--tail", "-n", min=1, help="Number of recent entries"),
+    agent: str | None = typer.Option(None, "--agent", help="Filter by agent name"),
+    step_name: str | None = typer.Option(None, "--step", help="Filter by step, e.g. S1"),
+) -> None:
+    """Show recent pipeline trace entries."""
+    trace_path = Path.cwd() / "pipeline-temp" / "trace.jsonl"
+    if not trace_path.exists():
+        rprint("[dim]No trace log found at pipeline-temp/trace.jsonl.[/dim]")
+        return
+
+    entries = []
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if agent and entry.get("agent") != agent:
+            continue
+        if step_name and entry.get("step") != step_name:
+            continue
+        entries.append(entry)
+
+    table = Table(title=f"Trace Log (last {tail})")
+    for col in ("ts", "step", "agent", "action", "chapter", "file_seq", "route", "duration_ms"):
+        table.add_column(col)
+    for entry in entries[-tail:]:
+        table.add_row(
+            str(entry.get("ts", "")),
+            str(entry.get("step", "")),
+            str(entry.get("agent", "")),
+            str(entry.get("action", "")),
+            str(entry.get("chapter", "")),
+            str(entry.get("file_seq", "")),
+            str(entry.get("route", "")),
+            str(entry.get("duration_ms", "")),
+        )
+    rprint(table)
+
+
+@app.command()
+def clean(
+    pycache: bool = typer.Option(True, "--pycache/--no-pycache", help="Remove Python caches"),
+    pipeline_temp: bool = typer.Option(False, "--pipeline-temp", help="Remove pipeline-temp/"),
+    source_materials: bool = typer.Option(False, "--source-materials", help="Remove source_materials/"),
+    all_targets: bool = typer.Option(False, "--all", help="Clean all supported runtime targets"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview by default; use --apply to delete"),
+) -> None:
+    """Clean runtime artifacts with a dry-run-first workflow."""
+    root = Path.cwd()
+    targets: list[Path] = []
+    if pycache or all_targets:
+        targets.extend(_iter_project_pycache_dirs(root))
+        targets.extend(path for path in (root / ".pytest_cache", root / ".ruff_cache") if path.exists())
+    if pipeline_temp or all_targets:
+        targets.append(root / "pipeline-temp")
+    if source_materials or all_targets:
+        targets.append(root / "source_materials")
+
+    targets = sorted({path for path in targets if path.exists()})
+    if not targets:
+        rprint("[dim]Nothing to clean.[/dim]")
+        return
+
+    action = "Would remove" if dry_run else "Removing"
+    for path in targets:
+        rprint(f"[yellow]{action}[/yellow] {_relative_to_root(root, path)}")
+        if not dry_run:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+    if dry_run:
+        rprint("[dim]Re-run with --apply to delete these paths.[/dim]")
+
+
+@app.command()
+def prompts(
+    role: str | None = typer.Argument(None, help="examiner, student, writer, or archivist"),
+    full: bool = typer.Option(False, "--full", help="Print the full prompt"),
+) -> None:
+    """Inspect built-in agent prompts."""
+    from tree.agents.prompts import PROMPTS
+
+    if role is None:
+        table = Table(title="Built-in Prompts")
+        table.add_column("Role")
+        table.add_column("Length")
+        for name, prompt in PROMPTS.items():
+            table.add_row(name, f"{len(prompt)} chars")
+        rprint(table)
+        return
+
+    if role not in PROMPTS:
+        raise typer.BadParameter(f"Unknown role: {role}. Choose one of: {', '.join(PROMPTS)}")
+    prompt = PROMPTS[role]
+    if full:
+        rprint(prompt)
+    else:
+        preview = "\n".join(prompt.splitlines()[:30])
+        rprint(Panel(preview, title=f"{role} prompt preview"))
+        rprint("[dim]Use --full to print the complete prompt.[/dim]")
+
+
+@app.command()
+def setup(
+    force: bool = typer.Option(False, "--force", help="Run the setup wizard even if .env exists"),
+) -> None:
+    """Create or update workspace configuration interactively."""
+    root = Path.cwd()
+    env_path = root / ".env"
+    if env_path.exists() and not force:
+        rprint("[green].env already exists.[/green] Use --force to run the wizard again.")
+        return
+    _run_setup_wizard(root, force=force)
+
+
+@app.command()
+def models(
+    base_url: str | None = typer.Option(None, "--base-url", help="Set default LLM base URL"),
+    model: str | None = typer.Option(None, "--model", help="Set default LLM model"),
+    examiner: str | None = typer.Option(None, "--examiner", help="Set Examiner model"),
+    student: str | None = typer.Option(None, "--student", help="Set Student model"),
+    writer: str | None = typer.Option(None, "--writer", help="Set Writer model"),
+    archivist: str | None = typer.Option(None, "--archivist", help="Set Archivist model"),
+    api_key: bool = typer.Option(False, "--api-key", help="Prompt for shared LLM API key"),
+    paddleocr_key: bool = typer.Option(False, "--paddleocr-key", help="Prompt for PaddleOCR API key"),
+) -> None:
+    """Show or update model/provider settings stored in .env."""
+    root = Path.cwd()
+    env_path = root / ".env"
+    if not env_path.exists():
+        rprint("[yellow].env does not exist yet. Starting setup wizard.[/yellow]")
+        _run_setup_wizard(root, force=False)
+
+    env = _read_env_file(env_path)
+    updates: dict[str, str] = {}
+    if base_url is not None:
+        updates["LLM_BASE_URL"] = base_url
+    if model is not None:
+        updates["LLM_MODEL"] = model
+    for key, value in {
+        "EXAMINER_MODEL": examiner,
+        "STUDENT_MODEL": student,
+        "WRITER_MODEL": writer,
+        "ARCHIVIST_MODEL": archivist,
+    }.items():
+        if value is not None:
+            updates[key] = value
+    if api_key:
+        updates["LLM_API_KEY"] = typer.prompt("Shared LLM / agent API key", hide_input=True)
+    if paddleocr_key:
+        updates["PADDLEOCR_API_TOKEN"] = typer.prompt("PaddleOCR API key", hide_input=True)
+
+    if updates:
+        env.update(updates)
+        _write_env_file(env_path, env)
+        _load_env_into_process(env)
+        rprint(f"[green]Updated[/green] {env_path}")
+
+    _print_model_config(env)
+
+
+@app.command()
 def ingest(
     input_path: Path = typer.Option(..., "--input", "-i", exists=True, help="Input file or directory"),
     collection: str | None = typer.Option(None, "--collection", "-c", help="Source collection name"),
@@ -94,6 +380,7 @@ def ingest(
     from tree.engine import TreeEngine
     from tree.ingest import ingest_path
 
+    _ensure_workspace_config(Path.cwd(), require_llm=not no_structure)
     target_dir = output_dir or Path.cwd() / "source_materials" / (collection or input_path.stem)
 
     indexer = None
@@ -140,11 +427,353 @@ def ingest(
             rprint(f"[green]Indexed[/green] {path} [dim](intermediate source Markdown removed)[/dim]")
 
 
-@app.command()
-def step(
-    chapter: str = typer.Option(..., help="Chapter name"),
-    step_num: int = typer.Option(..., help="Step number (1-4)"),
+@rag_app.command("status")
+def rag_status() -> None:
+    """Show local RAG chunk counts grouped by content kind."""
+    try:
+        from tree.rag.client import RAGClient
+
+        chunks = RAGClient().scroll_chunks(limit=10000, include_drafts=True)
+    except Exception as exc:
+        rprint(f"[red]RAG unavailable:[/red] {exc}")
+        return
+
+    if not chunks:
+        rprint("[dim]RAG index is empty.[/dim]")
+        return
+
+    grouped: dict[tuple[str, str], set[str]] = {}
+    for chunk in chunks:
+        metadata = chunk.get("metadata", {})
+        kind = metadata.get("content_kind", "unknown")
+        collection = metadata.get("source_collection") or metadata.get("chapter") or "unknown"
+        key = (kind, collection)
+        grouped.setdefault(key, set()).add(metadata.get("doc_id") or metadata.get("path") or "")
+
+    table = Table(title="RAG Status")
+    table.add_column("Content Kind")
+    table.add_column("Collection/Chapter")
+    table.add_column("Documents", justify="right")
+    table.add_column("Chunks", justify="right")
+    for key in sorted(grouped):
+        chunk_count = sum(
+            1
+            for chunk in chunks
+            if (
+                chunk.get("metadata", {}).get("content_kind", "unknown"),
+                chunk.get("metadata", {}).get("source_collection")
+                or chunk.get("metadata", {}).get("chapter")
+                or "unknown",
+            ) == key
+        )
+        table.add_row(key[0], key[1], str(len(grouped[key])), str(chunk_count))
+    rprint(table)
+
+
+@rag_app.command("search")
+def rag_search(
+    query: str = typer.Argument(..., help="Search query"),
+    top_k: int = typer.Option(5, "--top-k", "-k", min=1, max=20),
+    content_kind: str | None = typer.Option(None, "--kind", help="source or finished"),
+    collection: str | None = typer.Option(None, "--collection", help="source_collection filter"),
+    chapter: str | None = typer.Option(None, "--chapter", help="chapter filter"),
 ) -> None:
-    """Run a single step for debugging."""
-    rprint(f"[yellow]Single-step mode: chapter={chapter}, step={step_num}[/yellow]")
-    rprint("[dim]Not yet implemented — use 'tree run' for full pipeline.[/dim]")
+    """Search the local RAG index."""
+    try:
+        from tree.rag.client import RAGClient
+
+        filters = {}
+        if content_kind:
+            filters["content_kind"] = content_kind
+        if collection:
+            filters["source_collection"] = collection
+        if chapter:
+            filters["chapter"] = chapter
+        hits = RAGClient().query(query, top_k=top_k, filters=filters or None, include_drafts=False)
+    except Exception as exc:
+        rprint(f"[red]RAG search failed:[/red] {exc}")
+        return
+
+    if not hits:
+        rprint("[dim]No RAG hits.[/dim]")
+        return
+
+    for idx, hit in enumerate(hits, start=1):
+        metadata = hit.get("metadata", {})
+        source = metadata.get("path") or metadata.get("filename") or metadata.get("doc_id") or "unknown"
+        score = hit.get("score")
+        score_text = f"{score:.4f}" if isinstance(score, float) else "n/a"
+        excerpt = _truncate((hit.get("text") or "").replace("\n", " "), 700)
+        rprint(Panel(excerpt, title=f"#{idx} {source} score={score_text}"))
+
+
+def _add_check(table: Table, name: str, ok: bool, details: str) -> None:
+    status_text = "[green]ok[/green]" if ok else "[yellow]check[/yellow]"
+    table.add_row(name, status_text, details)
+
+
+def _has_any_llm_key() -> bool:
+    keys = ["LLM_API_KEY", "EXAMINER_API_KEY", "STUDENT_API_KEY", "WRITER_API_KEY", "ARCHIVIST_API_KEY"]
+    return any(os.environ.get(key) for key in keys)
+
+
+def _ensure_workspace_config(root: Path, require_llm: bool = True) -> None:
+    env_path = root / ".env"
+    if env_path.exists():
+        return
+    rprint(Panel(
+        "This workspace has no .env yet.\n"
+        "T.R.E.E. needs provider settings before it can call OCR and agents.",
+        title="First-time setup",
+    ))
+    _run_setup_wizard(root, force=False, require_llm=require_llm)
+
+
+def _run_setup_wizard(root: Path, force: bool, require_llm: bool = True) -> None:
+    env_path = root / ".env"
+    existed = env_path.exists()
+    existing = _read_env_file(env_path) if env_path.exists() else {}
+    values = {**_DEFAULT_ENV, **existing}
+
+    rprint("[bold]T.R.E.E. workspace setup[/bold]")
+    rprint("[dim]Secrets are written only to the local .env file, which is ignored by Git.[/dim]\n")
+
+    if require_llm or typer.confirm("Configure LLM / agent provider now?", default=True):
+        values["LLM_API_KEY"] = _prompt_secret(
+            "Shared LLM / agent API key",
+            current=values.get("LLM_API_KEY", ""),
+            required=require_llm,
+        )
+        values["LLM_BASE_URL"] = typer.prompt(
+            "LLM base URL",
+            default=values.get("LLM_BASE_URL", _DEFAULT_ENV["LLM_BASE_URL"]),
+        )
+        values["LLM_MODEL"] = typer.prompt(
+            "Default LLM model",
+            default=values.get("LLM_MODEL", _DEFAULT_ENV["LLM_MODEL"]),
+        )
+        default_model = values["LLM_MODEL"]
+        values["EXAMINER_MODEL"] = typer.prompt(
+            "Examiner model",
+            default=values.get("EXAMINER_MODEL", default_model),
+        )
+        values["STUDENT_MODEL"] = typer.prompt(
+            "Student model",
+            default=values.get("STUDENT_MODEL", default_model),
+        )
+        values["WRITER_MODEL"] = typer.prompt(
+            "Writer model",
+            default=values.get("WRITER_MODEL", default_model),
+        )
+        values["ARCHIVIST_MODEL"] = typer.prompt(
+            "Archivist model",
+            default=values.get("ARCHIVIST_MODEL", default_model),
+        )
+
+    values["PADDLEOCR_API_TOKEN"] = _prompt_secret(
+        "PaddleOCR API key",
+        current=values.get("PADDLEOCR_API_TOKEN", ""),
+        required=True,
+    )
+    values["PADDLEOCR_API_URL"] = typer.prompt(
+        "PaddleOCR job API URL",
+        default=values.get("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"]),
+    )
+    values["PADDLEOCR_MODEL"] = typer.prompt(
+        "PaddleOCR model",
+        default=values.get("PADDLEOCR_MODEL", _DEFAULT_ENV["PADDLEOCR_MODEL"]),
+    )
+
+    for key, default in _DEFAULT_ENV.items():
+        values.setdefault(key, default)
+
+    _write_env_file(env_path, values)
+    _load_env_into_process(values)
+    action = "Updated" if existed else "Created"
+    rprint(f"\n[green]{action}[/green] {env_path}")
+    rprint("[dim]Use 'tree-run models' to view or update provider/model settings later.[/dim]")
+
+
+def _prompt_secret(label: str, current: str = "", required: bool = False) -> str:
+    if current:
+        keep = typer.confirm(f"{label} is already set. Keep existing value?", default=True)
+        if keep:
+            return current
+    while True:
+        value = typer.prompt(label, hide_input=True, default="" if not required else None)
+        value = value.strip()
+        if value or not required:
+            return value
+        rprint("[red]This value is required.[/red]")
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = _unquote_env_value(value.strip())
+    return values
+
+
+def _write_env_file(path: Path, values: dict[str, str]) -> None:
+    ordered_sections = [
+        ("OpenAI-compatible LLM", ["LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"]),
+        (
+            "Role-specific models",
+            ["EXAMINER_MODEL", "STUDENT_MODEL", "WRITER_MODEL", "ARCHIVIST_MODEL"],
+        ),
+        (
+            "PaddleOCR",
+            ["PADDLEOCR_API_URL", "PADDLEOCR_API_TOKEN", "PADDLEOCR_MODEL"],
+        ),
+        (
+            "Source ingest concurrency",
+            [
+                "SOURCE_INGEST_CONCURRENCY",
+                "SOURCE_OCR_CONCURRENCY",
+                "SOURCE_OCR_UPLOAD_INTERVAL_SEC",
+                "SOURCE_ARCHIVIST_CONCURRENCY",
+                "SOURCE_EMBEDDING_CONCURRENCY",
+                "SOURCE_ARCHIVIST_CHUNK_CHARS",
+            ],
+        ),
+        (
+            "Local embedding server",
+            [
+                "EMBED_API_URL",
+                "EMBED_MODEL",
+                "EMBED_PORT",
+                "EMBED_N_CTX",
+                "EMBED_N_GPU_LAYERS",
+                "EMBED_N_SEQ_MAX",
+            ],
+        ),
+    ]
+    written = set()
+    lines = []
+    for title, keys in ordered_sections:
+        lines.append(f"# {title}")
+        for key in keys:
+            if key in values:
+                lines.append(f"{key}={_quote_env_value(values[key])}")
+                written.add(key)
+        lines.append("")
+    extra_keys = sorted(key for key in values if key not in written)
+    if extra_keys:
+        lines.append("# Additional settings")
+        for key in extra_keys:
+            lines.append(f"{key}={_quote_env_value(values[key])}")
+        lines.append("")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _load_env_into_process(values: dict[str, str]) -> None:
+    for key, value in values.items():
+        os.environ[key] = value
+
+
+def _print_model_config(env: dict[str, str]) -> None:
+    table = Table(title="Model / Provider Settings")
+    table.add_column("Setting")
+    table.add_column("Value")
+    table.add_row("LLM_BASE_URL", env.get("LLM_BASE_URL", ""))
+    table.add_row("LLM_MODEL", env.get("LLM_MODEL", ""))
+    for role in _ROLE_NAMES:
+        table.add_row(f"{role}_MODEL", env.get(f"{role}_MODEL", env.get("LLM_MODEL", "")))
+    table.add_row("PADDLEOCR_MODEL", env.get("PADDLEOCR_MODEL", ""))
+    table.add_row("LLM_API_KEY", _secret_state(env.get("LLM_API_KEY", "")))
+    table.add_row(
+        "PADDLEOCR_API_TOKEN",
+        _secret_state(env.get("PADDLEOCR_API_TOKEN", "")),
+    )
+    rprint(table)
+
+
+def _secret_state(value: str) -> str:
+    if not value:
+        return "[yellow]not set[/yellow]"
+    return "[green]set[/green]"
+
+
+def _unquote_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _quote_env_value(value: str) -> str:
+    if not value:
+        return ""
+    if any(char.isspace() for char in value) or "#" in value:
+        escaped = value.replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def _embedding_health() -> tuple[bool, str]:
+    base_url = os.environ.get("EMBED_API_URL", "http://localhost:8788").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base_url}/health", timeout=3) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        return True, _truncate(body, 120)
+    except (OSError, urllib.error.URLError) as exc:
+        return False, f"{base_url}/health unavailable: {exc}"
+
+
+def _git_status_summary(root: Path) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        return False, result.stderr.strip() or "git status failed"
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return True, "clean"
+    return True, f"{len(lines)} changed path(s)"
+
+
+def _format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{size} B"
+
+
+def _iter_project_pycache_dirs(root: Path) -> list[Path]:
+    ignored = {".git", ".venv", "rag-store", "node_modules"}
+    matches = []
+    for current_root, dirnames, _ in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in ignored]
+        if Path(current_root).name == "__pycache__":
+            matches.append(Path(current_root))
+            dirnames[:] = []
+    return matches
+
+
+def _relative_to_root(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
+
+
+if __name__ == "__main__":
+    app()

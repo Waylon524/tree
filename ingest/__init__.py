@@ -1,1 +1,1 @@
-"""Ingest pipeline: raw files → structured Markdown via PaddleOCR-VL v1.5."""
+"""Ingest pipeline: raw files → structured Markdown via PaddleOCR-VL 1.6."""

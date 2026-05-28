@@ -13,9 +13,9 @@ from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
 from tree.agents.loader import AgentLoader
 from tree.agents.student import StudentAgent
-from tree.agents.writer import WriterAgent
+from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.config import Settings
-from tree.deepseek.client import LLMClient
+from tree.model.client import LLMClient
 from tree.io import file_ops, git_ops, source_ops
 from tree.observability.limiter import IterationLimiter
 from tree.observability.logger import TraceLogger
@@ -379,7 +379,8 @@ class TreeEngine:
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
         writer_instructions = iter_state.exam_sections.writer_instructions if iter_state.exam_sections else None
         source_collection = self._source_collection_for_chapter(iter_state.chapter)
-        query_text = f"{iter_state.knowledge_point}\n{audit.bottleneck_report}"
+        writer_bottleneck = sanitize_writer_context(audit.bottleneck_report)
+        query_text = f"{iter_state.knowledge_point}\n{writer_bottleneck}"
         source_filters = {"content_kind": "source"}
         if source_collection:
             source_filters["source_collection"] = source_collection
@@ -403,7 +404,7 @@ class TreeEngine:
         return await self.writer.create_or_optimize(
             iter_state.knowledge_point,
             iter_state.file_seq,
-            audit.bottleneck_report,
+            writer_bottleneck,
             [],
             prior_paths,
             draft_text,

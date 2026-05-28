@@ -15,7 +15,7 @@ from tree.agents.parsers import (
     parse_exam_output,
     parse_route,
 )
-from tree.deepseek.client import LLMClient
+from tree.model.client import LLMClient
 from tree.state.models import AuditResult, ExamSections, ExamTooBroadContext
 
 

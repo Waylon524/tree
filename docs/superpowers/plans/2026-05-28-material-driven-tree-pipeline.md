@@ -41,14 +41,14 @@ PASS moves draft to finished_outputs/<chapter>/
 - `tree/engine.py`: source-material chapter discovery and Step 1 source injection.
 - `tree/state/models.py`: `source_collection` tracking.
 - `tree/cli.py`: `tree-run ingest --collection`.
-- `tests/test_pipeline_runtime.py`: regression coverage for the material-driven flow.
+- Historical regression coverage was removed from the repository.
 
 ## Verification Commands
 
 ```bash
 .venv/bin/python -m pytest
-.venv/bin/ruff check tree ingest tests
-.venv/bin/python -m compileall -q tree ingest rag tests
+.venv/bin/ruff check tree ingest rag
+.venv/bin/python -m compileall -q tree ingest rag
 .venv/bin/tree-run ingest --help
 .venv/bin/tree-run status
 ```

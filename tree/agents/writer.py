@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import re
+
 from tree.agents.loader import AgentLoader
 from tree.agents.parsers import detect_exam_too_broad
-from tree.deepseek.client import LLMClient
+from tree.model.client import LLMClient
 from tree.state.models import WriterResult
+
+_SENSITIVE_EXAM_HEADER_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\[)?"
+    r"(?:Blind_Exam|Answer_Key|Exam Paper|Standard Answers|Student'?s? Exam Responses|"
+    r"Student Responses|Student Answer|Student's Answer|试卷原文|盲考试题|考试题目|"
+    r"标准答案|学生答卷|学生答案)"
+    r"(?:\])?\b",
+    re.IGNORECASE,
+)
+_MARKDOWN_HEADER_RE = re.compile(r"^\s*#{1,6}\s+\S")
 
 
 class WriterAgent:
@@ -27,6 +39,13 @@ class WriterAgent:
     ) -> WriterResult:
         system = self._loader.load("writer")
         mode = "OPTIMIZE" if draft_text else "CREATE"
+        bottleneck_report = sanitize_writer_context(bottleneck_report)
+        previous_bottleneck = (
+            sanitize_writer_context(previous_bottleneck) if previous_bottleneck else None
+        )
+        writer_instructions = (
+            sanitize_writer_context(writer_instructions) if writer_instructions else None
+        )
         parts = [
             f"## Task: {mode} mode\n",
             f"Knowledge point: {knowledge_point}\n",
@@ -72,3 +91,22 @@ def _format_retrieved_context(retrieved_context: list[dict]) -> str:
         score_text = f", score={score:.4f}" if isinstance(score, float) else ""
         parts.append(f"--- RAG Hit {i}: {source}{score_text} ---\n{hit.get('text', '')}\n")
     return "\n".join(parts)
+
+
+def sanitize_writer_context(text: str) -> str:
+    """Remove exam-only blocks before text is sent to the writer."""
+    sanitized: list[str] = []
+    redacting = False
+    for line in text.splitlines():
+        if _SENSITIVE_EXAM_HEADER_RE.search(line):
+            if not sanitized or sanitized[-1] != "[REDACTED writer-invisible exam content]":
+                sanitized.append("[REDACTED writer-invisible exam content]")
+            redacting = True
+            continue
+        if redacting:
+            if _MARKDOWN_HEADER_RE.match(line):
+                redacting = False
+            else:
+                continue
+        sanitized.append(line)
+    return "\n".join(sanitized).strip()

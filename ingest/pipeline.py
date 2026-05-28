@@ -1,11 +1,11 @@
 """Main ingest pipeline orchestrator.
 
 Processes files from raw_materials/ → source_materials/<chapter>/
-using remote PaddleOCR-VL v1.5 API service for all file types.
+using remote PaddleOCR-VL 1.6 API service for all file types.
 
 Usage:
     python -m ingest.pipeline --input raw_materials/ --output source_materials/01-化学/
-    python -m ingest.pipeline --input "test/课件/5. 化学平衡通论.pdf"
+    python -m ingest.pipeline --input "raw_materials/课件/5. 化学平衡通论.pdf"
 """
 
 import argparse
@@ -47,7 +47,7 @@ def detect_type(path: Path) -> str:
 def extract_text(path: Path) -> str:
     """Extract text from a file using the appropriate extractor.
 
-    All files go through PaddleOCR-VL v1.5 — even PDFs with
+    All files go through PaddleOCR-VL 1.6 — even PDFs with
     embedded text are fully OCR'd for formula accuracy.
     """
     ftype = detect_type(path)
@@ -83,7 +83,7 @@ def process_file(
     """
     start = time.time()
 
-    # Step 1+2+3: Extract text via PaddleOCR-VL v1.5
+    # Step 1+2+3: Extract text via PaddleOCR-VL 1.6
     raw_text = extract_text(input_path)
 
     if not raw_text.strip():

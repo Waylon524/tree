@@ -1,4 +1,4 @@
-"""DOCX extractor using python-docx + PaddleOCR-VL v1.5.
+"""DOCX extractor using python-docx + PaddleOCR-VL 1.6.
 
 Extracts text from paragraphs and tables via python-docx.
 Embedded images are exported and sent to PaddleOCR-VL for OCR.
@@ -39,7 +39,7 @@ def _extract_tables(doc: Document) -> list[str]:
 
 
 def _extract_images(doc: Document, docx_path: Path) -> list[str]:
-    """Extract embedded images and OCR them via PaddleOCR-VL v1.5."""
+    """Extract embedded images and OCR them via PaddleOCR-VL 1.6."""
     results = []
     engine = get_engine()
 
@@ -69,7 +69,7 @@ def _extract_images(doc: Document, docx_path: Path) -> list[str]:
 
 
 def extract(docx_path: str | Path) -> str:
-    """Extract text from DOCX via python-docx + PaddleOCR-VL v1.5.
+    """Extract text from DOCX via python-docx + PaddleOCR-VL 1.6.
 
     Returns raw text: paragraphs + tables + OCR'd images.
     """
