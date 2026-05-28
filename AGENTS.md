@@ -5,7 +5,7 @@
 - `/source_materials`: PaddleOCR + Archivist 处理后的结构化 Markdown 中间产物，成功 embedding 后删除。
 - `/drafts`: writer 在 Step 4 创建或优化的知识点草稿。
 - `/finished_outputs`: 满分通过后入库的最终教材文件。
-- `examiner`, `student`, `writer`, `archivist`: 引擎内置 prompt 角色；运行时不依赖 `.claude/agents` 文件夹。
+- `examiner`, `student`, `writer`, `archivist`: 引擎内置 prompt 角色。
 
 ## 核心范式：资料驱动 + 以考促写
 
