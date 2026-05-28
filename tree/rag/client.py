@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -107,6 +108,7 @@ class RAGClient:
                     vector=vector[: self.dimensions],  # truncate if MRL
                     payload={
                         "chunk_id": chunk["chunk_id"],
+                        "chunk_index": chunk["chunk_index"],
                         "text": chunk["text"],
                         "chapter": chunk["chapter"],
                         "file_seq": chunk["file_seq"],
@@ -134,6 +136,7 @@ class RAGClient:
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
         include_drafts: bool = True,
+        neighbor_window: int = 1,
     ) -> list[dict]:
         """Semantic search with optional metadata filters.
 
@@ -154,9 +157,10 @@ class RAGClient:
         hits = []
         for point in result.points:
             payload = point.payload or {}
+            text, expanded_chunk_ids = self._expanded_text(payload, neighbor_window)
             hits.append({
                 "chunk_id": payload.get("chunk_id", ""),
-                "text": payload.get("text", ""),
+                "text": text,
                 "score": point.score,
                 "metadata": {
                     k: payload[k]
@@ -173,11 +177,47 @@ class RAGClient:
                         "filename",
                         "path",
                         "doc_id",
+                        "chunk_index",
                     )
                     if k in payload
-                },
+                } | ({"expanded_chunk_ids": expanded_chunk_ids} if expanded_chunk_ids else {}),
             })
         return hits
+
+    def _expanded_text(self, payload: dict, neighbor_window: int) -> tuple[str, list[str]]:
+        text = payload.get("text", "")
+        if neighbor_window <= 0:
+            return text, []
+        doc_id = payload.get("doc_id")
+        center_index = _payload_chunk_index(payload)
+        if doc_id is None or center_index is None:
+            return text, []
+
+        records, _ = self._client.scroll(
+            collection_name=_COLLECTION,
+            limit=10000,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+            ),
+            with_payload=True,
+            with_vectors=False,
+        )
+        expanded = []
+        lo = center_index - neighbor_window
+        hi = center_index + neighbor_window
+        for record in records:
+            record_payload = record.payload or {}
+            index = _payload_chunk_index(record_payload)
+            if index is None or index < lo or index > hi:
+                continue
+            expanded.append((index, record_payload))
+        if not expanded:
+            return text, []
+        expanded.sort(key=lambda item: item[0])
+        return (
+            "\n\n".join((item[1].get("text", "") or "").strip() for item in expanded if item[1].get("text")),
+            [item[1].get("chunk_id", "") for item in expanded if item[1].get("chunk_id")],
+        )
 
     def scroll_chunks(
         self,
@@ -323,7 +363,19 @@ def _point_to_hit(point: models.Record) -> dict:
                 "filename",
                 "path",
                 "doc_id",
+                "chunk_index",
             )
             if k in payload
         },
     }
+
+
+def _payload_chunk_index(payload: dict) -> int | None:
+    value = payload.get("chunk_index")
+    if isinstance(value, int):
+        return value
+    chunk_id = payload.get("chunk_id")
+    if not isinstance(chunk_id, str):
+        return None
+    match = re.search(r"-(\d+)$", chunk_id)
+    return int(match.group(1)) if match else None

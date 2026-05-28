@@ -40,7 +40,7 @@ class RAGRuntimeTests(unittest.TestCase):
         long_text = "## 相变\n\n" + (
             "固态氨的标准熔化焓和标准熔化熵用于计算相变过程的标准自由能变化。"
             "学生必须依据教材中的公式和单位换算完成判断。"
-        ) * 16
+        ) * 120
 
         chunks = chunk_markdown("01", long_text, chapter="化学热力学")
 
@@ -52,10 +52,48 @@ class RAGRuntimeTests(unittest.TestCase):
             )
 
     def test_chunker_uses_semantic_budgets_for_long_context_embeddings(self) -> None:
-        self.assertEqual(MAX_TOKENS["def"], 500)
-        self.assertEqual(MAX_TOKENS["proof"], 800)
-        self.assertEqual(MAX_TOKENS["example"], 600)
-        self.assertEqual(MAX_TOKENS["narrative"], 300)
+        self.assertEqual(MAX_TOKENS["def"], 2000)
+        self.assertEqual(MAX_TOKENS["proof"], 3000)
+        self.assertEqual(MAX_TOKENS["example"], 2400)
+        self.assertEqual(MAX_TOKENS["narrative"], 1500)
+
+    def test_chunker_normalizes_bracket_math_delimiters_for_embedding_metadata(self) -> None:
+        text = (
+            "## 自由能\n\n"
+            "\\[ \\Delta G^\\circ = -RT\\ln K^\\circ \\]\n\n"
+            "其中 \\(R = 8.314\\ \\mathrm{J\\cdot mol^{-1}\\cdot K^{-1}}\\)。"
+        )
+
+        chunks = chunk_markdown("02", text, chapter="化学平衡")
+
+        combined = "\n".join(chunk["text"] for chunk in chunks)
+        formulas = [formula for chunk in chunks for formula in chunk["formulas"]]
+        self.assertNotIn("\\[", combined)
+        self.assertNotIn("\\(", combined)
+        self.assertIn("\\Delta G^\\circ = -RT\\ln K^\\circ", formulas)
+        self.assertIn("R = 8.314\\ \\mathrm{J\\cdot mol^{-1}\\cdot K^{-1}}", formulas)
+
+    def test_chunker_converts_simple_html_tables_to_markdown_text(self) -> None:
+        text = (
+            "## 表格\n\n"
+            "<table><tr><th>类型</th><th>公式</th></tr>"
+            "<tr><td>平衡</td><td>$K=\\frac{c}{a}$</td></tr></table>"
+        )
+
+        chunks = chunk_markdown("05", text, chapter="化学平衡")
+
+        combined = "\n".join(chunk["text"] for chunk in chunks)
+        self.assertNotIn("<table", combined)
+        self.assertIn("| 类型 | 公式 |", combined)
+        self.assertIn("K=\\frac{c}{a}", chunks[0]["formulas"])
+
+    def test_chunker_drops_isolated_heading_noise_chunks(self) -> None:
+        text = "# 普通化学\n\n## 普通化学——酸碱电离平衡\n\n## 缓冲溶液\n\n缓冲溶液是共轭酸碱对共存的体系。"
+
+        chunks = chunk_markdown("07", text, chapter="酸碱")
+
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("缓冲溶液是共轭酸碱对共存的体系", chunks[0]["text"])
 
     def test_embedding_server_embeds_batch_items_sequentially(self) -> None:
         class FakeModel:
@@ -165,6 +203,49 @@ class RAGRuntimeTests(unittest.TestCase):
         self.assertEqual(source_hits[0]["metadata"]["content_kind"], "source")
         self.assertEqual(finished_hits[0]["metadata"]["content_kind"], "finished")
         self.assertNotEqual(source_hits[0]["metadata"]["doc_id"], finished_hits[0]["metadata"]["doc_id"])
+
+    def test_query_expands_hit_with_adjacent_chunks_from_same_document(self) -> None:
+        class KeywordEmbedder:
+            def embed(self, texts):
+                if isinstance(texts, str):
+                    texts = [texts]
+                vectors = []
+                for text in texts:
+                    if "target" in text:
+                        vectors.append([1.0, 0.0, 0.0])
+                    else:
+                        vectors.append([0.0, 1.0, 0.0])
+                return vectors
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rag = RAGClient(
+                store_path=Path(tmp) / "rag-store",
+                dimensions=3,
+                embedder=KeywordEmbedder(),
+            )
+            rag.index_file(
+                file_seq="01",
+                filename="lesson.md",
+                text=(
+                    "## 前置\n\nleft context\n\n"
+                    "## 命中\n\ntarget formula\n\n"
+                    "## 后续\n\nright context\n\n"
+                    "## 远处\n\nfar context"
+                ),
+                chapter="化学平衡",
+                content_kind="source",
+                source_collection="课件",
+                path="source_materials/课件/lesson.md",
+            )
+
+            hits = rag.query("target", top_k=1, filters={"content_kind": "source"})
+
+        self.assertEqual(len(hits), 1)
+        self.assertIn("left context", hits[0]["text"])
+        self.assertIn("target formula", hits[0]["text"])
+        self.assertIn("right context", hits[0]["text"])
+        self.assertNotIn("far context", hits[0]["text"])
+        self.assertEqual(hits[0]["metadata"]["expanded_chunk_ids"], ["01-000", "01-001", "01-002"])
 
     def test_indexer_indexes_source_collection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

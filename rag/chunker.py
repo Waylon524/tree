@@ -12,12 +12,14 @@ Usage:
 """
 
 import re
+from html import unescape
+from html.parser import HTMLParser
 
 MAX_TOKENS = {
-    "def": 500,
-    "proof": 800,
-    "example": 600,
-    "narrative": 300,
+    "def": 2000,
+    "proof": 3000,
+    "example": 2400,
+    "narrative": 1500,
 }
 TOKEN_SAFETY_MARGIN = 8
 
@@ -54,6 +56,14 @@ def _extract_concepts(text: str) -> list[str]:
 def _extract_formulas(text: str) -> list[str]:
     """Extract LaTeX formulas from text."""
     formulas = []
+    # Display math: \[...\]
+    for m in re.finditer(r"\\\[(.+?)\\\]", text, re.DOTALL):
+        formulas.append(m.group(1).strip())
+    # Inline math: \(...\)
+    for m in re.finditer(r"\\\((.+?)\\\)", text, re.DOTALL):
+        f = m.group(1).strip()
+        if len(f) > 3:
+            formulas.append(f)
     # Display math: $$...$$
     for m in re.finditer(r"\$\$(.+?)\$\$", text, re.DOTALL):
         formulas.append(m.group(1).strip())
@@ -77,6 +87,8 @@ def chunk_markdown(
         chunk_id, text, chapter, file_seq, section_id,
         concepts, formulas, chunk_type, is_draft, token_estimate
     """
+    text = _prepare_markdown_text(text)
+
     # Split by ## headings (preserve heading in chunk)
     sections = re.split(r"(?=^##\s)", text, flags=re.MULTILINE)
 
@@ -100,6 +112,8 @@ def chunk_markdown(
         for part in foldable_parts:
             part = part.strip()
             if not part:
+                continue
+            if _is_noise_chunk(part):
                 continue
 
             # If part starts with foldable marker, it's a proof/derivation
@@ -153,6 +167,120 @@ def chunk_markdown(
     return chunks
 
 
+def _prepare_markdown_text(text: str) -> str:
+    text = _normalize_math_delimiters(text)
+    text = _normalize_html(text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _normalize_math_delimiters(text: str) -> str:
+    text = re.sub(
+        r"\\\[(.+?)\\\]",
+        lambda m: f"\n\n$$\n{m.group(1).strip()}\n$$\n\n",
+        text,
+        flags=re.DOTALL,
+    )
+    return re.sub(
+        r"\\\((.+?)\\\)",
+        lambda m: f"${m.group(1).strip()}$",
+        text,
+        flags=re.DOTALL,
+    )
+
+
+def _normalize_html(text: str) -> str:
+    text = re.sub(
+        r"<table\b.*?</table>",
+        lambda m: _html_table_to_markdown(m.group(0)),
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(
+        r"<img\b[^>]*>",
+        lambda m: _image_alt_text(m.group(0)),
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"</?(?:div|span|p|br)\b[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return unescape(text)
+
+
+def _html_table_to_markdown(html: str) -> str:
+    parser = _TableParser()
+    parser.feed(html)
+    rows = [
+        [cell.strip() for cell in row if cell.strip()]
+        for row in parser.rows
+    ]
+    rows = [row for row in rows if row]
+    if not rows:
+        return ""
+
+    width = max(len(row) for row in rows)
+    padded = [row + [""] * (width - len(row)) for row in rows]
+    header = padded[0]
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in header) + " |",
+    ]
+    for row in padded[1:]:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n\n" + "\n".join(lines) + "\n\n"
+
+
+class _TableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[list[str]] = []
+        self._current_row: list[str] | None = None
+        self._current_cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = tag.lower()
+        if tag == "tr":
+            self._current_row = []
+        elif tag in ("td", "th") and self._current_row is not None:
+            self._current_cell = []
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in ("td", "th") and self._current_row is not None and self._current_cell is not None:
+            cell = re.sub(r"\s+", " ", "".join(self._current_cell)).strip()
+            self._current_row.append(cell)
+            self._current_cell = None
+        elif tag == "tr" and self._current_row is not None:
+            self.rows.append(self._current_row)
+            self._current_row = None
+
+    def handle_data(self, data: str) -> None:
+        if self._current_cell is not None:
+            self._current_cell.append(data)
+
+
+def _image_alt_text(tag: str) -> str:
+    match = re.search(r'alt=["\']([^"\']*)["\']', tag, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    alt = unescape(match.group(1)).strip()
+    if not alt or alt.lower() == "image":
+        return ""
+    return f" [Image: {alt}] "
+
+
+def _is_noise_chunk(text: str) -> bool:
+    if _extract_formulas(text):
+        return False
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return True
+    if all(re.match(r"^#{1,6}\s+\S+", line) for line in lines):
+        cleaned = " ".join(re.sub(r"^#{1,6}\s+", "", line) for line in lines)
+        cleaned = re.sub(r"[^\w一-鿿]+", "", cleaned)
+        return len(cleaned) <= 32
+    return False
+
+
 def _split_long_paragraph(paragraph: str, max_tokens: int) -> list[str]:
     """Split a paragraph when it alone exceeds the embedding-safe token budget."""
     safe_limit = max(1, max_tokens - TOKEN_SAFETY_MARGIN)
@@ -195,6 +323,7 @@ def _make_chunk(
 ) -> dict:
     return {
         "chunk_id": f"{file_seq}-{idx:03d}",
+        "chunk_index": idx,
         "text": text,
         "chapter": chapter,
         "file_seq": file_seq,
