@@ -75,7 +75,14 @@ rag-store/              # embedded Qdrant 数据库
 
 ### 安装
 
-安装前需要准备：
+安装分两种情况：
+
+- **首次安装**：这台电脑从未安装过 tree 的依赖，也没有下载过本地 embedding 模型。
+- **二次安装**：这台电脑已经安装过 Python 依赖和本地 embedding 模型，只是换了一个新的工作区或重新 clone 仓库。
+
+#### 首次安装（无依赖）
+
+开始前需要准备：
 
 - Python `>=3.12`。终端中运行 `python3.12 --version` 能看到版本号即可。
 - Git。终端中运行 `git --version` 能看到版本号即可。
@@ -138,11 +145,110 @@ tree-run --help
 PYTHONPATH=. python -m tree.cli --help
 ```
 
-6. 安装并启动本地 embedding server。继续阅读下一节“本地 Embedding 模型”。
+6. 安装本地 embedding server 依赖。这一步会安装或编译 `llama-cpp-python`：
 
-7. 配置 API key 和模型。继续阅读“环境变量”一节；第一次运行 `tree-run run` 时也会自动弹出配置向导。
+```bash
+./scripts/setup-embedding.sh
+```
 
-8. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+Apple Silicon 推荐显式使用 Metal：
+
+```bash
+./scripts/setup-embedding.sh --device metal
+```
+
+CPU-only：
+
+```bash
+./scripts/setup-embedding.sh --device cpu
+```
+
+NVIDIA CUDA：
+
+```bash
+./scripts/setup-embedding.sh --device cuda
+```
+
+7. 启动 embedding server：
+
+```bash
+./scripts/start-embed-server.sh
+```
+
+首次启动会自动下载 `Qwen3-Embedding-4B-Q8_0.gguf`，约 4.3 GB。下载完成后模型会留在本机 Hugging Face 缓存中，之后换工作区通常不需要重新下载。
+
+8. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
+
+```bash
+tree-run setup
+```
+
+9. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+
+```bash
+tree-run run
+```
+
+#### 二次安装（已有依赖和本地模型）
+
+适用于：你已经在这台电脑上成功跑过 tree，本地 Python 环境里已有 RAG/embedding 依赖，Hugging Face 缓存里也已有 `Qwen3-Embedding-4B-Q8_0.gguf`，现在只是换一个新工作区。
+
+1. 克隆新工作区：
+
+```bash
+git clone https://github.com/Waylon524/tree.git tree-new
+cd tree-new
+```
+
+2. 激活之前已经装好依赖的 Python 环境。新工作区里通常还没有 `.venv`，所以这里要使用**上一个工作区**或**共享虚拟环境**的实际路径。例如，上一个工作区在相邻目录 `tree/`：
+
+```bash
+source ../tree/.venv/bin/activate
+```
+
+如果你使用的是独立共享环境，把路径替换成你的实际环境路径：
+
+```bash
+source /path/to/tree-env/bin/activate
+```
+
+Windows PowerShell：
+
+```powershell
+..\tree\.venv\Scripts\Activate.ps1
+```
+
+3. 将新工作区绑定到当前环境，确保 `tree-run` 指向这个新 checkout：
+
+```bash
+pip install -e ".[rag]"
+```
+
+这一步通常很快；依赖已经存在时不会重新下载大模型。
+
+4. 可选：确认本地 embedding 依赖已经存在：
+
+```bash
+python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
+```
+
+如果这条命令失败，再回到“首次安装”的第 6 步运行 `./scripts/setup-embedding.sh`。
+
+5. 启动 embedding server：
+
+```bash
+./scripts/start-embed-server.sh
+```
+
+如果本地模型缓存还在，这一步会直接复用缓存，不会重新下载 4.3 GB 模型。
+
+6. 每个工作区都需要自己的 `.env`。运行配置向导：
+
+```bash
+tree-run setup
+```
+
+7. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
 tree-run run
@@ -537,7 +643,14 @@ rag-store/
 
 ### Installation
 
-Before installation, prepare:
+There are two installation paths:
+
+- **First install**: this machine has no tree dependencies and no local embedding model yet.
+- **Second install**: this machine has already installed the Python dependencies and local embedding model, and you are only creating another workspace or cloning the repository again.
+
+#### First Install (No Dependencies)
+
+Before starting, prepare:
 
 - Python `>=3.12`. `python3.12 --version` should print a version number.
 - Git. `git --version` should print a version number.
@@ -600,11 +713,110 @@ If `tree-run` is not found, make sure the virtual environment is active. You can
 PYTHONPATH=. python -m tree.cli --help
 ```
 
-6. Install and start the local embedding server. See the next section, "Local Embedding Model".
+6. Install local embedding server dependencies. This installs or compiles `llama-cpp-python`:
 
-7. Configure API keys and model names. See "Environment"; the first `tree-run run` also starts the setup wizard automatically.
+```bash
+./scripts/setup-embedding.sh
+```
 
-8. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+Apple Silicon:
+
+```bash
+./scripts/setup-embedding.sh --device metal
+```
+
+CPU-only:
+
+```bash
+./scripts/setup-embedding.sh --device cpu
+```
+
+NVIDIA CUDA:
+
+```bash
+./scripts/setup-embedding.sh --device cuda
+```
+
+7. Start the embedding server:
+
+```bash
+./scripts/start-embed-server.sh
+```
+
+The first start downloads `Qwen3-Embedding-4B-Q8_0.gguf`, about 4.3 GB. After that, the model stays in the local Hugging Face cache, so a second workspace usually does not download it again.
+
+8. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
+
+```bash
+tree-run setup
+```
+
+9. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+
+```bash
+tree-run run
+```
+
+#### Second Install (Existing Dependencies and Local Model)
+
+Use this path when you have already run tree successfully on this machine, the local Python environment already has RAG/embedding dependencies, and `Qwen3-Embedding-4B-Q8_0.gguf` is already in the Hugging Face cache.
+
+1. Clone a new workspace:
+
+```bash
+git clone https://github.com/Waylon524/tree.git tree-new
+cd tree-new
+```
+
+2. Activate the Python environment that already has the dependencies. A fresh workspace usually does not have its own `.venv` yet, so use the real path to the previous workspace or a shared virtual environment. For example, if the previous workspace is in the adjacent `tree/` directory:
+
+```bash
+source ../tree/.venv/bin/activate
+```
+
+For a shared environment, replace the path with your real environment path:
+
+```bash
+source /path/to/tree-env/bin/activate
+```
+
+On Windows PowerShell:
+
+```powershell
+..\tree\.venv\Scripts\Activate.ps1
+```
+
+3. Bind the new workspace to the active environment so `tree-run` points at this checkout:
+
+```bash
+pip install -e ".[rag]"
+```
+
+This is usually quick when dependencies already exist. It does not download the large embedding model.
+
+4. Optional: confirm that local embedding dependencies are present:
+
+```bash
+python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
+```
+
+If this command fails, go back to step 6 in "First Install" and run `./scripts/setup-embedding.sh`.
+
+5. Start the embedding server:
+
+```bash
+./scripts/start-embed-server.sh
+```
+
+If the local model cache is still present, this reuses it without downloading the 4.3 GB model again.
+
+6. Each workspace needs its own `.env`. Run the setup wizard:
+
+```bash
+tree-run setup
+```
+
+7. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
 tree-run run
