@@ -1,4 +1,4 @@
-"""Index source, draft, and finished TREE documents into RAG."""
+"""Index source and finished TREE documents into RAG."""
 
 from __future__ import annotations
 
@@ -45,21 +45,6 @@ class RAGIndexer:
             chapter=chapter,
             is_draft=False,
             content_kind="finished",
-            source_collection=chapter,
-            path=rel_path,
-        )
-
-    def index_draft_file(self, root: Path, chapter: str, path: Path) -> int:
-        """Index one draft Markdown file."""
-        text = path.read_text(encoding="utf-8")
-        rel_path = _relative_path(root, path)
-        return self.rag.index_file(
-            file_seq=path.stem.split(".", 1)[0],
-            filename=path.name,
-            text=text,
-            chapter=chapter,
-            is_draft=True,
-            content_kind="draft",
             source_collection=chapter,
             path=rel_path,
         )

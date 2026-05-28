@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from ingest.math_fix import fix_math_symbols
 from ingest.ocr_engine import get_engine
 from ingest.pipeline import extract_text
 
@@ -68,7 +67,6 @@ async def ingest_file(
         logger.warning("No text extracted from %s, skipping", input_path.name)
         return None
 
-    raw_text = fix_math_symbols(raw_text)
     final_text = await archivist.structure(raw_text) if archivist else raw_text
 
     output_dir.mkdir(parents=True, exist_ok=True)

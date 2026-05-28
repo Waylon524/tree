@@ -90,7 +90,7 @@ class RAGRuntimeTests(unittest.TestCase):
         self.assertEqual(hits[0]["metadata"]["content_kind"], "source")
         self.assertEqual(hits[0]["metadata"]["source_collection"], "化学平衡")
 
-    def test_ingest_path_indexes_outputs_when_indexer_is_supplied(self) -> None:
+    def test_ingest_path_indexes_source_materials_when_indexer_is_supplied(self) -> None:
         class FakeArchivist:
             async def structure(self, raw_text: str) -> str:
                 return "# Lesson\n\n## 平衡\n结构化内容"
@@ -211,7 +211,7 @@ class RAGRuntimeTests(unittest.TestCase):
 
             def query(self, query_text: str, top_k: int, filters: dict, include_drafts: bool = True):
                 self.calls.append((query_text, top_k, filters, include_drafts))
-                return [{"text": "RAG source chunk", "metadata": {"content_kind": "source"}}]
+                return [{"text": f"{filters['content_kind']} chunk", "metadata": filters}]
 
         class FakeExaminer:
             def __init__(self) -> None:
@@ -244,8 +244,66 @@ class RAGRuntimeTests(unittest.TestCase):
 
             asyncio.run(TreeEngine._step1_compose(engine, chapter, "01"))
 
-        self.assertEqual(engine.examiner.retrieved_context[0]["text"], "RAG source chunk")
+        self.assertEqual(
+            [hit["text"] for hit in engine.examiner.retrieved_context],
+            ["source chunk", "finished chunk"],
+        )
         self.assertEqual(engine.rag_client.calls[0][2]["content_kind"], "source")
+        self.assertEqual(engine.rag_client.calls[0][2]["source_collection"], "化学平衡")
+        self.assertEqual(engine.rag_client.calls[1][2]["content_kind"], "finished")
+        self.assertEqual(engine.rag_client.calls[1][2]["chapter"], "化学平衡")
+
+    def test_step2_passes_learned_rag_context_to_student_when_available(self) -> None:
+        class FakeRag:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def query(self, query_text: str, top_k: int, filters: dict, include_drafts: bool = True):
+                self.calls.append((query_text, top_k, filters, include_drafts))
+                return [{"text": f"{filters['content_kind']} chunk", "metadata": filters}]
+
+        class FakeStudent:
+            def __init__(self) -> None:
+                self.retrieved_context = []
+
+            async def blind_test(self, *args, **kwargs):
+                self.retrieved_context = kwargs["retrieved_context"]
+                return "student answer"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            draft_dir = root / "drafts" / "化学平衡"
+            draft_dir.mkdir(parents=True)
+            draft = draft_dir / "01.平衡状态.md"
+            draft.write_text("# 平衡状态\n", encoding="utf-8")
+            engine = object.__new__(TreeEngine)
+            engine.settings = Settings.from_env(root, require_llm=False)
+            engine.student = FakeStudent()
+            engine.rag_client = FakeRag()
+            iter_state = IterationState(
+                chapter="化学平衡",
+                file_seq="01",
+                knowledge_point="01. 平衡状态",
+                draft_path=draft,
+                exam_sections=ExamSections(
+                    knowledge_point="01. 平衡状态",
+                    blind_exam="平衡状态是什么？",
+                    student_instructions="引用材料作答",
+                    answer_key="A",
+                    architect_instructions="W",
+                ),
+            )
+
+            answer = asyncio.run(TreeEngine._step2_blind_test(engine, iter_state))
+
+        self.assertEqual(answer, "student answer")
+        self.assertEqual(
+            [hit["text"] for hit in engine.student.retrieved_context],
+            ["finished chunk"],
+        )
+        self.assertEqual(engine.rag_client.calls[0][2]["content_kind"], "finished")
+        self.assertEqual(engine.rag_client.calls[0][3], False)
+        self.assertEqual(len(engine.rag_client.calls), 1)
 
     def test_step4_passes_rag_context_to_writer_when_available(self) -> None:
         class FakeRag:

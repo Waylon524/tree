@@ -17,7 +17,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from ingest.extractors import docx_extractor, image_extractor, pdf_extractor
-from ingest.math_fix import fix_math_symbols
 from ingest.ocr_engine import get_engine
 from ingest.structurer import structure
 
@@ -72,7 +71,7 @@ def process_file(
     output_dir: Path,
     use_structurer: bool = True,
 ) -> Path:
-    """Process a single file: extract → fix math → structure → write.
+    """Process a single file: extract → structure → write.
 
     Args:
         input_path: Input file path.
@@ -90,9 +89,6 @@ def process_file(
     if not raw_text.strip():
         logger.warning("No text extracted from %s, skipping", input_path.name)
         return None
-
-    # Fix corrupted math symbols from PDF extraction
-    raw_text = fix_math_symbols(raw_text)
 
     # Step 4: Structure via LLM (optional)
     if use_structurer:

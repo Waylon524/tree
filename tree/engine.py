@@ -191,14 +191,26 @@ class TreeEngine:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, ch_name)]
         prior_contents = file_ops.read_prior_files(self.settings.project_root, ch_name)
         source_docs = source_ops.read_collection(self.settings.project_root, source_collection)
-        retrieved_context = self._rag_query(
-            f"{ch_name}\n{next_seq}\n下一知识点命题",
-            filters={
-                "content_kind": "source",
-                "source_collection": source_collection,
-            },
-            top_k=8,
-            include_drafts=False,
+        query_text = f"{ch_name}\n{next_seq}\n下一知识点命题"
+        retrieved_context = (
+            self._rag_query(
+                query_text,
+                filters={
+                    "content_kind": "source",
+                    "source_collection": source_collection,
+                },
+                top_k=5,
+                include_drafts=False,
+            )
+            + self._rag_query(
+                query_text,
+                filters={
+                    "content_kind": "finished",
+                    "chapter": ch_name,
+                },
+                top_k=5,
+                include_drafts=False,
+            )
         )
         return await self.examiner.compose_exam(
             next_seq,
@@ -217,12 +229,27 @@ class TreeEngine:
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
         assert iter_state.exam_sections is not None
+        query_text = (
+            f"{iter_state.knowledge_point}\n"
+            f"{iter_state.exam_sections.student_instructions}\n"
+            f"{iter_state.exam_sections.blind_exam}"
+        )
+        retrieved_context = self._rag_query(
+            query_text,
+            filters={
+                "content_kind": "finished",
+                "chapter": iter_state.chapter,
+            },
+            top_k=5,
+            include_drafts=False,
+        )
         return await self.student.blind_test(
             iter_state.exam_sections.blind_exam,
             iter_state.exam_sections.student_instructions,
             prior_contents,
             prior_paths,
             draft_text,
+            retrieved_context=retrieved_context,
         )
 
     async def _step3_audit(self, iter_state: IterationState, answer: str) -> AuditResult:
