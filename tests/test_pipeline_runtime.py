@@ -393,6 +393,104 @@ W
 
         self.assertGreater(max_active, 1)
 
+    def test_engine_starts_embedding_as_each_source_material_is_ready(self) -> None:
+        class FakeIndexer:
+            def __init__(self) -> None:
+                self.calls: list[Path] = []
+
+            def is_source_file_indexed(self, root: Path, collection: str, path: Path) -> bool:
+                return False
+
+            def index_source_file(self, root: Path, collection: str, path: Path) -> int:
+                self.calls.append(path)
+                events.append(f"embed:{path.name}:active={active_ingests}")
+                time.sleep(0.02)
+                return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw_dir = root / "raw_materials" / "课件"
+            raw_dir.mkdir(parents=True)
+            fast = raw_dir / "fast.pdf"
+            slow = raw_dir / "slow.pdf"
+            fast.write_bytes(b"%PDF")
+            slow.write_bytes(b"%PDF")
+
+            engine = object.__new__(TreeEngine)
+            engine.settings = Settings.from_env(root, require_llm=False)
+            engine.rag_indexer = FakeIndexer()
+            events: list[str] = []
+            active_ingests = 0
+            lock = asyncio.Lock()
+
+            async def fake_ingest(input_path, output_dir, use_archivist=True, collection=None, indexer=None):
+                nonlocal active_ingests
+                async with lock:
+                    active_ingests += 1
+                    events.append(f"ingest-start:{input_path.name}:active={active_ingests}")
+                await asyncio.sleep(0.02 if input_path == fast else 0.16)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output = output_dir / f"{input_path.stem}.md"
+                output.write_text("# structured", encoding="utf-8")
+                async with lock:
+                    active_ingests -= 1
+                    events.append(f"ingest-done:{input_path.name}:active={active_ingests}")
+                return [output]
+
+            engine.ingest = fake_ingest
+
+            asyncio.run(TreeEngine._prepare_source_materials_for_loop(engine))
+
+        self.assertIn("embed:fast.md:active=1", events)
+        self.assertEqual([path.name for path in engine.rag_indexer.calls], ["fast.md", "slow.md"])
+
+    def test_engine_keeps_streaming_source_embedding_serial(self) -> None:
+        class FakeIndexer:
+            def __init__(self) -> None:
+                self.calls: list[Path] = []
+
+            def is_source_file_indexed(self, root: Path, collection: str, path: Path) -> bool:
+                return False
+
+            def index_source_file(self, root: Path, collection: str, path: Path) -> int:
+                nonlocal active_embeddings, max_active_embeddings
+                with embed_lock:
+                    active_embeddings += 1
+                    max_active_embeddings = max(max_active_embeddings, active_embeddings)
+                time.sleep(0.04)
+                self.calls.append(path)
+                with embed_lock:
+                    active_embeddings -= 1
+                return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw_dir = root / "raw_materials" / "课件"
+            raw_dir.mkdir(parents=True)
+            for idx in range(3):
+                (raw_dir / f"lesson-{idx}.pdf").write_bytes(b"%PDF")
+
+            engine = object.__new__(TreeEngine)
+            engine.settings = Settings.from_env(root, require_llm=False)
+            engine.rag_indexer = FakeIndexer()
+            active_embeddings = 0
+            max_active_embeddings = 0
+            embed_lock = threading.Lock()
+
+            async def fake_ingest(input_path, output_dir, use_archivist=True, collection=None, indexer=None):
+                await asyncio.sleep(0.01)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output = output_dir / f"{input_path.stem}.md"
+                output.write_text("# structured", encoding="utf-8")
+                return [output]
+
+            engine.ingest = fake_ingest
+
+            asyncio.run(TreeEngine._prepare_source_materials_for_loop(engine))
+
+        self.assertEqual(max_active_embeddings, 1)
+        self.assertEqual(len(engine.rag_indexer.calls), 3)
+
     def test_engine_indexes_existing_source_materials_before_loop(self) -> None:
         class FakeIndexer:
             def __init__(self) -> None:
@@ -458,6 +556,43 @@ W
 
         self.assertEqual(events, ["start", "prepare", "scan", "complete"])
 
+    def test_run_adds_discovered_chapter_without_source_collection_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            engine = object.__new__(TreeEngine)
+            engine.settings = Settings.from_env(root, require_llm=False)
+            engine.state_mgr = StateManager(root / "pipeline-state.json")
+
+            class FakeTracer:
+                def log_pipeline_start(self) -> None:
+                    return None
+
+                def log_pipeline_complete(self) -> None:
+                    return None
+
+            async def fake_prepare() -> None:
+                return None
+
+            async def fake_scan(state) -> str | None:
+                return "化学平衡"
+
+            async def fake_process_chapter(chapter_name: str) -> None:
+                state = engine.state_mgr.load()
+                engine.state_mgr.save(engine.state_mgr.complete_chapter(state, chapter_name))
+                raise StopAsyncIteration
+
+            engine.tracer = FakeTracer()
+            engine._prepare_source_materials_for_loop = fake_prepare
+            engine._scan_next_chapter = fake_scan
+            engine.process_chapter = fake_process_chapter
+
+            with self.assertRaises(StopAsyncIteration):
+                asyncio.run(TreeEngine.run(engine))
+            state = engine.state_mgr.load()
+
+        self.assertIsNone(state.chapters[0].source_collection)
+
     def test_step1_reads_current_chapter_from_rag_source_materials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -516,6 +651,69 @@ W
         self.assertEqual(engine.examiner.source_material_paths, ["source_materials/化学平衡/5.md"])
         self.assertEqual([hit["text"] for hit in engine.examiner.retrieved_context], ["source chunk", "finished chunk"])
 
+    def test_step1_without_source_collection_searches_all_source_materials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            chapter = ChapterRecord(chapter_name="化学动力学", status="in_progress")
+
+            class FakeExaminer:
+                def __init__(self) -> None:
+                    self.source_material_paths: list[str] = []
+                    self.retrieved_context: list[dict] = []
+
+                async def compose_exam(self, *args, **kwargs):
+                    self.source_material_paths = kwargs["source_material_paths"]
+                    self.retrieved_context = kwargs["retrieved_context"]
+                    return ExamSections(
+                        knowledge_point="01. 反应速率",
+                        blind_exam="Q",
+                        answer_key="A",
+                        writer_instructions="W",
+                    ), False
+
+            class FakeRag:
+                def __init__(self) -> None:
+                    self.calls = []
+
+                def query(self, query_text: str, top_k: int, filters: dict, include_drafts: bool = True):
+                    self.calls.append(filters)
+                    return [{"text": f"{filters['content_kind']} chunk", "metadata": filters}]
+
+                def scroll_chunks(self, filters, include_drafts=False):
+                    return [
+                        {
+                            "text": "# 动力学\n源内容",
+                            "metadata": {
+                                "content_kind": "source",
+                                "source_collection": "课件",
+                                "path": "source_materials/课件/6__part-01.md",
+                            },
+                        },
+                        {
+                            "text": "# 作业\n题目",
+                            "metadata": {
+                                "content_kind": "source",
+                                "source_collection": "作业",
+                                "path": "source_materials/作业/01.md",
+                            },
+                        },
+                    ]
+
+            engine = object.__new__(TreeEngine)
+            engine.settings = Settings.from_env(root, require_llm=False)
+            engine.examiner = FakeExaminer()
+            engine.rag_client = FakeRag()
+
+            asyncio.run(TreeEngine._step1_compose(engine, chapter, "01"))
+
+        self.assertNotIn("source_collection", engine.rag_client.calls[0])
+        self.assertEqual(
+            engine.examiner.source_material_paths,
+            ["source_materials/作业/01.md", "source_materials/课件/6__part-01.md"],
+        )
+        self.assertEqual([hit["text"] for hit in engine.examiner.retrieved_context], ["source chunk", "finished chunk"])
+
     def test_agent_prompts_are_builtin_without_claude_directory(self) -> None:
         loader = AgentLoader()
 
@@ -569,6 +767,9 @@ W
         self.assertEqual(result, "# structured")
         self.assertEqual(client.calls[0][0], "archivist")
         self.assertIn("document structuring specialist", client.calls[0][1])
+        self.assertIn("light cleanup", client.calls[0][1])
+        self.assertNotIn("OCR error correction", client.calls[0][1])
+        self.assertNotIn("Logical ordering", client.calls[0][1])
         self.assertIn("raw OCR text", client.calls[0][2])
 
     def test_settings_can_load_ocr_only_without_llm_credentials(self) -> None:
@@ -860,6 +1061,56 @@ W
         self.assertNotIn("## 第二节 平衡常数", archivist.calls[0])
         self.assertIn("## 第二节 平衡常数", archivist.calls[1])
         self.assertTrue(output_text.startswith("STRUCTURED:"))
+
+    def test_ingest_path_groups_small_heading_sections_into_coarse_source_chunks(self) -> None:
+        class FakeArchivist:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def structure(self, raw_text: str) -> str:
+                self.calls.append(raw_text)
+                return raw_text
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "lesson.pdf"
+            input_path.write_bytes(b"%PDF")
+            settings = replace(
+                Settings.from_env(root, require_llm=False),
+                source_archivist_chunk_chars=130,
+                source_ocr_upload_interval_sec=0,
+            )
+            archivist = FakeArchivist()
+            raw_text = (
+                "# 课件\n"
+                "导言\n\n"
+                "## 第一节\n"
+                f"{'A' * 40}\n\n"
+                "## 第二节\n"
+                f"{'B' * 40}\n\n"
+                "## 第三节\n"
+                f"{'C' * 40}\n"
+            )
+
+            with (
+                patch("tree.ingest.get_engine"),
+                patch("tree.ingest.extract_text", return_value=raw_text),
+            ):
+                outputs = asyncio.run(
+                    ingest_path(
+                        input_path,
+                        root / "source_materials" / "课件",
+                        settings,
+                        archivist=archivist,
+                    )
+                )
+
+        self.assertEqual([path.name for path in outputs], ["lesson__part-01.md", "lesson__part-02.md"])
+        self.assertEqual(len(archivist.calls), 2)
+        self.assertIn("## 第一节", archivist.calls[0])
+        self.assertIn("## 第二节", archivist.calls[0])
+        self.assertNotIn("## 第三节", archivist.calls[0])
+        self.assertIn("## 第三节", archivist.calls[1])
 
     def test_status_does_not_require_llm_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

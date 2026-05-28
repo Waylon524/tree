@@ -82,7 +82,7 @@ class TreeEngine:
                     print("PIPELINE_COMPLETE — all source materials covered.")
                     return
                 new_name = scan_result
-                state = self.state_mgr.add_chapter(state, new_name, source_collection=new_name)
+                state = self.state_mgr.add_chapter(state, new_name)
                 self.state_mgr.save(state)
                 chapter = self.state_mgr.find_in_progress(state)
                 print(f"New chapter discovered: {new_name}")
@@ -119,6 +119,9 @@ class TreeEngine:
             print(f"Source ingest: {len(pending)} new or changed raw material(s) detected.")
         if pending:
             ingest_sem = asyncio.Semaphore(max(1, self.settings.source_ingest_concurrency))
+            embedding_sem = asyncio.Semaphore(max(1, self.settings.source_embedding_concurrency))
+            manifest_lock = asyncio.Lock()
+            embedding_tasks: list[asyncio.Task[int]] = []
 
             async def ingest_one(raw_path: Path, collection: str) -> tuple[Path, str, list[Path]]:
                 async with ingest_sem:
@@ -132,11 +135,34 @@ class TreeEngine:
                     )
                     return raw_path, collection, outputs
 
+            async def embed_outputs(raw_path: Path, collection: str, outputs: list[Path]) -> int:
+                indexed = 0
+                for output in outputs:
+                    async with embedding_sem:
+                        indexed += await asyncio.to_thread(
+                            _index_source_output,
+                            root,
+                            collection,
+                            output,
+                            getattr(self, "rag_indexer", None),
+                        )
+                async with manifest_lock:
+                    _mark_raw_material_embedded(root, manifest, raw_path)
+                    _save_source_manifest(root, manifest)
+                return indexed
+
             tasks = [asyncio.create_task(ingest_one(raw_path, collection)) for raw_path, collection in pending]
             for task in asyncio.as_completed(tasks):
                 raw_path, collection, outputs = await task
-                _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
-                _save_source_manifest(root, manifest)
+                async with manifest_lock:
+                    _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
+                    _save_source_manifest(root, manifest)
+                if outputs:
+                    embedding_tasks.append(asyncio.create_task(embed_outputs(raw_path, collection, outputs)))
+
+            embedded_count = sum(await asyncio.gather(*embedding_tasks)) if embedding_tasks else 0
+            if embedded_count:
+                print(f"Source ingest: embedded {embedded_count} source material file(s).")
 
         self._ensure_all_source_materials_embedded()
         _mark_manifest_outputs_embedded(manifest)
@@ -159,13 +185,7 @@ class TreeEngine:
 
         indexed = 0
         for collection, path in docs:
-            is_indexed = getattr(indexer, "is_source_file_indexed", None)
-            if is_indexed is not None and is_indexed(root, collection, path):
-                path.unlink(missing_ok=True)
-                continue
-            indexer.index_source_file(root, collection, path)
-            path.unlink(missing_ok=True)
-            indexed += 1
+            indexed += _index_source_output(root, collection, path, indexer)
         if indexed:
             print(f"Source ingest: embedded {indexed} source material file(s).")
 
@@ -267,18 +287,16 @@ class TreeEngine:
 
         ch = chapter if isinstance(chapter, ChapterRecord) else None
         ch_name = ch.chapter_name if ch else getattr(chapter, "chapter_name", "")
-        source_collection = (
-            ch.source_collection if ch and ch.source_collection else ch_name
-        )
+        source_collection = ch.source_collection if ch else getattr(chapter, "source_collection", None)
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, ch_name)]
         query_text = f"{ch_name}\n{next_seq}\n下一知识点命题"
+        source_filters = {"content_kind": "source"}
+        if source_collection:
+            source_filters["source_collection"] = source_collection
         retrieved_context = (
             self._rag_query(
                 query_text,
-                filters={
-                    "content_kind": "source",
-                    "source_collection": source_collection,
-                },
+                filters=source_filters,
                 top_k=5,
                 include_drafts=False,
             )
@@ -362,13 +380,13 @@ class TreeEngine:
         writer_instructions = iter_state.exam_sections.writer_instructions if iter_state.exam_sections else None
         source_collection = self._source_collection_for_chapter(iter_state.chapter)
         query_text = f"{iter_state.knowledge_point}\n{audit.bottleneck_report}"
+        source_filters = {"content_kind": "source"}
+        if source_collection:
+            source_filters["source_collection"] = source_collection
         retrieved_context = (
             self._rag_query(
                 query_text,
-                filters={
-                    "content_kind": "source",
-                    "source_collection": source_collection,
-                },
+                filters=source_filters,
                 top_k=5,
                 include_drafts=False,
             )
@@ -490,7 +508,7 @@ class TreeEngine:
         except Exception:
             return []
 
-    def _source_collection_for_chapter(self, chapter_name: str) -> str:
+    def _source_collection_for_chapter(self, chapter_name: str) -> str | None:
         state_mgr = getattr(self, "state_mgr", None)
         if state_mgr is None:
             return chapter_name
@@ -500,8 +518,8 @@ class TreeEngine:
             return chapter_name
         for chapter in state.chapters:
             if chapter.chapter_name == chapter_name:
-                return chapter.source_collection or chapter.chapter_name
-        return chapter_name
+                return chapter.source_collection
+        return None
 
     def _source_payload_from_rag(self) -> dict[str, list[dict[str, str]]]:
         rag_client = getattr(self, "rag_client", None)
@@ -530,8 +548,14 @@ class TreeEngine:
             for collection, docs in sorted(grouped.items())
         }
 
-    def _source_paths_from_rag(self, collection: str) -> list[str]:
+    def _source_paths_from_rag(self, collection: str | None) -> list[str]:
         payload = self._source_payload_from_rag()
+        if collection is None:
+            return [
+                doc["path"]
+                for _, docs in sorted(payload.items())
+                for doc in docs
+            ]
         return [doc["path"] for doc in payload.get(collection, [])]
 
 
@@ -620,6 +644,27 @@ def _mark_manifest_outputs_embedded(manifest: dict[str, Any]) -> None:
         outputs = entry.get("outputs") or []
         if outputs:
             entry["embedded"] = True
+
+
+def _mark_raw_material_embedded(root: Path, manifest: dict[str, Any], raw_path: Path) -> None:
+    entry = manifest.get(_relative_to_root(root, raw_path))
+    if isinstance(entry, dict) and entry.get("outputs"):
+        entry["embedded"] = True
+
+
+def _index_source_output(root: Path, collection: str, path: Path, indexer: object | None) -> int:
+    if indexer is None:
+        raise RuntimeError(
+            "Source materials exist but RAG indexer is unavailable. "
+            "Start the embedding service and ensure RAG dependencies are installed before running TREE."
+        )
+    is_indexed = getattr(indexer, "is_source_file_indexed", None)
+    if is_indexed is not None and is_indexed(root, collection, path):
+        path.unlink(missing_ok=True)
+        return 0
+    indexer.index_source_file(root, collection, path)
+    path.unlink(missing_ok=True)
+    return 1
 
 
 def _relative_to_root(root: Path, path: Path) -> str:

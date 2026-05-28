@@ -223,7 +223,23 @@ def _split_raw_text_by_headings(raw_text: str, max_chars: int) -> list[str]:
     if len(sections) <= 1:
         return [raw_text]
 
-    return sections
+    return _group_sections_by_size(sections, max_chars)
+
+
+def _group_sections_by_size(sections: list[str], max_chars: int) -> list[str]:
+    grouped = []
+    current = ""
+    for section in sections:
+        separator = "\n\n" if current else ""
+        candidate = f"{current}{separator}{section}"
+        if current and len(candidate) > max_chars:
+            grouped.append(current)
+            current = section
+        else:
+            current = candidate
+    if current:
+        grouped.append(current)
+    return grouped or sections
 
 
 def _heading_level(line: str) -> int | None:
