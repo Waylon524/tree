@@ -19,6 +19,7 @@ from tree.model.client import LLMClient
 from tree.io import file_ops, git_ops, paths, source_ops
 from tree.observability.limiter import IterationLimiter
 from tree.observability.logger import TraceLogger
+from tree.observability.progress import ProgressTracker
 from tree.services import stop_requested
 from tree.state.manager import StateManager
 from tree.state.models import (
@@ -69,6 +70,7 @@ class TreeEngine:
         self.writer = WriterAgent(self.client, self.loader)
         self.archivist = ArchivistAgent(self.client, self.loader)
         self.tracer = TraceLogger(paths.pipeline_temp_root(root) / "trace.jsonl")
+        self.progress = ProgressTracker(root)
         self.limiter = IterationLimiter(settings.max_iterations)
         self.rag_client = None
         self.rag_indexer = None
@@ -77,6 +79,7 @@ class TreeEngine:
     async def run(self) -> None:
         """Entry point for `tree run`."""
         self.tracer.log_pipeline_start()
+        self.progress.reset()
         self._raise_if_stop_requested()
         await self._prepare_source_materials_for_loop()
         while True:
@@ -85,9 +88,17 @@ class TreeEngine:
             chapter = self.state_mgr.find_in_progress(state)
             if chapter is None:
                 # No in_progress chapter — scan for next
+                self.progress.learning_stage(
+                    stage="scan_next_chapter",
+                    stage_label="Scanning next chapter",
+                    stage_index=1,
+                    stage_total=6,
+                    message="Examiner is scanning source materials for the next chapter",
+                )
                 scan_result = await self._scan_next_chapter(state)
                 if scan_result is None:
                     self.tracer.log_pipeline_complete()
+                    self.progress.complete("PIPELINE_COMPLETE — all source materials covered.")
                     print("PIPELINE_COMPLETE — all source materials covered.")
                     return
                 new_name = scan_result
@@ -105,6 +116,7 @@ class TreeEngine:
         use_archivist: bool = True,
         collection: str | None = None,
         indexer: object | None = None,
+        track_files: bool = True,
     ) -> list[Path]:
         """Run the integrated PaddleOCR → Archivist ingest pipeline."""
         from tree.ingest import ingest_path
@@ -116,6 +128,8 @@ class TreeEngine:
             archivist=self.archivist if use_archivist else None,
             collection=collection,
             indexer=indexer,
+            progress=self.progress,
+            track_files=track_files,
         )
 
     async def _prepare_source_materials_for_loop(self) -> None:
@@ -126,12 +140,16 @@ class TreeEngine:
         pending = _pending_materials(root, manifest)
 
         if pending:
+            self.progress.source_ingest_start(len(pending))
             print(f"Source ingest: {len(pending)} new or changed material(s) detected.")
         if pending:
             ingest_sem = asyncio.Semaphore(max(1, self.settings.source_ingest_concurrency))
             embedding_sem = asyncio.Semaphore(max(1, self.settings.source_embedding_concurrency))
             manifest_lock = asyncio.Lock()
             embedding_tasks: list[asyncio.Task[int]] = []
+            files_done = 0
+            embedding_done = 0
+            embedding_total = 0
 
             async def ingest_one(material_path: Path, collection: str) -> tuple[Path, str, list[Path]]:
                 async with ingest_sem:
@@ -142,10 +160,12 @@ class TreeEngine:
                         use_archivist=True,
                         collection=collection,
                         indexer=None,
+                        track_files=False,
                     )
                     return material_path, collection, outputs
 
             async def embed_outputs(material_path: Path, collection: str, outputs: list[Path]) -> int:
+                nonlocal embedding_done
                 indexed = 0
                 for output in outputs:
                     self._raise_if_stop_requested()
@@ -157,18 +177,36 @@ class TreeEngine:
                             output,
                             getattr(self, "rag_indexer", None),
                         )
+                        async with manifest_lock:
+                            embedding_done += 1
+                            self.progress.embedding_done(
+                                _relative_to_root(root, output),
+                                embedding_done,
+                                embedding_total,
+                            )
                 async with manifest_lock:
                     _mark_material_embedded(root, manifest, material_path)
                     _save_source_manifest(root, manifest)
                 return indexed
 
-            tasks = [asyncio.create_task(ingest_one(material_path, collection)) for material_path, collection in pending]
+            tasks = [
+                asyncio.create_task(ingest_one(material_path, collection))
+                for material_path, collection in pending
+            ]
             for task in asyncio.as_completed(tasks):
                 self._raise_if_stop_requested()
                 material_path, collection, outputs = await task
                 async with manifest_lock:
+                    files_done += 1
                     _mark_material_ingested(root, manifest, material_path, collection, outputs)
                     _save_source_manifest(root, manifest)
+                    self.progress.source_file_done(
+                        _relative_to_root(root, material_path),
+                        files_done,
+                        len(pending),
+                    )
+                    embedding_total += len(outputs)
+                    self.progress.embedding_start(embedding_total)
                 if outputs:
                     embedding_tasks.append(asyncio.create_task(embed_outputs(material_path, collection, outputs)))
 
@@ -197,9 +235,13 @@ class TreeEngine:
             )
 
         indexed = 0
+        docs_done = 0
+        self.progress.embedding_start(len(docs))
         for collection, path in docs:
             self._raise_if_stop_requested()
             indexed += _index_source_output(root, collection, path, indexer)
+            docs_done += 1
+            self.progress.embedding_done(_relative_to_root(root, path), docs_done, len(docs))
         if indexed:
             print(f"Source ingest: embedded {indexed} source material file(s).")
 
@@ -212,6 +254,15 @@ class TreeEngine:
             next_seq = str(len(chapter.files_completed) + 1).zfill(2)
 
             # Step 1: Examiner composes exam
+            self.progress.learning_stage(
+                stage="find_knowledge_point",
+                stage_label="Finding knowledge point",
+                stage_index=1,
+                stage_total=6,
+                chapter=chapter_name,
+                file_seq=next_seq,
+                message="Examiner is finding the next knowledge point",
+            )
             t0 = time.time()
             exam_sections, is_complete = await self._step1_compose(chapter, next_seq)
             self._raise_if_stop_requested()
@@ -222,6 +273,15 @@ class TreeEngine:
             if is_complete:
                 state = self.state_mgr.complete_chapter(state, chapter_name)
                 self.state_mgr.save(state)
+                self.progress.learning_stage(
+                    stage="chapter_complete",
+                    stage_label="Chapter complete",
+                    stage_index=6,
+                    stage_total=6,
+                    chapter=chapter_name,
+                    file_seq=next_seq,
+                    message=f"CHAPTER_COMPLETE: {chapter_name}",
+                )
                 print(f"CHAPTER_COMPLETE: {chapter_name}")
                 return
 
@@ -231,6 +291,16 @@ class TreeEngine:
                 file_seq=next_seq,
                 knowledge_point=exam_sections.knowledge_point,
                 exam_sections=exam_sections,
+            )
+            self.progress.learning_stage(
+                stage="examiner_compose_exam",
+                stage_label="Examiner composed exam",
+                stage_index=2,
+                stage_total=6,
+                chapter=chapter_name,
+                file_seq=next_seq,
+                knowledge_point=exam_sections.knowledge_point,
+                message="Examiner has selected the knowledge point and exam",
             )
             print(f"Step 1: knowledge point = {exam_sections.knowledge_point}")
 
@@ -245,6 +315,17 @@ class TreeEngine:
             self.limiter.check(iter_state.chapter, iter_state.file_seq, iter_state.iteration)
 
             # Step 2: Student blind test
+            self.progress.learning_stage(
+                stage="student_blind_test",
+                stage_label="Student blind test",
+                stage_index=3,
+                stage_total=6,
+                chapter=chapter_name,
+                file_seq=iter_state.file_seq,
+                knowledge_point=iter_state.knowledge_point,
+                iteration=iter_state.iteration,
+                message="Student is answering the blind exam",
+            )
             t0 = time.time()
             answer = await self._step2_blind_test(iter_state)
             self._raise_if_stop_requested()
@@ -256,6 +337,17 @@ class TreeEngine:
             print(f"  Step 2: student answered (iteration {iter_state.iteration})")
 
             # Step 3: Examiner audit
+            self.progress.learning_stage(
+                stage="examiner_audit",
+                stage_label="Examiner audit",
+                stage_index=4,
+                stage_total=6,
+                chapter=chapter_name,
+                file_seq=iter_state.file_seq,
+                knowledge_point=iter_state.knowledge_point,
+                iteration=iter_state.iteration,
+                message="Examiner is auditing the student answer",
+            )
             t0 = time.time()
             audit = await self._step3_audit(iter_state, answer)
             self._raise_if_stop_requested()
@@ -267,6 +359,17 @@ class TreeEngine:
             )
 
             if audit.route == Route.PASS:
+                self.progress.learning_stage(
+                    stage="pass_save_output",
+                    stage_label="PASS and save output",
+                    stage_index=6,
+                    stage_total=6,
+                    chapter=chapter_name,
+                    file_seq=iter_state.file_seq,
+                    knowledge_point=iter_state.knowledge_point,
+                    iteration=iter_state.iteration,
+                    message="Knowledge point passed; saving output",
+                )
                 await self._handle_pass(iter_state, audit)
                 print(f"  PASS: {iter_state.knowledge_point}")
                 return
@@ -274,6 +377,17 @@ class TreeEngine:
             print(f"  Step 3: FAIL_KNOWLEDGE_GAP (iteration {iter_state.iteration})")
 
             # Step 4: Writer creates/optimizes draft
+            self.progress.learning_stage(
+                stage="writer_drafting",
+                stage_label="Writer drafting",
+                stage_index=5,
+                stage_total=6,
+                chapter=chapter_name,
+                file_seq=iter_state.file_seq,
+                knowledge_point=iter_state.knowledge_point,
+                iteration=iter_state.iteration,
+                message="Writer is creating or optimizing the draft",
+            )
             t0 = time.time()
             writer_result = await self._step4_writer(iter_state, audit)
             self._raise_if_stop_requested()

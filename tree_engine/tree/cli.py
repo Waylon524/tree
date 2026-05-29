@@ -603,10 +603,19 @@ def ingest(
     from tree.config import Settings
     from tree.engine import TreeEngine
     from tree.ingest import ingest_path
+    from tree.observability.progress import ProgressTracker
 
     _ensure_workspace_config(Path.cwd(), require_llm=not no_structure)
     root = Path.cwd()
     target_dir = output_dir or paths.source_root(root) / (collection or input_path.stem)
+    progress_tracker = ProgressTracker(root)
+    progress_tracker.reset()
+    ingest_total = (
+        1
+        if input_path.is_file()
+        else sum(1 for path in input_path.iterdir() if path.is_file() and not path.name.startswith("."))
+    )
+    progress_tracker.source_ingest_start(ingest_total)
 
     indexer = None
     if not no_index:
@@ -627,6 +636,7 @@ def ingest(
                 archivist=None,
                 collection=collection_name,
                 indexer=indexer,
+                progress=progress_tracker,
             )
         )
     else:
@@ -741,6 +751,7 @@ def rag_search(
 
 
 def _build_progress_view(root: Path, tail: int = 5) -> Group:
+    from tree.observability.progress import load_progress
     from tree.services import service_status
     from tree.state.manager import StateManager
 
@@ -756,6 +767,7 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
             str(svc.pid or ""),
         )
 
+    progress_state = load_progress(root)
     material_counts = _source_material_progress(root)
     materials = Table(title="Source Materials", expand=True)
     materials.add_column("Metric")
@@ -764,6 +776,8 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
     materials.add_row("embedded", str(material_counts["embedded"]))
     materials.add_row("structured, waiting embedding", str(material_counts["structured"]))
     materials.add_row("new or changed", str(material_counts["pending"]))
+
+    live_progress = _live_progress_table(progress_state)
 
     state = StateManager(paths.pipeline_state_path(root)).load()
     pipeline = Table(title="Pipeline", expand=True)
@@ -780,7 +794,75 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
 
     trace = _trace_table(root, tail=tail)
     tree_log = _tail_panel(paths.service_log_path(root, "tree"), title="TREE Log Tail")
-    return Group(services, materials, pipeline, trace, tree_log)
+    return Group(services, live_progress, materials, pipeline, trace, tree_log)
+
+
+def _live_progress_table(progress_state: dict[str, object]) -> Table:
+    table = Table(title="Live Progress", expand=True)
+    table.add_column("Track")
+    table.add_column("Progress")
+    table.add_column("Current")
+
+    source_ingest = _dict(progress_state.get("source_ingest"))
+    ocr = _dict(source_ingest.get("ocr"))
+    embedding = _dict(source_ingest.get("embedding"))
+    learning = _dict(progress_state.get("learning_loop"))
+
+    ocr_done = _int_value(ocr.get("pages_done"))
+    ocr_total = _int_value(ocr.get("pages_total"))
+    ocr_file_done = _int_value(ocr.get("files_done"))
+    ocr_file_total = _int_value(ocr.get("files_total"))
+    ocr_label = _progress_label(ocr_done, ocr_total)
+    if ocr_label == "n/a" and ocr_file_total:
+        ocr_label = _progress_label(ocr_file_done, ocr_file_total)
+    table.add_row(
+        "OCR",
+        f"{_progress_bar(ocr_done or ocr_file_done, ocr_total or ocr_file_total)} {ocr_label}",
+        _truncate(str(ocr.get("current_chunk") or ocr.get("current_file") or ocr.get("state") or ""), 42),
+    )
+
+    embed_done = _int_value(embedding.get("chunks_done"))
+    embed_total = _int_value(embedding.get("chunks_total"))
+    table.add_row(
+        "Embedding",
+        f"{_progress_bar(embed_done, embed_total)} {_progress_label(embed_done, embed_total)}",
+        _truncate(str(embedding.get("current_chunk") or embedding.get("state") or ""), 42),
+    )
+
+    stage_index = _int_value(learning.get("stage_index"))
+    stage_total = _int_value(learning.get("stage_total"))
+    point = str(learning.get("knowledge_point") or learning.get("stage_label") or "")
+    table.add_row(
+        "Knowledge",
+        f"{_progress_bar(stage_index, stage_total)} {_progress_label(stage_index, stage_total)}",
+        _truncate(point, 42),
+    )
+
+    stage_rows = _knowledge_stage_rows(str(learning.get("stage") or ""), stage_total or 6)
+    table.add_row("Stage", stage_rows, _truncate(str(progress_state.get("message") or ""), 42))
+    return table
+
+
+def _knowledge_stage_rows(current_stage: str, stage_total: int) -> str:
+    stages = [
+        ("find_knowledge_point", "Find point"),
+        ("examiner_compose_exam", "Examiner exam"),
+        ("student_blind_test", "Student test"),
+        ("examiner_audit", "Examiner audit"),
+        ("writer_drafting", "Writer draft"),
+        ("pass_save_output", "PASS/save"),
+    ][:stage_total]
+    current_index = next((idx for idx, (key, _) in enumerate(stages) if key == current_stage), -1)
+    rendered = []
+    for idx, (key, label) in enumerate(stages):
+        if idx < current_index:
+            marker = "[green]✓[/green]"
+        elif idx == current_index:
+            marker = "[yellow]▶[/yellow]"
+        else:
+            marker = "[dim]·[/dim]"
+        rendered.append(f"{marker} {label}")
+    return "  ".join(rendered)
 
 
 def _source_material_progress(root: Path) -> dict[str, int]:
@@ -802,6 +884,31 @@ def _progress_counts(manifest: dict[str, object], pending: int = 0) -> dict[str,
         "structured": structured,
         "pending": pending + waiting,
     }
+
+
+def _dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _int_value(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _progress_label(done: int, total: int) -> str:
+    if total <= 0:
+        return "n/a"
+    return f"{min(done, total)}/{total}"
+
+
+def _progress_bar(done: int, total: int, width: int = 18) -> str:
+    if total <= 0:
+        return "[dim]" + ("░" * width) + "[/dim]"
+    ratio = max(0.0, min(float(done) / float(total), 1.0))
+    filled = int(round(ratio * width))
+    return "[green]" + ("█" * filled) + "[/green][dim]" + ("░" * (width - filled)) + "[/dim]"
 
 
 def _trace_table(root: Path, tail: int) -> Table:

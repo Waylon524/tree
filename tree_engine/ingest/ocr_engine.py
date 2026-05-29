@@ -21,10 +21,12 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable, Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+_progress_callback: Callable[[dict[str, Any]], None] | None = None
 
 _DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 _DEFAULT_MODEL = "PaddleOCR-VL-1.6"
@@ -68,8 +70,17 @@ class OCREngine:
         path = str(path)
         if path.startswith("http://") or path.startswith("https://"):
             job_id = self._submit_url(path)
+            context = {
+                "state": "submitted",
+                "job_id": job_id,
+                "current_file": path,
+                "current_chunk": path,
+                "chunk_index": 1,
+                "chunks_total": 1,
+            }
+            _emit_progress(context)
             logger.info("Job submitted: %s", job_id)
-            jsonl_url = self._poll(job_id)
+            jsonl_url = self._poll(job_id, context)
             return self._download_result(jsonl_url)
 
         local_path = Path(path)
@@ -81,7 +92,16 @@ class OCREngine:
         """OCR a local PDF, splitting files over the API page limit."""
         page_count = self._pdf_page_count(pdf_path)
         if page_count <= _PDF_MAX_PAGES_PER_JOB:
-            return self._ocr_single_local(pdf_path)
+            return self._ocr_single_local(
+                pdf_path,
+                {
+                    "current_file": pdf_path.name,
+                    "current_chunk": pdf_path.name,
+                    "chunk_index": 1,
+                    "chunks_total": 1,
+                    "file_pages_total": page_count,
+                },
+            )
 
         logger.info(
             "PDF has %d pages; splitting into chunks of <=%d pages before OCR: %s",
@@ -99,16 +119,35 @@ class OCREngine:
                     len(chunk_paths),
                     chunk_path.name,
                 )
-                text = self._ocr_single_local(chunk_path)
+                chunk_pages = self._pdf_page_count(chunk_path)
+                text = self._ocr_single_local(
+                    chunk_path,
+                    {
+                        "current_file": pdf_path.name,
+                        "current_chunk": chunk_path.name,
+                        "chunk_index": index,
+                        "chunks_total": len(chunk_paths),
+                        "file_pages_total": page_count,
+                        "chunk_pages_total": chunk_pages,
+                    },
+                )
                 if text.strip():
                     parts.append(text)
         return "\n\n".join(parts)
 
-    def _ocr_single_local(self, path: Path) -> str:
+    def _ocr_single_local(self, path: Path, context: dict[str, Any] | None = None) -> str:
         """OCR one local file without additional splitting."""
+        context = {
+            "current_file": path.name,
+            "current_chunk": path.name,
+            "chunk_index": 1,
+            "chunks_total": 1,
+            **(context or {}),
+        }
         job_id = self._submit_local(str(path))
+        _emit_progress({"state": "submitted", "job_id": job_id, **context})
         logger.info("Job submitted: %s", job_id)
-        jsonl_url = self._poll(job_id)
+        jsonl_url = self._poll(job_id, context)
         return self._download_result(jsonl_url)
 
     @staticmethod
@@ -172,8 +211,9 @@ class OCREngine:
         resp.raise_for_status()
         return resp.json()["data"]["jobId"]
 
-    def _poll(self, job_id: str) -> str:
+    def _poll(self, job_id: str, context: dict[str, Any] | None = None) -> str:
         """Poll job status until done, return JSONL result URL."""
+        context = context or {}
         deadline = time.time() + self._poll_timeout
         while time.time() < deadline:
             resp = self._client.get(f"{self._job_url}/{job_id}", headers=self._headers())
@@ -183,18 +223,48 @@ class OCREngine:
 
             if state == "done":
                 pages = body.get("extractProgress", {}).get("extractedPages", "?")
+                pages_done, pages_total = _progress_pages(
+                    _int_or_none(pages),
+                    _int_or_none(body.get("extractProgress", {}).get("totalPages", pages)),
+                    context,
+                )
+                _emit_progress(
+                    {
+                        "state": "done",
+                        "job_id": job_id,
+                        "pages_done": pages_done,
+                        "pages_total": pages_total,
+                        **context,
+                    }
+                )
                 logger.info("Job done: %s pages extracted", pages)
                 return body["resultUrl"]["jsonUrl"]
 
             if state == "failed":
+                _emit_progress({"state": "failed", "job_id": job_id, **context})
                 raise RuntimeError(f"OCR job failed: {body.get('errorMsg', 'unknown')}")
 
             if state == "running":
                 prog = body.get("extractProgress", {})
                 total = prog.get("totalPages", "?")
                 done = prog.get("extractedPages", "?")
+                pages_done, pages_total = _progress_pages(
+                    _int_or_none(done),
+                    _int_or_none(total),
+                    context,
+                )
+                _emit_progress(
+                    {
+                        "state": "running",
+                        "job_id": job_id,
+                        "pages_done": pages_done,
+                        "pages_total": pages_total,
+                        **context,
+                    }
+                )
                 logger.debug("Job running: %s/%s pages", done, total)
             else:
+                _emit_progress({"state": state, "job_id": job_id, **context})
                 logger.debug("Job state: %s", state)
 
             time.sleep(self._poll_interval)
@@ -236,3 +306,42 @@ def get_engine(job_url: str | None = None, token: str | None = None, **kwargs) -
         token: API token, or set PADDLEOCR_API_TOKEN env var.
     """
     return OCREngine(job_url=job_url, token=token, **kwargs)
+
+
+def set_progress_callback(callback: Callable[[dict[str, Any]], None] | None) -> None:
+    global _progress_callback
+    _progress_callback = callback
+
+
+def _emit_progress(event: dict[str, Any]) -> None:
+    if _progress_callback is None:
+        return
+    try:
+        _progress_callback(event)
+    except Exception:
+        logger.debug("OCR progress callback failed", exc_info=True)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _progress_pages(
+    pages_done: int | None,
+    pages_total: int | None,
+    context: dict[str, Any],
+) -> tuple[int | None, int | None]:
+    chunks_total = _int_or_none(context.get("chunks_total")) or 1
+    if chunks_total <= 1:
+        return pages_done, pages_total
+
+    file_total = _int_or_none(context.get("file_pages_total"))
+    chunk_index = _int_or_none(context.get("chunk_index")) or 1
+    if file_total is None or pages_done is None:
+        return pages_done, pages_total
+
+    pages_before_chunk = max(0, chunk_index - 1) * _PDF_MAX_PAGES_PER_JOB
+    return min(file_total, pages_before_chunk + pages_done), file_total

@@ -126,6 +126,38 @@ tre doctor
 
 `doctor` 会检查 Python、`tre` 是否在 PATH 中、包安装位置、`TREE_HOME`、全局配置、当前 workspace 目录、embedding server 和 Git 状态。它不会修改配置。
 
+`/progress` 和 `/watch` 会读取 `.tree/runtime/progress.json`，显示 OCR 页级进度、source embedding 进度，以及当前知识点所处阶段：寻找知识点、Examiner 出卷、Student 盲测、Examiner 审核、Writer 写草稿和 PASS 保存。
+
+### 更新
+
+如果通过 `pipx install` 安装，更新前建议先在任意 workspace 停止后台服务：
+
+```bash
+tre quit
+```
+
+然后更新引擎：
+
+```bash
+pipx upgrade tree-engine
+```
+
+如果想强制从 GitHub 重新安装最新版：
+
+```bash
+pipx uninstall tree-engine
+pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
+```
+
+更新后检查：
+
+```bash
+tre --help
+tre doctor
+```
+
+更新不会删除课程文件夹中的 `materials/`、`outputs/`、`.tree/`，也不会删除用户目录 `~/.tree/config.env`。API key、模型配置和已有 workspace 状态会保留。
+
 ### 配置
 
 第一次运行需要配置的命令时，例如 `tre start` 或 `tre ingest`，如果用户目录没有全局配置，CLI 会自动启动交互式配置向导。也可以手动运行：
@@ -717,6 +749,38 @@ tre doctor
 ```
 
 `doctor` checks Python, whether `tre` is on PATH, package location, `TREE_HOME`, global config, the current workspace folders, the embedding server, and Git state. It does not modify configuration.
+
+`/progress` and `/watch` read `.tree/runtime/progress.json` and show OCR page progress, source embedding progress, and the current knowledge-point stage: finding the point, Examiner exam assembly, Student blind test, Examiner audit, Writer drafting, and PASS/save.
+
+### Update
+
+If tree was installed with `pipx install`, first stop background services from any workspace:
+
+```bash
+tre quit
+```
+
+Then update the engine:
+
+```bash
+pipx upgrade tree-engine
+```
+
+To force reinstall the latest version from GitHub:
+
+```bash
+pipx uninstall tree-engine
+pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
+```
+
+After updating, check:
+
+```bash
+tre --help
+tre doctor
+```
+
+Updating does not delete `materials/`, `outputs/`, or `.tree/` in course folders, and it does not delete the user-level `~/.tree/config.env`. API keys, model settings, and existing workspace state are preserved.
 
 ### Configuration
 

@@ -9,10 +9,11 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from ingest.ocr_engine import get_engine
+from ingest.ocr_engine import get_engine, set_progress_callback
 from ingest.pipeline import extract_text
 
 from tree.config import Settings
+from tree.observability.progress import ProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +44,30 @@ async def ingest_path(
     archivist: MarkdownStructurer | None = None,
     collection: str | None = None,
     indexer: SourceIndexer | None = None,
+    progress: ProgressTracker | None = None,
+    track_files: bool = True,
 ) -> list[Path]:
     """Ingest one file or a directory into structured source Markdown files."""
-    _configure_ocr(settings)
+    _configure_ocr(settings, progress)
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     ocr_sem = asyncio.Semaphore(settings.source_ocr_concurrency)
     archivist_sem = asyncio.Semaphore(settings.source_archivist_concurrency)
     embedding_sem = asyncio.Semaphore(settings.source_embedding_concurrency)
+
+    async def ingest_file_with_path(path: Path) -> tuple[Path, list[Path]]:
+        outputs = await _ingest_file_pipeline(
+            path,
+            output_dir,
+            settings,
+            archivist=archivist,
+            collection=collection,
+            indexer=indexer,
+            ocr_sem=ocr_sem,
+            archivist_sem=archivist_sem,
+            embedding_sem=embedding_sem,
+        )
+        return path, outputs
 
     if input_path.is_file():
         outputs = await _ingest_file_pipeline(
@@ -64,24 +81,24 @@ async def ingest_path(
             archivist_sem=archivist_sem,
             embedding_sem=embedding_sem,
         )
+        if progress and track_files:
+            progress.source_file_done(input_path.name, 1, 1)
         return outputs
     if input_path.is_dir():
-        tasks = [
-            _ingest_file_pipeline(
-                path,
-                output_dir,
-                settings,
-                archivist=archivist,
-                collection=collection,
-                indexer=indexer,
-                ocr_sem=ocr_sem,
-                archivist_sem=archivist_sem,
-                embedding_sem=embedding_sem,
-            )
+        input_files = [
+            path
             for path in sorted(input_path.iterdir())
             if path.is_file() and not path.name.startswith(".")
         ]
-        output_groups = await asyncio.gather(*tasks)
+        tasks = [asyncio.create_task(ingest_file_with_path(path)) for path in input_files]
+        output_groups = []
+        files_done = 0
+        for task in asyncio.as_completed(tasks):
+            path, outputs = await task
+            output_groups.append(outputs)
+            files_done += 1
+            if progress and track_files:
+                progress.source_file_done(path.name, files_done, len(input_files))
         return [out for outputs in output_groups for out in outputs]
     raise FileNotFoundError(f"Input not found: {input_path}")
 
@@ -256,12 +273,13 @@ def _heading_level(line: str) -> int | None:
     return None
 
 
-def _configure_ocr(settings: Settings) -> None:
+def _configure_ocr(settings: Settings, progress: ProgressTracker | None = None) -> None:
     get_engine(
         job_url=settings.paddleocr_api_url or None,
         token=settings.paddleocr_api_token or None,
         model=settings.paddleocr_model,
     )
+    set_progress_callback(progress.ocr_event if progress else None)
 
 
 async def _index_output(

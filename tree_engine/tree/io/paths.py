@@ -64,6 +64,10 @@ def pipeline_state_path(root: Path) -> Path:
     return runtime_root(root) / "pipeline-state.json"
 
 
+def progress_path(root: Path) -> Path:
+    return runtime_root(root) / "progress.json"
+
+
 def rag_store_path(root: Path) -> Path:
     return runtime_root(root) / "rag-store"
 
