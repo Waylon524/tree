@@ -45,6 +45,10 @@ log() {
   printf '\n==> %s\n' "$1"
 }
 
+log_stderr() {
+  printf '\n==> %s\n' "$1" >&2
+}
+
 fail() {
   printf '\nERROR: %s\n' "$1" >&2
   exit 1
@@ -94,7 +98,7 @@ venv_python() {
   else
     local py
     py="$(find_python)"
-    log "Creating .venv with $py"
+    log_stderr "Creating .venv with $py"
     "$py" -m venv .venv
     printf '%s\n' "$PROJECT_ROOT/.venv/bin/python"
   fi
