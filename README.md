@@ -103,19 +103,30 @@ cd tree
 
 可以用下面的命令检查：
 
+macOS / Linux：
+
 ```bash
 pwd
 ls pyproject.toml README.md scripts
 ```
 
+Windows PowerShell：
+
+```powershell
+Get-Location
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
 2. 创建并进入 Python 虚拟环境：
+
+macOS / Linux：
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 
-Windows PowerShell 使用：
+Windows PowerShell：
 
 ```powershell
 py -3.12 -m venv .venv
@@ -148,13 +159,30 @@ pip install -e ".[rag,dev]"
 tree-run --help
 ```
 
-如果 `tree-run` 暂时不可用，说明当前 shell 还没有识别虚拟环境中的命令。先确认已经执行 `source .venv/bin/activate`，也可以临时使用：
+如果 `tree-run` 暂时不可用，说明当前 shell 还没有识别虚拟环境中的命令。先确认已经激活虚拟环境，也可以临时使用源码入口。
+
+macOS / Linux：
 
 ```bash
 PYTHONPATH=. python -m tree.cli --help
 ```
 
-6. 安装本地 embedding server 依赖。这一步会安装或编译 `llama-cpp-python`：
+Windows PowerShell：
+
+```powershell
+$env:PYTHONPATH = "."
+python -m tree.cli --help
+```
+
+6. 确认本地 embedding 依赖可用：
+
+```bash
+python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
+```
+
+如果这条命令通过，可以直接进入下一步。
+
+如果你在 macOS / Linux 上需要重新编译 GPU/Metal/CUDA 版本的 `llama-cpp-python`，可以运行：
 
 ```bash
 ./scripts/setup-embedding.sh
@@ -178,10 +206,20 @@ NVIDIA CUDA：
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-7. 启动 embedding server：
+Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。Windows 已在 `pip install -e ".[rag]"` 中安装 embedding 依赖。
+
+7. 启动 embedding server。
+
+macOS / Linux：
 
 ```bash
 ./scripts/start-embed-server.sh
+```
+
+Windows PowerShell：
+
+```powershell
+scripts\start-embed-server.bat
 ```
 
 首次启动会自动下载 `Qwen3-Embedding-4B-Q8_0.gguf`，约 4.3 GB。下载完成后模型会留在本机 Hugging Face 缓存中，之后换工作区通常不需要重新下载。
@@ -190,13 +228,23 @@ NVIDIA CUDA：
 
 8. 在新终端标签页中回到项目根目录，并激活同一个 `.venv`：
 
+macOS / Linux：
+
 ```bash
 cd /path/to/tree
 source .venv/bin/activate
 ls pyproject.toml README.md scripts
 ```
 
-如果你是按上面的命令克隆的，`/path/to/tree` 就是你的 `tree` 仓库目录。确认当前目录能看到 `pyproject.toml` 后，再继续。
+Windows PowerShell：
+
+```powershell
+cd C:\path\to\tree
+.\.venv\Scripts\Activate.ps1
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
+把 `/path/to/tree` 或 `C:\path\to\tree` 替换成你的实际仓库路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
 
 9. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
 
@@ -227,12 +275,23 @@ cd tree-new
 
 可以用下面的命令检查：
 
+macOS / Linux：
+
 ```bash
 pwd
 ls pyproject.toml README.md scripts
 ```
 
+Windows PowerShell：
+
+```powershell
+Get-Location
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
 2. 在新工作区创建并激活虚拟环境：
+
+macOS / Linux：
 
 ```bash
 python3.12 -m venv .venv
@@ -273,10 +332,20 @@ Apple Silicon 可用：
 ./scripts/setup-embedding.sh --device metal
 ```
 
-5. 启动 embedding server：
+Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。
+
+5. 启动 embedding server。
+
+macOS / Linux：
 
 ```bash
 ./scripts/start-embed-server.sh
+```
+
+Windows PowerShell：
+
+```powershell
+scripts\start-embed-server.bat
 ```
 
 如果本地模型缓存还在，这一步会直接复用缓存，不会重新下载 4.3 GB 模型。
@@ -285,13 +354,23 @@ Apple Silicon 可用：
 
 6. 在新终端标签页中回到 `tree-new` 项目根目录，并激活同一个 `.venv`：
 
+macOS / Linux：
+
 ```bash
 cd /path/to/tree-new
 source .venv/bin/activate
 ls pyproject.toml README.md scripts
 ```
 
-如果你不确定路径，回到 Finder 中把 `tree-new` 文件夹拖进终端，或在旧终端里运行 `pwd` 复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
+Windows PowerShell：
+
+```powershell
+cd C:\path\to\tree-new
+.\.venv\Scripts\Activate.ps1
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
+把 `/path/to/tree-new` 或 `C:\path\to\tree-new` 替换成你的实际工作区路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
 
 7. 每个工作区都需要自己的 `.env`。运行配置向导：
 
@@ -323,7 +402,9 @@ Get-ChildItem .. -Recurse -Filter Activate.ps1 -ErrorAction SilentlyContinue
 
 tree 默认使用 `Qwen/Qwen3-Embedding-4B-GGUF` 中的 `Qwen3-Embedding-4B-Q8_0.gguf`。首次启动 embedding server 时会自动下载模型，文件大小约 4.3 GB。
 
-安装 `llama-cpp-python` 和服务依赖：
+`pip install -e ".[rag]"` 已经安装了 embedding server 所需的 Python 依赖。下面的 `setup-embedding.sh` 主要用于 macOS / Linux 上重新编译或强制选择 Metal/CUDA/CPU 版本的 `llama-cpp-python`。
+
+macOS / Linux：
 
 ```bash
 ./scripts/setup-embedding.sh
@@ -347,13 +428,23 @@ NVIDIA CUDA：
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-启动 embedding server：
+Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；如果 `pip install -e ".[rag]"` 已成功，可以直接启动服务。
+
+启动 embedding server。
+
+macOS / Linux：
 
 ```bash
 ./scripts/start-embed-server.sh
 ```
 
-这个终端会被 embedding server 占用。运行 `tree-run setup`、`tree-run run`、`tree-run ingest` 等命令时，请新开一个终端标签页，回到项目根目录，重新执行 `source .venv/bin/activate` 后再运行。
+Windows PowerShell：
+
+```powershell
+scripts\start-embed-server.bat
+```
+
+这个终端会被 embedding server 占用。运行 `tree-run setup`、`tree-run run`、`tree-run ingest` 等命令时，请新开一个终端标签页，回到项目根目录，重新激活虚拟环境后再运行：macOS / Linux 使用 `source .venv/bin/activate`，Windows PowerShell 使用 `.\.venv\Scripts\Activate.ps1`。
 
 默认配置：
 
@@ -405,9 +496,19 @@ tree-run models \
 
 如果 `tree-run setup` 仍然询问 `PaddleOCR job API URL` 或 `PaddleOCR model`，说明你当前安装的是旧版本。请在项目根目录运行：
 
+macOS / Linux：
+
 ```bash
 git pull
 source .venv/bin/activate
+pip install -e ".[rag]"
+```
+
+Windows PowerShell：
+
+```powershell
+git pull
+.\.venv\Scripts\Activate.ps1
 pip install -e ".[rag]"
 ```
 
@@ -486,8 +587,17 @@ raw_materials/
 
 启动流水线：
 
+macOS / Linux：
+
 ```bash
 source .venv/bin/activate
+tree-run run
+```
+
+Windows PowerShell：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 tree-run run
 ```
 
@@ -639,19 +749,44 @@ pip install -e ".[rag]"
 ./scripts/start-embed-server.sh
 ```
 
+Windows PowerShell：
+
+```powershell
+pip install -e ".[rag]"
+scripts\start-embed-server.bat
+```
+
 **`tree-run` 无法导入本地包**
 
 先确认已经在虚拟环境中安装当前项目：
+
+macOS / Linux：
 
 ```bash
 source .venv/bin/activate
 pip install -e .
 ```
 
-源码调试时也可临时使用：
+Windows PowerShell：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+```
+
+源码调试时也可临时使用。
+
+macOS / Linux：
 
 ```bash
 PYTHONPATH=. python -m tree.cli --help
+```
+
+Windows PowerShell：
+
+```powershell
+$env:PYTHONPATH = "."
+python -m tree.cli --help
 ```
 
 **GitHub 仓库名**
@@ -760,12 +895,23 @@ All following commands must be run from this **project root**. The project root 
 
 Check with:
 
+macOS / Linux:
+
 ```bash
 pwd
 ls pyproject.toml README.md scripts
 ```
 
+Windows PowerShell:
+
+```powershell
+Get-Location
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
 2. Create and activate a Python virtual environment:
+
+macOS / Linux:
 
 ```bash
 python3.12 -m venv .venv
@@ -805,13 +951,30 @@ pip install -e ".[rag,dev]"
 tree-run --help
 ```
 
-If `tree-run` is not found, make sure the virtual environment is active. You can also use this source-checkout fallback:
+If `tree-run` is not found, make sure the virtual environment is active. You can also use this source-checkout fallback.
+
+macOS / Linux:
 
 ```bash
 PYTHONPATH=. python -m tree.cli --help
 ```
 
-6. Install local embedding server dependencies. This installs or compiles `llama-cpp-python`:
+Windows PowerShell:
+
+```powershell
+$env:PYTHONPATH = "."
+python -m tree.cli --help
+```
+
+6. Confirm that local embedding dependencies are available:
+
+```bash
+python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
+```
+
+If this command succeeds, continue to the next step.
+
+If you need to rebuild the GPU/Metal/CUDA version of `llama-cpp-python` on macOS / Linux, run:
 
 ```bash
 ./scripts/setup-embedding.sh
@@ -835,10 +998,20 @@ NVIDIA CUDA:
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-7. Start the embedding server:
+Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script. Windows embedding dependencies were installed by `pip install -e ".[rag]"`.
+
+7. Start the embedding server.
+
+macOS / Linux:
 
 ```bash
 ./scripts/start-embed-server.sh
+```
+
+Windows PowerShell:
+
+```powershell
+scripts\start-embed-server.bat
 ```
 
 The first start downloads `Qwen3-Embedding-4B-Q8_0.gguf`, about 4.3 GB. After that, the model stays in the local Hugging Face cache, so a second workspace usually does not download it again.
@@ -847,13 +1020,23 @@ This command keeps running and occupies the current terminal. After you see `Mod
 
 8. In the new terminal tab, return to the project root and activate the same `.venv`:
 
+macOS / Linux:
+
 ```bash
 cd /path/to/tree
 source .venv/bin/activate
 ls pyproject.toml README.md scripts
 ```
 
-If you cloned exactly as shown above, `/path/to/tree` is your `tree` repository directory. Continue only after `pyproject.toml` is visible.
+Windows PowerShell:
+
+```powershell
+cd C:\path\to\tree
+.\.venv\Scripts\Activate.ps1
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
+Replace `/path/to/tree` or `C:\path\to\tree` with your real repository path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
 
 9. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
 
@@ -884,12 +1067,23 @@ All following commands must be run from the `tree-new` **project root**. The pro
 
 Check with:
 
+macOS / Linux:
+
 ```bash
 pwd
 ls pyproject.toml README.md scripts
 ```
 
+Windows PowerShell:
+
+```powershell
+Get-Location
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
 2. Create and activate a virtual environment in the new workspace:
+
+macOS / Linux:
 
 ```bash
 python3.12 -m venv .venv
@@ -930,10 +1124,20 @@ Apple Silicon:
 ./scripts/setup-embedding.sh --device metal
 ```
 
-5. Start the embedding server:
+Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script.
+
+5. Start the embedding server.
+
+macOS / Linux:
 
 ```bash
 ./scripts/start-embed-server.sh
+```
+
+Windows PowerShell:
+
+```powershell
+scripts\start-embed-server.bat
 ```
 
 If the local model cache is still present, this reuses it without downloading the 4.3 GB model again.
@@ -942,13 +1146,23 @@ This command keeps running and occupies the current terminal. After you see `Mod
 
 6. In the new terminal tab, return to the `tree-new` project root and activate the same `.venv`:
 
+macOS / Linux:
+
 ```bash
 cd /path/to/tree-new
 source .venv/bin/activate
 ls pyproject.toml README.md scripts
 ```
 
-If you are not sure about the path, run `pwd` in the old terminal and copy the full path. Continue only after `pyproject.toml` is visible.
+Windows PowerShell:
+
+```powershell
+cd C:\path\to\tree-new
+.\.venv\Scripts\Activate.ps1
+Get-ChildItem pyproject.toml, README.md, scripts
+```
+
+Replace `/path/to/tree-new` or `C:\path\to\tree-new` with your real workspace path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
 
 7. Each workspace needs its own `.env`. Run the setup wizard:
 
@@ -980,7 +1194,9 @@ Get-ChildItem .. -Recurse -Filter Activate.ps1 -ErrorAction SilentlyContinue
 
 tree uses `Qwen3-Embedding-4B-Q8_0.gguf` from `Qwen/Qwen3-Embedding-4B-GGUF` by default. The model is downloaded automatically on the first embedding server start. The file is about 4.3 GB.
 
-Install `llama-cpp-python` and service dependencies:
+`pip install -e ".[rag]"` already installs the Python dependencies required by the embedding server. The `setup-embedding.sh` script below is mainly for rebuilding or forcing a Metal/CUDA/CPU `llama-cpp-python` variant on macOS / Linux.
+
+macOS / Linux:
 
 ```bash
 ./scripts/setup-embedding.sh
@@ -1004,13 +1220,23 @@ NVIDIA CUDA:
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-Start the embedding server:
+Windows PowerShell users usually do not need to run `setup-embedding.sh`; if `pip install -e ".[rag]"` succeeded, start the server directly.
+
+Start the embedding server.
+
+macOS / Linux:
 
 ```bash
 ./scripts/start-embed-server.sh
 ```
 
-This terminal is now occupied by the embedding server. To run `tree-run setup`, `tree-run run`, or `tree-run ingest`, open a new terminal tab, return to the project root, and activate `.venv` again first.
+Windows PowerShell:
+
+```powershell
+scripts\start-embed-server.bat
+```
+
+This terminal is now occupied by the embedding server. To run `tree-run setup`, `tree-run run`, or `tree-run ingest`, open a new terminal tab, return to the project root, and activate the virtual environment again first: use `source .venv/bin/activate` on macOS / Linux or `.\.venv\Scripts\Activate.ps1` on Windows PowerShell.
 
 Default settings:
 
@@ -1062,9 +1288,19 @@ tree-run models \
 
 If `tree-run setup` still asks for `PaddleOCR job API URL` or `PaddleOCR model`, your installed checkout is old. From the project root, run:
 
+macOS / Linux:
+
 ```bash
 git pull
 source .venv/bin/activate
+pip install -e ".[rag]"
+```
+
+Windows PowerShell:
+
+```powershell
+git pull
+.\.venv\Scripts\Activate.ps1
 pip install -e ".[rag]"
 ```
 
@@ -1133,8 +1369,17 @@ raw_materials/
 
 Start the pipeline:
 
+macOS / Linux:
+
 ```bash
 source .venv/bin/activate
+tree-run run
+```
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 tree-run run
 ```
 
@@ -1262,19 +1507,44 @@ pip install -e ".[rag]"
 ./scripts/start-embed-server.sh
 ```
 
+Windows PowerShell:
+
+```powershell
+pip install -e ".[rag]"
+scripts\start-embed-server.bat
+```
+
 **`tree-run` cannot import the local package**
 
 Install the project into the active environment:
+
+macOS / Linux:
 
 ```bash
 source .venv/bin/activate
 pip install -e .
 ```
 
-Or use the source-checkout fallback:
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+```
+
+Or use the source-checkout fallback.
+
+macOS / Linux:
 
 ```bash
 PYTHONPATH=. python -m tree.cli --help
+```
+
+Windows PowerShell:
+
+```powershell
+$env:PYTHONPATH = "."
+python -m tree.cli --help
 ```
 
 **GitHub repository name**
