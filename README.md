@@ -690,6 +690,8 @@ tree-run
 ```text
 /continue
 /status
+/progress
+/watch
 /stop
 /quit
 /logs --tail 20
@@ -711,6 +713,8 @@ tree-run run
 tree-run resume
 tree-run status
 tree-run status --verbose
+tree-run progress
+tree-run watch
 tree-run doctor
 tree-run materials
 tree-run logs --tail 20
@@ -735,6 +739,8 @@ tree-run rag search "化学平衡常数" --kind source --top-k 5
 | `quit` | 停止 TREE 和 embedding server |
 | `resume` | 前台从现有状态继续，适合调试 |
 | `status` | 查看章节进度 |
+| `progress` | 查看服务、资料入库、章节和最近 trace 的一屏进度 |
+| `watch` | 持续刷新当前进度，按 `Ctrl+C` 返回 |
 | `doctor` | 检查环境、服务和 Git 状态 |
 | `materials` | 查看 raw materials 摄入状态 |
 | `logs` | 查看 trace 日志 |
@@ -1563,6 +1569,8 @@ At the `TREE>` prompt, type:
 ```text
 /continue
 /status
+/progress
+/watch
 /stop
 /quit
 /logs --tail 20
@@ -1584,6 +1592,8 @@ tree-run run
 tree-run resume
 tree-run status
 tree-run status --verbose
+tree-run progress
+tree-run watch
 tree-run doctor
 tree-run materials
 tree-run logs --tail 20
@@ -1606,6 +1616,8 @@ tree-run rag search "equilibrium constant" --kind source --top-k 5
 | `quit` | Stop TREE and the embedding server |
 | `resume` | Continue from existing state in the foreground, useful for debugging |
 | `status` | Show chapter progress |
+| `progress` | Show a dashboard snapshot of services, ingest, chapters, and recent trace |
+| `watch` | Refresh current progress until `Ctrl+C` returns to the prompt |
 | `doctor` | Check configuration, services, and Git status |
 | `materials` | Show raw material ingest status |
 | `logs` | Inspect trace logs |

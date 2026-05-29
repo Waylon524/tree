@@ -9,10 +9,13 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import click
 import typer
+from rich.console import Group
+from rich.live import Live
 from rich import print as rprint
 from rich.panel import Panel
 from rich.table import Table
@@ -37,6 +40,8 @@ _INTERACTIVE_ALIASES = {
 _INTERACTIVE_COMMANDS = [
     ("/continue", "Start or continue TREE in the background"),
     ("/status", "Show service and pipeline status"),
+    ("/progress", "Show current services, ingest, chapter, and recent trace"),
+    ("/watch", "Refresh /progress until Ctrl+C"),
     ("/stop", "Stop TREE but keep embedding running"),
     ("/quit", "Stop TREE and embedding, then leave interactive mode"),
     ("/logs --tail 20", "Show recent pipeline trace entries"),
@@ -141,6 +146,7 @@ def continue_(
 
     tree = start_tree(root)
     rprint(f"[green]{tree.message}[/green] pid={tree.pid} log={tree.log_path}")
+    rprint("[dim]Use /watch in interactive mode, or tree-run watch, to follow progress.[/dim]")
 
 
 @app.command()
@@ -385,6 +391,31 @@ def logs(
             str(entry.get("duration_ms", "")),
         )
     rprint(table)
+
+
+@app.command()
+def progress(
+    tail: int = typer.Option(5, "--tail", "-n", min=1, max=20, help="Recent trace entries"),
+) -> None:
+    """Show a dashboard-style snapshot of current TREE progress."""
+    rprint(_build_progress_view(Path.cwd(), tail=tail))
+
+
+@app.command()
+def watch(
+    interval: float = typer.Option(3.0, "--interval", "-i", min=1.0, help="Refresh interval in seconds"),
+    tail: int = typer.Option(5, "--tail", "-n", min=1, max=20, help="Recent trace entries"),
+) -> None:
+    """Continuously refresh current TREE progress until Ctrl+C."""
+    root = Path.cwd()
+    rprint("[dim]Watching TREE progress. Press Ctrl+C to return to the prompt.[/dim]")
+    try:
+        with Live(_build_progress_view(root, tail=tail), refresh_per_second=4) as live:
+            while True:
+                time.sleep(interval)
+                live.update(_build_progress_view(root, tail=tail))
+    except KeyboardInterrupt:
+        rprint("\n[dim]Stopped watching. TREE services were not changed.[/dim]")
 
 
 @app.command()
@@ -667,11 +698,121 @@ def rag_search(
         rprint(Panel(excerpt, title=f"#{idx} {source} score={score_text}"))
 
 
+def _build_progress_view(root: Path, tail: int = 5) -> Group:
+    from tree.services import service_status
+    from tree.state.manager import StateManager
+
+    services = Table(title="Services", expand=True)
+    services.add_column("Service")
+    services.add_column("Status")
+    services.add_column("PID")
+    for name in ("tree", "embedding"):
+        svc = service_status(root, name)
+        services.add_row(
+            name,
+            "[green]running[/green]" if svc.running else "[dim]stopped[/dim]",
+            str(svc.pid or ""),
+        )
+
+    material_counts = _source_material_progress(root)
+    materials = Table(title="Source Materials", expand=True)
+    materials.add_column("Metric")
+    materials.add_column("Count", justify="right")
+    materials.add_row("known raw materials", str(material_counts["total"]))
+    materials.add_row("embedded", str(material_counts["embedded"]))
+    materials.add_row("structured, waiting embedding", str(material_counts["structured"]))
+    materials.add_row("new or changed", str(material_counts["pending"]))
+
+    state = StateManager(paths.pipeline_state_path(root)).load()
+    pipeline = Table(title="Pipeline", expand=True)
+    pipeline.add_column("Metric")
+    pipeline.add_column("Value")
+    completed = [ch for ch in state.chapters if ch.status == "completed"]
+    active = next((ch for ch in state.chapters if ch.status == "in_progress"), None)
+    pipeline.add_row("completed chapters", str(len(completed)))
+    pipeline.add_row("active chapter", active.chapter_name if active else "(none)")
+    pipeline.add_row(
+        "active completed files",
+        str(len(active.files_completed)) if active else "0",
+    )
+
+    trace = _trace_table(root, tail=tail)
+    tree_log = _tail_panel(paths.service_log_path(root, "tree"), title="TREE Log Tail")
+    return Group(services, materials, pipeline, trace, tree_log)
+
+
+def _source_material_progress(root: Path) -> dict[str, int]:
+    from tree.engine import _load_source_manifest, _pending_raw_materials
+
+    manifest = _load_source_manifest(root)
+    pending = len(_pending_raw_materials(root, manifest))
+    return _progress_counts(manifest, pending=pending)
+
+
+def _progress_counts(manifest: dict[str, object], pending: int = 0) -> dict[str, int]:
+    entries = [entry for entry in manifest.values() if isinstance(entry, dict)]
+    embedded = sum(1 for entry in entries if entry.get("embedded") is True)
+    structured = sum(1 for entry in entries if entry.get("outputs") and entry.get("embedded") is not True)
+    waiting = sum(1 for entry in entries if not entry.get("outputs") and entry.get("embedded") is not True)
+    return {
+        "total": len(entries) + pending,
+        "embedded": embedded,
+        "structured": structured,
+        "pending": pending + waiting,
+    }
+
+
+def _trace_table(root: Path, tail: int) -> Table:
+    entries = _load_trace_entries(root)[-tail:]
+    table = Table(title=f"Recent Trace (last {tail})", expand=True)
+    for col in ("step", "agent", "action", "chapter", "file_seq", "route"):
+        table.add_column(col)
+    if not entries:
+        table.add_row("", "", "[dim]No trace yet[/dim]", "", "", "")
+        return table
+    for entry in entries:
+        table.add_row(
+            str(entry.get("step", "")),
+            str(entry.get("agent", "")),
+            str(entry.get("action", "")),
+            _truncate(str(entry.get("chapter", "")), 28),
+            str(entry.get("file_seq", "")),
+            str(entry.get("route", "")),
+        )
+    return table
+
+
+def _load_trace_entries(root: Path) -> list[dict[str, object]]:
+    trace_path = paths.pipeline_temp_root(root) / "trace.jsonl"
+    if not trace_path.exists():
+        return []
+    entries = []
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+def _tail_panel(path: Path, title: str, line_count: int = 6) -> Panel:
+    if not path.exists():
+        return Panel("[dim]No log yet.[/dim]", title=title)
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    if not lines:
+        return Panel("[dim]No log entries yet.[/dim]", title=title)
+    return Panel("\n".join(lines[-line_count:]), title=title)
+
+
 def _interactive_shell() -> None:
     rprint(
         Panel(
             "Type [bold]/continue[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
-            "or [bold]/help[/bold] for commands.",
+            "[bold]/watch[/bold] to follow progress, or [bold]/help[/bold] for commands.",
             title="TREE Interactive",
         )
     )
