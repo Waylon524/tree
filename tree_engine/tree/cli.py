@@ -56,7 +56,8 @@ _INTERACTIVE_COMMANDS = [
     ("/help", "Show this slash-command help"),
     ("/exit", "Leave interactive mode without stopping services"),
 ]
-_TREE_THEME = "#003366"
+_TREE_BORDER = "#8B5A2B"
+_TREE_TITLE = "#2E7D32"
 _DEFAULT_ENV = {
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
@@ -862,8 +863,8 @@ def _interactive_shell() -> None:
         Panel(
             "Type [bold]/start[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
             "[bold]/watch[/bold] to follow progress, or [bold]/help[/bold] for commands.",
-            title=f"[bold {_TREE_THEME}]TREE[/]",
-            border_style=_TREE_THEME,
+            title=f"[bold {_TREE_TITLE}]TREE[/]",
+            border_style=_TREE_BORDER,
         )
     )
     while True:
@@ -920,8 +921,8 @@ def _print_interactive_help(args: list[str] | None = None) -> None:
         _invoke_cli_args([args[0], "--help", *args[1:]])
         return
     table = Table(
-        title=f"[bold {_TREE_THEME}]TREE Slash Commands[/]",
-        border_style=_TREE_THEME,
+        title=f"[bold {_TREE_TITLE}]TREE Slash Commands[/]",
+        border_style=_TREE_BORDER,
     )
     table.add_column("Command")
     table.add_column("Action")
