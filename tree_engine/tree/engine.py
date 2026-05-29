@@ -27,6 +27,7 @@ from tree.state.models import (
     ExamSections,
     ExamTooBroadContext,
     IterationState,
+    PipelineState,
     Route,
     WriterResult,
 )
@@ -250,6 +251,8 @@ class TreeEngine:
         while True:
             self._raise_if_stop_requested()
             state = self.state_mgr.load()
+            chapter = next(c for c in state.chapters if c.chapter_name == chapter_name)
+            state = self._reconcile_finished_outputs(state, chapter_name)
             chapter = next(c for c in state.chapters if c.chapter_name == chapter_name)
             next_seq = str(len(chapter.files_completed) + 1).zfill(2)
 
@@ -573,6 +576,28 @@ class TreeEngine:
             state = self.state_mgr.load()
             state = self.state_mgr.add_file_completed(state, iter_state.chapter, filename)
             self.state_mgr.save(state)
+
+    def _reconcile_finished_outputs(self, state: PipelineState, chapter_name: str) -> PipelineState:
+        """Record finished output files that were saved before a previous crash."""
+        chapter = next((ch for ch in state.chapters if ch.chapter_name == chapter_name), None)
+        if chapter is None:
+            return state
+        completed = set(chapter.files_completed)
+        output_dir = paths.outputs_root(self.settings.project_root) / chapter_name
+        if not output_dir.exists():
+            return state
+
+        reconciled = state
+        changed = False
+        for path in sorted(output_dir.glob("*.md")):
+            if path.name in completed:
+                continue
+            reconciled = self.state_mgr.add_file_completed(reconciled, chapter_name, path.name)
+            completed.add(path.name)
+            changed = True
+        if changed:
+            self.state_mgr.save(reconciled)
+        return reconciled
 
     async def _handle_exam_too_broad(
         self, iter_state: IterationState, writer_result: WriterResult

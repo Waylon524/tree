@@ -57,7 +57,9 @@ class StateManager:
         chapters = []
         for ch in state.chapters:
             if ch.chapter_name == chapter:
-                files = list(ch.files_completed) + [filename]
+                files = list(ch.files_completed)
+                if filename not in files:
+                    files.append(filename)
                 chapters.append(ch.model_copy(update={"files_completed": files}))
             else:
                 chapters.append(ch)
