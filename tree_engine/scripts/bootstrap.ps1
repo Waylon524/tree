@@ -127,6 +127,13 @@ if (-not (Test-Path "pyproject.toml")) {
 if (-not (Test-Path "tree_engine")) {
     throw "tree_engine\ is missing. The checkout looks incomplete."
 }
+if ($ProjectRoot.Path -match '([\\/])\.Trash([\\/]|$)') {
+    throw "This checkout is inside a Trash directory: $($ProjectRoot.Path). Move or clone the project into a normal workspace before running bootstrap."
+}
+$ParentRoot = Split-Path -Parent $ProjectRoot.Path
+if ((Test-Path (Join-Path $ParentRoot "pyproject.toml")) -and (Test-Path (Join-Path $ParentRoot "tree_engine"))) {
+    throw "This looks like a nested tree checkout: $($ProjectRoot.Path) inside $ParentRoot. Run bootstrap from the outer checkout or clone into an empty directory."
+}
 
 New-Item -ItemType Directory -Force -Path "raw_materials", "finished_outputs", "tree_engine\.runtime" | Out-Null
 

@@ -82,6 +82,8 @@ git clone https://github.com/Waylon524/tree.git engine
 cd engine
 ```
 
+如果看到 `fatal: destination path 'engine' already exists and is not an empty directory`，说明当前目录已经有一个叫 `engine` 的文件夹。此时请先停下来，不要继续 `cd engine` 后再执行一次 `git clone ... engine`，否则会变成 `engine/engine` 嵌套安装。请选择一个新的空目录名，例如 `engine-new`，或先删除/重命名旧的 `engine`。
+
 后续命令都必须在这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`raw_materials/`、`finished_outputs/` 和 `tree_engine/`。不要再执行 `cd tree` 进入里面的源码包目录。
 
 可以用下面的命令检查：
@@ -287,6 +289,8 @@ tree-run continue
 git clone https://github.com/Waylon524/tree.git engine
 cd engine
 ```
+
+如果看到 `fatal: destination path 'engine' already exists and is not an empty directory`，说明当前目录已经有一个叫 `engine` 的文件夹。此时请先停下来，不要继续 `cd engine` 后再执行一次 `git clone ... engine`，否则会变成 `engine/engine` 嵌套安装。请选择一个新的空目录名，例如 `engine-new`，或先删除/重命名旧的 `engine`。
 
 后续命令都必须在 `engine` 这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`raw_materials/`、`finished_outputs/` 和 `tree_engine/`。不要再执行 `cd tree`；`tree_engine/tree/` 才是源码包目录，不是项目根目录。
 
@@ -961,6 +965,8 @@ git clone https://github.com/Waylon524/tree.git engine
 cd engine
 ```
 
+If you see `fatal: destination path 'engine' already exists and is not an empty directory`, an `engine` folder already exists in the current directory. Stop there. Do not `cd engine` and run `git clone ... engine` again, because that creates a nested `engine/engine` install. Choose a new empty folder name such as `engine-new`, or delete/rename the old `engine` first.
+
 All following commands must be run from this **project root**. The project root should contain `pyproject.toml`, `README.md`, `raw_materials/`, `finished_outputs/`, and `tree_engine/`. Do not run another `cd tree`; `tree_engine/tree/` is the Python source package, not the project root.
 
 Check with:
@@ -1166,6 +1172,8 @@ The most reliable approach is: **create a new `.venv` for each workspace**. This
 git clone https://github.com/Waylon524/tree.git engine
 cd engine
 ```
+
+If you see `fatal: destination path 'engine' already exists and is not an empty directory`, an `engine` folder already exists in the current directory. Stop there. Do not `cd engine` and run `git clone ... engine` again, because that creates a nested `engine/engine` install. Choose a new empty folder name such as `engine-new`, or delete/rename the old `engine` first.
 
 All following commands must be run from the `engine` **project root**. The project root should contain `pyproject.toml`, `README.md`, `raw_materials/`, `finished_outputs/`, and `tree_engine/`. Do not run another `cd tree`; `tree_engine/tree/` is the Python source package, not the project root.
 

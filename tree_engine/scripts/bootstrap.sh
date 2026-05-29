@@ -62,6 +62,16 @@ fail() {
 require_project_root() {
   [ -f pyproject.toml ] || fail "Run this script from a cloned tree checkout, or use tree_engine/scripts/bootstrap.sh from the project root."
   [ -d tree_engine ] || fail "tree_engine/ is missing. The checkout looks incomplete."
+  case "$PROJECT_ROOT" in
+    *"/.Trash"|*"/.Trash/"*)
+      fail "This checkout is inside a Trash directory: $PROJECT_ROOT. Move or clone the project into a normal workspace before running bootstrap."
+      ;;
+  esac
+  local parent_root
+  parent_root="$(cd "$PROJECT_ROOT/.." && pwd)"
+  if [ -f "$parent_root/pyproject.toml" ] && [ -d "$parent_root/tree_engine" ]; then
+    fail "This looks like a nested tree checkout: $PROJECT_ROOT inside $parent_root. Run bootstrap from the outer checkout or clone into an empty directory."
+  fi
   mkdir -p raw_materials finished_outputs tree_engine/.runtime
 }
 
