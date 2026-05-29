@@ -12,7 +12,9 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
 
 import click
 import typer
@@ -45,7 +47,7 @@ _INTERACTIVE_COMMANDS = [
     ("/init", "Initialize the current folder as a TREE workspace"),
     ("/status", "Show service and pipeline status"),
     ("/progress", "Show current services, ingest, chapter, and recent trace"),
-    ("/watch", "Refresh /progress until Ctrl+C"),
+    ("/watch", "Refresh /progress until Esc or Ctrl+C"),
     ("/stop", "Stop TREE but keep embedding running"),
     ("/quit", "Stop TREE and embedding, then leave interactive mode"),
     ("/logs --tail 20", "Show recent pipeline trace entries"),
@@ -158,6 +160,16 @@ def _start_background_tree(wait_embedding: bool) -> None:
     from tree.services import start_embedding, start_tree, wait_for_embedding
 
     root = Path.cwd()
+    _ensure_workspace_dirs(root)
+    material_files = _supported_material_files(root)
+    if not material_files:
+        materials_dir = paths.materials_root(root)
+        rprint(
+            f"[red]Cannot start TREE: no supported files found in {materials_dir}.[/red]\n"
+            "[dim]Put course files into materials/ first, then run /start again.[/dim]"
+        )
+        raise typer.Exit(1)
+
     _ensure_workspace_config(root)
     embed = start_embedding(root)
     rprint(f"[green]{embed.message}[/green] pid={embed.pid} log={embed.log_path}")
@@ -172,6 +184,15 @@ def _start_background_tree(wait_embedding: bool) -> None:
     tree = start_tree(root)
     rprint(f"[green]{tree.message}[/green] pid={tree.pid} log={tree.log_path}")
     rprint("[dim]Use /watch in interactive mode, or tre watch, to follow progress.[/dim]")
+
+
+def _supported_material_files(root: Path) -> list[Path]:
+    from tree.engine import _is_supported_material
+
+    materials_root = paths.materials_root(root)
+    if not materials_root.exists():
+        return []
+    return [path for path in sorted(materials_root.rglob("*")) if _is_supported_material(path)]
 
 
 @app.command()
@@ -442,16 +463,63 @@ def watch(
     interval: float = typer.Option(3.0, "--interval", "-i", min=1.0, help="Refresh interval in seconds"),
     tail: int = typer.Option(5, "--tail", "-n", min=1, max=20, help="Recent trace entries"),
 ) -> None:
-    """Continuously refresh current TREE progress until Ctrl+C."""
+    """Continuously refresh current TREE progress until Esc or Ctrl+C."""
     root = Path.cwd()
-    rprint("[dim]Watching TREE progress. Press Ctrl+C to return to the prompt.[/dim]")
+    rprint("[dim]Watching TREE progress. Press Esc or Ctrl+C to return to the prompt.[/dim]")
     try:
-        with Live(_build_progress_view(root, tail=tail), refresh_per_second=4) as live:
+        with _watch_escape_reader() as escape_pressed, Live(
+            _build_progress_view(root, tail=tail),
+            refresh_per_second=4,
+        ) as live:
+            next_refresh = time.monotonic() + interval
             while True:
-                time.sleep(interval)
-                live.update(_build_progress_view(root, tail=tail))
+                if escape_pressed():
+                    break
+                now = time.monotonic()
+                if now >= next_refresh:
+                    live.update(_build_progress_view(root, tail=tail))
+                    next_refresh = now + interval
+                time.sleep(0.05)
     except KeyboardInterrupt:
-        rprint("\n[dim]Stopped watching. TREE services were not changed.[/dim]")
+        pass
+    rprint("\n[dim]Stopped watching. TREE services were not changed.[/dim]")
+
+
+@contextmanager
+def _watch_escape_reader() -> Callable[[], bool]:
+    if not sys.stdin.isatty():
+        yield lambda: False
+        return
+
+    if os.name == "nt":
+        import msvcrt
+
+        def windows_escape_pressed() -> bool:
+            if not msvcrt.kbhit():
+                return False
+            return msvcrt.getwch() == "\x1b"
+
+        yield windows_escape_pressed
+        return
+
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    previous = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+
+    def posix_escape_pressed() -> bool:
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if not ready:
+            return False
+        return sys.stdin.read(1) == "\x1b"
+
+    try:
+        yield posix_escape_pressed
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, previous)
 
 
 @app.command()

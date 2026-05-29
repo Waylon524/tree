@@ -221,7 +221,7 @@ tre
 
 ```text
 /start      # 后台启动 TREE，自动确保 embedding server 运行
-/watch      # 持续刷新当前进度，按 Ctrl+C 回到 TREE>
+/watch      # 持续刷新当前进度，按 Esc 或 Ctrl+C 回到 TREE>
 /progress   # 显示一屏进度快照
 /status     # 查看服务和章节状态
 /stop       # 停止 TREE，保留 embedding server
@@ -231,10 +231,11 @@ tre
 
 日常使用只需要留在 `TREE>` 里输入这些 slash commands。每次 `/start` 都会先检查 `materials/`：
 
+- 如果 `materials/` 中没有任何受支持的资料文件，启动会报错并提示先放入资料。
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
 - 所有 source materials embedding 完成后，才进入考试-写作循环。
-- 没有新资料：直接从 `.tree/runtime/pipeline-state.json` 恢复循环。
+- 有资料但没有新增或变更：直接从 `.tree/runtime/pipeline-state.json` 恢复循环。
 
 强行关闭 `TREE` 交互界面（例如 Ctrl+C、终端关闭或输入流断开）会自动执行 `/quit`，停止 TREE 和 embedding server。只有主动输入 `/exit` 才会只离开交互界面而保留后台服务。
 
@@ -845,7 +846,7 @@ At the `TREE>` prompt:
 
 ```text
 /start      # start TREE in the background and ensure embedding is running
-/watch      # refresh current progress until Ctrl+C returns to TREE>
+/watch      # refresh current progress until Esc or Ctrl+C returns to TREE>
 /progress   # show one progress snapshot
 /status     # show service and chapter status
 /stop       # stop TREE while keeping embedding running
@@ -855,10 +856,11 @@ At the `TREE>` prompt:
 
 For daily use, stay inside `TREE>` and type these slash commands. Every `/start` checks `materials/` first:
 
+- if `materials/` contains no supported source files, startup fails and asks you to add materials first
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
 - the exam-writing loop starts only after all source materials are embedded
-- if no new material exists, the loop resumes from `.tree/runtime/pipeline-state.json`
+- if materials exist but nothing is new or changed, the loop resumes from `.tree/runtime/pipeline-state.json`
 
 Force-closing the `TREE` interactive shell, such as Ctrl+C, terminal close, or input-stream disconnect, automatically runs `/quit` and stops TREE plus the embedding server. Only typing `/exit` leaves the shell while keeping background services unchanged.
 
