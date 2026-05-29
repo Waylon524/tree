@@ -36,9 +36,9 @@ tree（Textbook Refinement & Enhancement Engine）是一套资料驱动的自动
 
 ```text
 tree/
-├── AGENTS.md
 ├── README.md
 ├── pyproject.toml
+├── raw_materials/          # 用户上传原始资料；目录保留，内容被 Git 忽略
 ├── tree/                    # 主引擎
 │   ├── cli.py               # tree-run CLI
 │   ├── engine.py            # Step 0-4 编排循环
@@ -61,7 +61,7 @@ tree/
     └── run-ingest.sh
 ```
 
-运行时目录会自动创建，并默认被 `.gitignore` 排除：
+运行时目录会自动创建，并默认被 `.gitignore` 排除。`raw_materials/` 会保留一个空目录，方便用户直接放资料；目录内的真实课件、习题和讲义不会提交到 Git。
 
 ```text
 raw_materials/          # 用户上传原始资料
@@ -97,6 +97,15 @@ rag-store/              # embedded Qdrant 数据库
 ```bash
 git clone https://github.com/Waylon524/tree.git
 cd tree
+```
+
+后续命令都必须在这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`scripts/` 和 `tree/`。不要再执行 `cd tree` 进入里面的源码包目录。
+
+可以用下面的命令检查：
+
+```bash
+pwd
+ls pyproject.toml README.md scripts
 ```
 
 2. 创建并进入 Python 虚拟环境：
@@ -177,13 +186,25 @@ NVIDIA CUDA：
 
 首次启动会自动下载 `Qwen3-Embedding-4B-Q8_0.gguf`，约 4.3 GB。下载完成后模型会留在本机 Hugging Face 缓存中，之后换工作区通常不需要重新下载。
 
-8. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
+这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run run`。保持它开着，然后新开一个终端标签页。
+
+8. 在新终端标签页中回到项目根目录，并激活同一个 `.venv`：
+
+```bash
+cd /path/to/tree
+source .venv/bin/activate
+ls pyproject.toml README.md scripts
+```
+
+如果你是按上面的命令克隆的，`/path/to/tree` 就是你的 `tree` 仓库目录。确认当前目录能看到 `pyproject.toml` 后，再继续。
+
+9. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
 
 ```bash
 tree-run setup
 ```
 
-9. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+10. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
 tree-run run
@@ -200,6 +221,15 @@ tree-run run
 ```bash
 git clone https://github.com/Waylon524/tree.git tree-new
 cd tree-new
+```
+
+后续命令都必须在 `tree-new` 这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`scripts/` 和 `tree/`。不要再执行 `cd tree`；里面的 `tree/` 是源码包目录，不是项目根目录。
+
+可以用下面的命令检查：
+
+```bash
+pwd
+ls pyproject.toml README.md scripts
 ```
 
 2. 在新工作区创建并激活虚拟环境：
@@ -251,13 +281,25 @@ Apple Silicon 可用：
 
 如果本地模型缓存还在，这一步会直接复用缓存，不会重新下载 4.3 GB 模型。
 
-6. 每个工作区都需要自己的 `.env`。运行配置向导：
+这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run run`。保持它开着，然后新开一个终端标签页。
+
+6. 在新终端标签页中回到 `tree-new` 项目根目录，并激活同一个 `.venv`：
+
+```bash
+cd /path/to/tree-new
+source .venv/bin/activate
+ls pyproject.toml README.md scripts
+```
+
+如果你不确定路径，回到 Finder 中把 `tree-new` 文件夹拖进终端，或在旧终端里运行 `pwd` 复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
+
+7. 每个工作区都需要自己的 `.env`。运行配置向导：
 
 ```bash
 tree-run setup
 ```
 
-7. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+8. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
 tree-run run
@@ -311,6 +353,8 @@ NVIDIA CUDA：
 ./scripts/start-embed-server.sh
 ```
 
+这个终端会被 embedding server 占用。运行 `tree-run setup`、`tree-run run`、`tree-run ingest` 等命令时，请新开一个终端标签页，回到项目根目录，重新执行 `source .venv/bin/activate` 后再运行。
+
 默认配置：
 
 ```text
@@ -343,7 +387,29 @@ curl -X POST http://localhost:8788/v1/embeddings \
 - LLM base URL
 - 默认模型
 - `Examiner`、`Student`、`Writer`、`Archivist` 四个角色的模型
-- PaddleOCR model
+
+PaddleOCR job URL 和 PaddleOCR model 是固定值，不需要填写。当前固定为 `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` 和 `PaddleOCR-VL-1.6`。
+
+输入 API key 时终端不会显示任何字符，这是正常的隐藏输入，类似输入密码。直接粘贴或输入完整 key，然后按 Enter 即可。配置完成后可以运行 `tree-run models`，它只会显示 key 是 `set` / `not set`，不会打印真实密钥。
+
+模型名必须完全匹配供应商支持的名称，不要带空格、颜色控制残留或多余字符。例如 DeepSeek 当前应填写 `deepseek-v4-pro` 或 `deepseek-v4-flash`，不要填写 `deepseek-v4-pro[1m]`。如果填错了，可以直接修正：
+
+```bash
+tree-run models \
+  --base-url https://api.deepseek.com/v1 \
+  --examiner deepseek-v4-pro \
+  --student deepseek-v4-flash \
+  --writer deepseek-v4-flash \
+  --archivist deepseek-v4-flash
+```
+
+如果 `tree-run setup` 仍然询问 `PaddleOCR job API URL` 或 `PaddleOCR model`，说明你当前安装的是旧版本。请在项目根目录运行：
+
+```bash
+git pull
+source .venv/bin/activate
+pip install -e ".[rag]"
+```
 
 你也可以手动启动向导：
 
@@ -364,7 +430,7 @@ tree-run models --paddleocr-key
 
 CLI 会把配置写入当前工作区的 `.env`。`.env` 已被 Git 忽略，不应提交到仓库。
 
-生成的 `.env` 大致如下：
+生成的 `.env` 大致如下。PaddleOCR URL 和 model 由 CLI 自动写入固定值：
 
 ```bash
 # OpenAI-compatible LLM
@@ -634,9 +700,9 @@ The current runtime is a standalone Python orchestrator. Agent prompts are built
 
 ```text
 tree/
-├── AGENTS.md
 ├── README.md
 ├── pyproject.toml
+├── raw_materials/          # User uploads; directory is kept, contents are ignored
 ├── tree/                    # Main engine
 │   ├── cli.py               # tree-run CLI
 │   ├── engine.py            # Step 0-4 orchestration loop
@@ -652,7 +718,7 @@ tree/
 └── scripts/                 # Setup and runtime helper scripts
 ```
 
-Runtime paths are created automatically and ignored by Git:
+Runtime paths are created automatically and ignored by Git. `raw_materials/` is kept as an empty upload directory, while real lecture files, exercises, and handouts inside it are not committed.
 
 ```text
 raw_materials/
@@ -688,6 +754,15 @@ If Python or Git is missing, install [Python](https://www.python.org/downloads/)
 ```bash
 git clone https://github.com/Waylon524/tree.git
 cd tree
+```
+
+All following commands must be run from this **project root**. The project root should contain `pyproject.toml`, `README.md`, `scripts/`, and `tree/`. Do not run another `cd tree`; the inner `tree/` directory is the Python source package, not the project root.
+
+Check with:
+
+```bash
+pwd
+ls pyproject.toml README.md scripts
 ```
 
 2. Create and activate a Python virtual environment:
@@ -768,13 +843,25 @@ NVIDIA CUDA:
 
 The first start downloads `Qwen3-Embedding-4B-Q8_0.gguf`, about 4.3 GB. After that, the model stays in the local Hugging Face cache, so a second workspace usually does not download it again.
 
-8. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
+This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run run` in that same terminal. Keep it open and start a new terminal tab.
+
+8. In the new terminal tab, return to the project root and activate the same `.venv`:
+
+```bash
+cd /path/to/tree
+source .venv/bin/activate
+ls pyproject.toml README.md scripts
+```
+
+If you cloned exactly as shown above, `/path/to/tree` is your `tree` repository directory. Continue only after `pyproject.toml` is visible.
+
+9. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
 
 ```bash
 tree-run setup
 ```
 
-9. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+10. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
 tree-run run
@@ -791,6 +878,15 @@ The most reliable approach is: **create a new `.venv` for each workspace**. This
 ```bash
 git clone https://github.com/Waylon524/tree.git tree-new
 cd tree-new
+```
+
+All following commands must be run from the `tree-new` **project root**. The project root should contain `pyproject.toml`, `README.md`, `scripts/`, and `tree/`. Do not run another `cd tree`; the inner `tree/` directory is the Python source package, not the project root.
+
+Check with:
+
+```bash
+pwd
+ls pyproject.toml README.md scripts
 ```
 
 2. Create and activate a virtual environment in the new workspace:
@@ -842,13 +938,25 @@ Apple Silicon:
 
 If the local model cache is still present, this reuses it without downloading the 4.3 GB model again.
 
-6. Each workspace needs its own `.env`. Run the setup wizard:
+This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run run` in that same terminal. Keep it open and start a new terminal tab.
+
+6. In the new terminal tab, return to the `tree-new` project root and activate the same `.venv`:
+
+```bash
+cd /path/to/tree-new
+source .venv/bin/activate
+ls pyproject.toml README.md scripts
+```
+
+If you are not sure about the path, run `pwd` in the old terminal and copy the full path. Continue only after `pyproject.toml` is visible.
+
+7. Each workspace needs its own `.env`. Run the setup wizard:
 
 ```bash
 tree-run setup
 ```
 
-7. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+8. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
 tree-run run
@@ -902,6 +1010,8 @@ Start the embedding server:
 ./scripts/start-embed-server.sh
 ```
 
+This terminal is now occupied by the embedding server. To run `tree-run setup`, `tree-run run`, or `tree-run ingest`, open a new terminal tab, return to the project root, and activate `.venv` again first.
+
 Default settings:
 
 ```text
@@ -934,7 +1044,29 @@ The first time you run a configuration-dependent command in a workspace, such as
 - LLM base URL
 - default model
 - role models for `Examiner`, `Student`, `Writer`, and `Archivist`
-- PaddleOCR model
+
+The PaddleOCR job URL and PaddleOCR model are fixed and do not need input. They are currently fixed to `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` and `PaddleOCR-VL-1.6`.
+
+When entering API keys, the terminal does not display any characters. This is normal hidden input, like typing a password. Paste or type the full key, then press Enter. After setup, run `tree-run models` to verify that keys are `set` / `not set`; real secrets are never printed.
+
+Model names must exactly match the names supported by your provider. Do not include spaces, terminal color fragments, or extra characters. For example, DeepSeek currently expects `deepseek-v4-pro` or `deepseek-v4-flash`, not `deepseek-v4-pro[1m]`. If a model was entered incorrectly, fix it with:
+
+```bash
+tree-run models \
+  --base-url https://api.deepseek.com/v1 \
+  --examiner deepseek-v4-pro \
+  --student deepseek-v4-flash \
+  --writer deepseek-v4-flash \
+  --archivist deepseek-v4-flash
+```
+
+If `tree-run setup` still asks for `PaddleOCR job API URL` or `PaddleOCR model`, your installed checkout is old. From the project root, run:
+
+```bash
+git pull
+source .venv/bin/activate
+pip install -e ".[rag]"
+```
 
 You can also start the wizard manually:
 
@@ -955,7 +1087,7 @@ tree-run models --paddleocr-key
 
 The CLI writes settings to the current workspace's `.env`. `.env` is ignored by Git and should not be committed.
 
-The generated `.env` looks roughly like this:
+The generated `.env` looks roughly like this. The PaddleOCR URL and model are written by the CLI as fixed values:
 
 ```bash
 # OpenAI-compatible LLM

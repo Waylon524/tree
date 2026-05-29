@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -51,11 +52,9 @@ def run() -> None:
     settings = Settings.from_env()
     engine = TreeEngine(settings)
     try:
-        asyncio.run(engine.run())
+        asyncio.run(_run_engine(engine))
     except KeyboardInterrupt:
         rprint("[yellow]Pipeline interrupted. Use 'tree resume' to continue.[/yellow]")
-    finally:
-        asyncio.run(engine.close())
 
 
 @app.command()
@@ -68,11 +67,9 @@ def resume() -> None:
     settings = Settings.from_env()
     engine = TreeEngine(settings)
     try:
-        asyncio.run(engine.run())
+        asyncio.run(_run_engine(engine))
     except KeyboardInterrupt:
         rprint("[yellow]Pipeline interrupted. Use 'tree resume' to continue.[/yellow]")
-    finally:
-        asyncio.run(engine.close())
 
 
 @app.command()
@@ -342,9 +339,9 @@ def models(
     env = _read_env_file(env_path)
     updates: dict[str, str] = {}
     if base_url is not None:
-        updates["LLM_BASE_URL"] = base_url
+        updates["LLM_BASE_URL"] = _clean_prompt_value(base_url)
     if model is not None:
-        updates["LLM_MODEL"] = model
+        updates["LLM_MODEL"] = _clean_prompt_value(model)
     for key, value in {
         "EXAMINER_MODEL": examiner,
         "STUDENT_MODEL": student,
@@ -352,7 +349,7 @@ def models(
         "ARCHIVIST_MODEL": archivist,
     }.items():
         if value is not None:
-            updates[key] = value
+            updates[key] = _clean_prompt_value(value)
     if api_key:
         updates["LLM_API_KEY"] = typer.prompt("Shared LLM / agent API key", hide_input=True)
     if paddleocr_key:
@@ -512,6 +509,13 @@ def _add_check(table: Table, name: str, ok: bool, details: str) -> None:
     table.add_row(name, status_text, details)
 
 
+async def _run_engine(engine) -> None:
+    try:
+        await engine.run()
+    finally:
+        await engine.close()
+
+
 def _has_any_llm_key() -> bool:
     keys = ["LLM_API_KEY", "EXAMINER_API_KEY", "STUDENT_API_KEY", "WRITER_API_KEY", "ARCHIVIST_API_KEY"]
     return any(os.environ.get(key) for key in keys)
@@ -548,49 +552,51 @@ def _run_setup_wizard(root: Path, force: bool, require_llm: bool = True) -> None
             "LLM base URL",
             default=values.get("LLM_BASE_URL", _DEFAULT_ENV["LLM_BASE_URL"]),
         )
+        values["LLM_BASE_URL"] = _clean_prompt_value(values["LLM_BASE_URL"])
         values["LLM_MODEL"] = typer.prompt(
             "Default LLM model",
             default=values.get("LLM_MODEL", _DEFAULT_ENV["LLM_MODEL"]),
         )
+        values["LLM_MODEL"] = _clean_prompt_value(values["LLM_MODEL"])
         default_model = values["LLM_MODEL"]
         values["EXAMINER_MODEL"] = typer.prompt(
             "Examiner model",
             default=values.get("EXAMINER_MODEL", default_model),
         )
+        values["EXAMINER_MODEL"] = _clean_prompt_value(values["EXAMINER_MODEL"])
         values["STUDENT_MODEL"] = typer.prompt(
             "Student model",
             default=values.get("STUDENT_MODEL", default_model),
         )
+        values["STUDENT_MODEL"] = _clean_prompt_value(values["STUDENT_MODEL"])
         values["WRITER_MODEL"] = typer.prompt(
             "Writer model",
             default=values.get("WRITER_MODEL", default_model),
         )
+        values["WRITER_MODEL"] = _clean_prompt_value(values["WRITER_MODEL"])
         values["ARCHIVIST_MODEL"] = typer.prompt(
             "Archivist model",
             default=values.get("ARCHIVIST_MODEL", default_model),
         )
+        values["ARCHIVIST_MODEL"] = _clean_prompt_value(values["ARCHIVIST_MODEL"])
 
     values["PADDLEOCR_API_TOKEN"] = _prompt_secret(
         "PaddleOCR API key",
         current=values.get("PADDLEOCR_API_TOKEN", ""),
         required=True,
     )
-    values["PADDLEOCR_API_URL"] = typer.prompt(
-        "PaddleOCR job API URL",
-        default=values.get("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"]),
-    )
-    values["PADDLEOCR_MODEL"] = typer.prompt(
-        "PaddleOCR model",
-        default=values.get("PADDLEOCR_MODEL", _DEFAULT_ENV["PADDLEOCR_MODEL"]),
-    )
+    values["PADDLEOCR_API_URL"] = _DEFAULT_ENV["PADDLEOCR_API_URL"]
+    values["PADDLEOCR_MODEL"] = _DEFAULT_ENV["PADDLEOCR_MODEL"]
 
     for key, default in _DEFAULT_ENV.items():
         values.setdefault(key, default)
 
     _write_env_file(env_path, values)
+    (root / "raw_materials").mkdir(exist_ok=True)
     _load_env_into_process(values)
     action = "Updated" if existed else "Created"
     rprint(f"\n[green]{action}[/green] {env_path}")
+    rprint(f"[green]Ready[/green] {root / 'raw_materials'}")
     rprint("[dim]Use 'tree-run models' to view or update provider/model settings later.[/dim]")
 
 
@@ -605,6 +611,11 @@ def _prompt_secret(label: str, current: str = "", required: bool = False) -> str
         if value or not required:
             return value
         rprint("[red]This value is required.[/red]")
+
+
+def _clean_prompt_value(value: str) -> str:
+    """Remove pasted terminal styling fragments from visible setup fields."""
+    return re.sub(r"(?:\x1b\[[0-9;]*m|\[[0-9;]*m\])", "", value).strip()
 
 
 def _read_env_file(path: Path) -> dict[str, str]:

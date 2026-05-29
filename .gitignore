@@ -1,5 +1,6 @@
 # 输入/结构化资料
-/raw_materials/
+/raw_materials/*
+!/raw_materials/.gitkeep
 /source_materials/
 /drafts/
 
@@ -12,6 +13,7 @@
 /rag-store/
 
 # 本地配置
+AGENTS.md
 .claude/settings.local.json
 .env
 .DS_Store
