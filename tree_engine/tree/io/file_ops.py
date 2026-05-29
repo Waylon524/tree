@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from tree.io import paths
+
 
 def read_prior_files(root: Path, chapter: str) -> list[str]:
     """Read all .md files from finished_outputs/{chapter}/ sorted by name."""
@@ -27,7 +29,7 @@ def list_prior_paths(root: Path, chapter: str) -> list[Path]:
 
 def read_draft(root: Path, chapter: str, filename: str) -> str | None:
     """Read draft if it exists in drafts/{chapter}/."""
-    path = root / "drafts" / chapter / filename
+    path = paths.drafts_root(root) / chapter / filename
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8")
@@ -35,7 +37,7 @@ def read_draft(root: Path, chapter: str, filename: str) -> str | None:
 
 def write_draft(root: Path, chapter: str, filename: str, content: str) -> Path:
     """Write content to drafts/{chapter}/{filename}."""
-    chapter_dir = root / "drafts" / chapter
+    chapter_dir = paths.drafts_root(root) / chapter
     chapter_dir.mkdir(parents=True, exist_ok=True)
     path = chapter_dir / filename
     path.write_text(content, encoding="utf-8")
@@ -44,7 +46,7 @@ def write_draft(root: Path, chapter: str, filename: str, content: str) -> Path:
 
 def move_draft_to_finished(root: Path, chapter: str, filename: str) -> Path:
     """Move draft from drafts/ to finished_outputs/."""
-    src = root / "drafts" / chapter / filename
+    src = paths.drafts_root(root) / chapter / filename
     dst_dir = root / "finished_outputs" / chapter
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / filename

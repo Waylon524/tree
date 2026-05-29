@@ -17,6 +17,8 @@ from rich import print as rprint
 from rich.panel import Panel
 from rich.table import Table
 
+from tree.io import paths
+
 app = typer.Typer(name="tree", help="T.R.E.E. independent orchestration engine")
 rag_app = typer.Typer(help="Inspect and query the local RAG index")
 app.add_typer(rag_app, name="rag")
@@ -59,7 +61,7 @@ def run() -> None:
 
 @app.command()
 def resume() -> None:
-    """Resume pipeline from last checkpoint in pipeline-state.json."""
+    """Resume pipeline from the last checkpoint in tree_engine/.runtime."""
     from tree.config import Settings
     from tree.engine import TreeEngine
 
@@ -80,7 +82,7 @@ def status(
     from tree.state.manager import StateManager
 
     project_root = Path.cwd()
-    mgr = StateManager(project_root / "pipeline-state.json")
+    mgr = StateManager(paths.pipeline_state_path(project_root))
     state = mgr.load()
 
     if not state.chapters:
@@ -99,7 +101,7 @@ def status(
         )
 
     if verbose:
-        trace_path = project_root / "pipeline-temp" / "trace.jsonl"
+        trace_path = paths.pipeline_temp_root(project_root) / "trace.jsonl"
         if trace_path.exists():
             lines = trace_path.read_text(encoding="utf-8").strip().splitlines()
             rprint(f"\n[dim]Trace entries: {len(lines)}[/dim]")
@@ -121,6 +123,7 @@ def doctor() -> None:
     table.add_column("Details")
 
     _add_check(table, "Project root", (root / "pyproject.toml").exists(), str(root))
+    _add_check(table, "tree_engine", (root / "tree_engine").exists(), "engine source and scripts")
     _add_check(table, ".env", (root / ".env").exists(), "loaded if present")
     _add_check(
         table,
@@ -135,8 +138,14 @@ def doctor() -> None:
         settings.paddleocr_model,
     )
     _add_check(table, "raw_materials", (root / "raw_materials").exists(), "user uploads")
-    _add_check(table, "pipeline-state.json", (root / "pipeline-state.json").exists(), "resume state")
-    _add_check(table, "rag-store", (root / "rag-store").exists(), "embedded Qdrant store")
+    _add_check(table, "finished_outputs", (root / "finished_outputs").exists(), "final outputs")
+    _add_check(
+        table,
+        "pipeline-state.json",
+        paths.pipeline_state_path(root).exists(),
+        "resume state",
+    )
+    _add_check(table, "rag-store", paths.rag_store_path(root).exists(), "embedded Qdrant store")
 
     embed_ok, embed_detail = _embedding_health()
     _add_check(table, "Embedding server", embed_ok, embed_detail)
@@ -205,9 +214,9 @@ def logs(
     step_name: str | None = typer.Option(None, "--step", help="Filter by step, e.g. S1"),
 ) -> None:
     """Show recent pipeline trace entries."""
-    trace_path = Path.cwd() / "pipeline-temp" / "trace.jsonl"
+    trace_path = paths.pipeline_temp_root(Path.cwd()) / "trace.jsonl"
     if not trace_path.exists():
-        rprint("[dim]No trace log found at pipeline-temp/trace.jsonl.[/dim]")
+        rprint("[dim]No trace log found at tree_engine/.runtime/pipeline-temp/trace.jsonl.[/dim]")
         return
 
     entries = []
@@ -244,8 +253,16 @@ def logs(
 @app.command()
 def clean(
     pycache: bool = typer.Option(True, "--pycache/--no-pycache", help="Remove Python caches"),
-    pipeline_temp: bool = typer.Option(False, "--pipeline-temp", help="Remove pipeline-temp/"),
-    source_materials: bool = typer.Option(False, "--source-materials", help="Remove source_materials/"),
+    pipeline_temp: bool = typer.Option(
+        False,
+        "--pipeline-temp",
+        help="Remove internal tree_engine/.runtime/pipeline-temp/",
+    ),
+    source_materials: bool = typer.Option(
+        False,
+        "--source-materials",
+        help="Remove internal tree_engine/.runtime/source_materials/",
+    ),
     all_targets: bool = typer.Option(False, "--all", help="Clean all supported runtime targets"),
     dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview by default; use --apply to delete"),
 ) -> None:
@@ -256,9 +273,9 @@ def clean(
         targets.extend(_iter_project_pycache_dirs(root))
         targets.extend(path for path in (root / ".pytest_cache", root / ".ruff_cache") if path.exists())
     if pipeline_temp or all_targets:
-        targets.append(root / "pipeline-temp")
+        targets.append(paths.pipeline_temp_root(root))
     if source_materials or all_targets:
-        targets.append(root / "source_materials")
+        targets.append(paths.source_root(root))
 
     targets = sorted({path for path in targets if path.exists()})
     if not targets:
@@ -378,14 +395,15 @@ def ingest(
     from tree.ingest import ingest_path
 
     _ensure_workspace_config(Path.cwd(), require_llm=not no_structure)
-    target_dir = output_dir or Path.cwd() / "source_materials" / (collection or input_path.stem)
+    root = Path.cwd()
+    target_dir = output_dir or paths.source_root(root) / (collection or input_path.stem)
 
     indexer = None
     if not no_index:
         from tree.rag.client import RAGClient
         from tree.rag.indexer import RAGIndexer
 
-        indexer = RAGIndexer(RAGClient())
+        indexer = RAGIndexer(RAGClient(store_path=paths.rag_store_path(root)))
 
     collection_name = collection or input_path.stem
 
@@ -430,7 +448,10 @@ def rag_status() -> None:
     try:
         from tree.rag.client import RAGClient
 
-        chunks = RAGClient().scroll_chunks(limit=10000, include_drafts=True)
+        chunks = RAGClient(store_path=paths.rag_store_path(Path.cwd())).scroll_chunks(
+            limit=10000,
+            include_drafts=True,
+        )
     except Exception as exc:
         rprint(f"[red]RAG unavailable:[/red] {exc}")
         return
@@ -486,7 +507,12 @@ def rag_search(
             filters["source_collection"] = collection
         if chapter:
             filters["chapter"] = chapter
-        hits = RAGClient().query(query, top_k=top_k, filters=filters or None, include_drafts=False)
+        hits = RAGClient(store_path=paths.rag_store_path(Path.cwd())).query(
+            query,
+            top_k=top_k,
+            filters=filters or None,
+            include_drafts=False,
+        )
     except Exception as exc:
         rprint(f"[red]RAG search failed:[/red] {exc}")
         return
@@ -593,10 +619,13 @@ def _run_setup_wizard(root: Path, force: bool, require_llm: bool = True) -> None
 
     _write_env_file(env_path, values)
     (root / "raw_materials").mkdir(exist_ok=True)
+    (root / "finished_outputs").mkdir(exist_ok=True)
+    paths.runtime_root(root).mkdir(parents=True, exist_ok=True)
     _load_env_into_process(values)
     action = "Updated" if existed else "Created"
     rprint(f"\n[green]{action}[/green] {env_path}")
     rprint(f"[green]Ready[/green] {root / 'raw_materials'}")
+    rprint(f"[green]Ready[/green] {root / 'finished_outputs'}")
     rprint("[dim]Use 'tree-run models' to view or update provider/model settings later.[/dim]")
 
 
@@ -765,7 +794,7 @@ def _format_bytes(size: int) -> str:
 
 
 def _iter_project_pycache_dirs(root: Path) -> list[Path]:
-    ignored = {".git", ".venv", "rag-store", "node_modules"}
+    ignored = {".git", ".venv", ".runtime", "rag-store", "node_modules"}
     matches = []
     for current_root, dirnames, _ in os.walk(root):
         dirnames[:] = [name for name in dirnames if name not in ignored]

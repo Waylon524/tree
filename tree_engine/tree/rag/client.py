@@ -5,7 +5,7 @@ Provides chunk→embed→upsert indexing and semantic query with metadata filter
 Usage:
     from tree.rag.client import RAGClient
 
-    rag = RAGClient()                           # defaults: ./rag-store, localhost:8788
+    rag = RAGClient()                           # defaults: tree_engine/.runtime/rag-store
     rag.index_file("01", "01.质点与参考系.md", text, chapter="01-力学")
     results = rag.query("质点定义", top_k=5, filters={"chapter": "01-力学"})
 """
@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from qdrant_client import QdrantClient, models
 from rag.chunker import chunk_markdown
 from rag.embed import EmbeddingClient
+from tree.io import paths
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class Embedder(Protocol):
 class RAGClient:
     def __init__(
         self,
-        store_path: str | Path = "./rag-store",
+        store_path: str | Path | None = None,
         embed_url: str | None = None,
         embed_model: str | None = None,
         dimensions: int = _DEFAULT_DIMENSIONS,
@@ -44,6 +45,7 @@ class RAGClient:
     ):
         self.dimensions = dimensions
         self.embedder = embedder or EmbeddingClient(base_url=embed_url, model=embed_model)
+        store_path = store_path or paths.rag_store_path(Path.cwd())
         self._client = QdrantClient(path=str(store_path))
         self._ensure_collection()
 

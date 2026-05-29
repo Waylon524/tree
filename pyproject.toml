@@ -33,7 +33,11 @@ dev = [
 [project.scripts]
 tree-run = "tree.cli:app"
 
+[tool.setuptools.package-dir]
+"" = "tree_engine"
+
 [tool.setuptools.packages.find]
+where = ["tree_engine"]
 include = ["tree*", "rag*", "ingest*"]
 
 [build-system]

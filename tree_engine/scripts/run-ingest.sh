@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Load .env if present
 if [ -f "$PROJECT_ROOT/.env" ]; then
@@ -16,7 +16,13 @@ fi
 : "${PADDLEOCR_API_TOKEN:?PADDLEOCR_API_TOKEN not set}"
 
 INPUT="${1:?Usage: run-ingest.sh <input_path> [output_dir]}"
-OUTPUT="${2:-source_materials/}"
+OUTPUT="${2:-tree_engine/.runtime/source_materials/}"
 
 cd "$PROJECT_ROOT"
-python -m ingest.pipeline --input "$INPUT" --output "$OUTPUT"
+export PYTHONPATH="$PROJECT_ROOT/tree_engine:${PYTHONPATH:-}"
+if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
+  PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
+else
+  PYTHON_BIN="${PYTHON:-python}"
+fi
+"$PYTHON_BIN" -m ingest.pipeline --input "$INPUT" --output "$OUTPUT"

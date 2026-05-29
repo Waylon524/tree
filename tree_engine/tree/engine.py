@@ -16,7 +16,7 @@ from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.config import Settings
 from tree.model.client import LLMClient
-from tree.io import file_ops, git_ops, source_ops
+from tree.io import file_ops, git_ops, paths, source_ops
 from tree.observability.limiter import IterationLimiter
 from tree.observability.logger import TraceLogger
 from tree.state.manager import StateManager
@@ -51,7 +51,7 @@ class TreeEngine:
         self.client = LLMClient(settings)
 
         self.loader = AgentLoader()
-        self.state_mgr = StateManager(root / "pipeline-state.json")
+        self.state_mgr = StateManager(paths.pipeline_state_path(root))
         self.examiner = ExaminerAgent(
             self.client,
             self.loader,
@@ -61,7 +61,7 @@ class TreeEngine:
         self.student = StudentAgent(self.client, self.loader)
         self.writer = WriterAgent(self.client, self.loader)
         self.archivist = ArchivistAgent(self.client, self.loader)
-        self.tracer = TraceLogger(root / "pipeline-temp" / "trace.jsonl")
+        self.tracer = TraceLogger(paths.pipeline_temp_root(root) / "trace.jsonl")
         self.limiter = IterationLimiter(settings.max_iterations)
         self.rag_client = None
         self.rag_indexer = None
@@ -483,7 +483,7 @@ class TreeEngine:
             return
 
         try:
-            self.rag_client = RAGClient(store_path=self.settings.project_root / "rag-store")
+            self.rag_client = RAGClient(store_path=paths.rag_store_path(self.settings.project_root))
             self.rag_indexer = RAGIndexer(self.rag_client)
         except Exception:
             self.rag_client = None
@@ -620,7 +620,7 @@ def _save_source_manifest(root: Path, manifest: dict[str, Any]) -> None:
 
 
 def _source_manifest_path(root: Path) -> Path:
-    return root / "pipeline-temp" / "source-ingest-manifest.json"
+    return paths.pipeline_temp_root(root) / "source-ingest-manifest.json"
 
 
 def _mark_raw_material_ingested(

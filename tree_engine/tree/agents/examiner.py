@@ -15,6 +15,7 @@ from tree.agents.parsers import (
     parse_exam_output,
     parse_route,
 )
+from tree.io import paths
 from tree.model.client import LLMClient
 from tree.state.models import AuditResult, ExamSections, ExamTooBroadContext
 
@@ -242,7 +243,7 @@ class ExaminerAgent:
     ) -> None:
         if self._project_root is None:
             return
-        out_dir = self._project_root / "pipeline-temp"
+        out_dir = paths.pipeline_temp_root(self._project_root)
         out_dir.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         safe_task = task_name.replace(" ", "-")

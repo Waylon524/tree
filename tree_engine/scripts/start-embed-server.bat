@@ -2,16 +2,19 @@
 REM Start local Qwen3-Embedding-4B-Q8_0 embedding server (Windows)
 REM
 REM Usage:
-REM   scripts\start-embed-server.bat                    all GPU layers (default)
-REM   scripts\start-embed-server.bat --n-gpu-layers 0   CPU only
-REM   scripts\start-embed-server.bat --n-gpu-layers -1  force all GPU
-REM   scripts\start-embed-server.bat --n-ctx 32768      context length
-REM   scripts\start-embed-server.bat --n-seq-max 1      parallel embedding sequences
+REM   tree_engine\scripts\start-embed-server.bat                    all GPU layers (default)
+REM   tree_engine\scripts\start-embed-server.bat --n-gpu-layers 0   CPU only
+REM   tree_engine\scripts\start-embed-server.bat --n-gpu-layers -1  force all GPU
+REM   tree_engine\scripts\start-embed-server.bat --n-ctx 32768      context length
+REM   tree_engine\scripts\start-embed-server.bat --n-seq-max 1      parallel embedding sequences
 
 setlocal
 
-set PROJECT_ROOT=%~dp0..
+set PROJECT_ROOT=%~dp0..\..
 cd /d "%PROJECT_ROOT%"
+set PYTHONPATH=%PROJECT_ROOT%\tree_engine;%PYTHONPATH%
+set PYTHON_BIN=python
+if exist "%PROJECT_ROOT%\.venv\Scripts\python.exe" set PYTHON_BIN=%PROJECT_ROOT%\.venv\Scripts\python.exe
 
 REM Load .env if present
 if exist .env (
@@ -35,4 +38,4 @@ echo Model: Qwen/Qwen3-Embedding-4B-GGUF / Qwen3-Embedding-4B-Q8_0.gguf
 echo API endpoint: http://localhost:%EMBED_PORT%/v1/embeddings
 echo.
 
-python -m rag.server --port %EMBED_PORT% --n-gpu-layers %EMBED_N_GPU_LAYERS% --n-ctx %EMBED_N_CTX% --n-seq-max %EMBED_N_SEQ_MAX% %*
+"%PYTHON_BIN%" -m rag.server --port %EMBED_PORT% --n-gpu-layers %EMBED_N_GPU_LAYERS% --n-ctx %EMBED_N_CTX% --n-seq-max %EMBED_N_SEQ_MAX% %*

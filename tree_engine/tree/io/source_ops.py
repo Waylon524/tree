@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from tree.io.paths import source_root as _source_root
+
 
 @dataclass(frozen=True)
 class SourceDocument:
@@ -13,7 +15,7 @@ class SourceDocument:
 
 
 def source_root(root: Path) -> Path:
-    return root / "source_materials"
+    return _source_root(root)
 
 
 def list_collections(root: Path) -> list[str]:

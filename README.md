@@ -19,7 +19,7 @@ tree（Textbook Refinement & Enhancement Engine）是一套资料驱动的自动
 5. `Writer` 根据抽象缺陷报告创建或优化教材草稿。
 6. 通过后写入 `finished_outputs/`，并继续下一个知识点。
 
-当前实现是独立 Python 编排器，agent prompts 内置在 `tree/agents/prompts.py` 中，无需外部 agent 配置文件。
+当前实现是独立 Python 编排器，agent prompts 内置在 `tree_engine/tree/agents/prompts.py` 中，无需外部 agent 配置文件。
 
 ### 当前特性
 
@@ -27,7 +27,7 @@ tree（Textbook Refinement & Enhancement Engine）是一套资料驱动的自动
 - OpenAI-compatible Chat Completions API，供应商由 `.env` 配置
 - PaddleOCR API v2，默认模型 `PaddleOCR-VL-1.6`
 - 本地 embedding server：`Qwen3-Embedding-4B-Q8_0` GGUF
-- embedded Qdrant 向量库，默认目录 `rag-store/`
+- embedded Qdrant 向量库，默认目录 `tree_engine/.runtime/rag-store/`
 - source materials 入库后删除中间 Markdown
 - finished outputs 保留原文件并写入 RAG
 - draft 不写入 RAG，Student 直接读取当前 draft 全文
@@ -35,42 +35,25 @@ tree（Textbook Refinement & Enhancement Engine）是一套资料驱动的自动
 ### 项目结构
 
 ```text
-tree/
+engine/
 ├── README.md
 ├── pyproject.toml
 ├── raw_materials/          # 用户上传原始资料；目录保留，内容被 Git 忽略
-├── tree/                    # 主引擎
-│   ├── cli.py               # tree-run CLI
-│   ├── engine.py            # Step 0-4 编排循环
-│   ├── ingest.py            # 引擎集成摄入流程
-│   ├── agents/              # examiner/student/writer/archivist
-│   ├── model/               # OpenAI-compatible LLM client
-│   ├── io/                  # 文件、source、git 操作
-│   ├── observability/       # trace、retry、iteration limiter
-│   ├── rag/                 # RAG client/indexer
-│   └── state/               # pipeline-state 数据模型
-├── rag/                     # 本地 embedding 服务与 chunker
-│   ├── server.py
-│   ├── embed.py
-│   └── chunker.py
-├── ingest/                  # 底层 OCR/结构化摄入模块
-└── scripts/
-    ├── setup-embedding.sh
-    ├── start-embed-server.sh
-    ├── start-embed-server.bat
-    └── run-ingest.sh
+├── finished_outputs/       # 通过考试的最终教材；目录保留，内容被 Git 忽略
+└── tree_engine/            # 引擎源码、脚本、RAG、ingest 和内部运行时
+    ├── tree/               # 主引擎 Python 包
+    ├── rag/                # 本地 embedding 服务与 chunker
+    ├── ingest/             # 底层 OCR/结构化摄入模块
+    ├── scripts/            # 安装与运行脚本
+    └── .runtime/           # 自动创建；中间文件、状态和向量库
 ```
 
-运行时目录会自动创建，并默认被 `.gitignore` 排除。`raw_materials/` 会保留一个空目录，方便用户直接放资料；目录内的真实课件、习题和讲义不会提交到 Git。
+运行时目录会自动创建，并默认被 `.gitignore` 排除。`raw_materials/` 会保留一个空目录，方便用户直接放资料；`finished_outputs/` 会保留一个空目录，方便用户查看最终教材。两个目录里的真实内容都不会提交到 Git。
 
 ```text
 raw_materials/          # 用户上传原始资料
-source_materials/       # OCR/Archivist 中间 Markdown，入库后删除
-drafts/                 # 当前知识点草稿
 finished_outputs/       # 通过考试的最终教材
-pipeline-state.json     # 流水线状态
-pipeline-temp/          # trace、manifest、格式失败记录
-rag-store/              # embedded Qdrant 数据库
+tree_engine/.runtime/   # source_materials、drafts、pipeline-state、trace、rag-store
 ```
 
 ### 安装
@@ -95,11 +78,11 @@ rag-store/              # embedded Qdrant 数据库
 1. 克隆仓库：
 
 ```bash
-git clone https://github.com/Waylon524/tree.git
-cd tree
+git clone https://github.com/Waylon524/tree.git engine
+cd engine
 ```
 
-后续命令都必须在这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`scripts/` 和 `tree/`。不要再执行 `cd tree` 进入里面的源码包目录。
+后续命令都必须在这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`raw_materials/`、`finished_outputs/` 和 `tree_engine/`。不要再执行 `cd tree` 进入里面的源码包目录。
 
 可以用下面的命令检查：
 
@@ -107,17 +90,35 @@ macOS / Linux：
 
 ```bash
 pwd
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell：
 
 ```powershell
 Get-Location
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-2. 创建并进入 Python 虚拟环境：
+2. 推荐使用 bootstrap 脚本自动检查设备配置、创建 `.venv`、安装依赖，并进入 `tree-run setup`：
+
+macOS / Linux：
+
+```bash
+./tree_engine/scripts/bootstrap.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\tree_engine\scripts\bootstrap.ps1
+```
+
+这个脚本会检查 Python 版本、系统类型、Apple Silicon / CUDA / CPU 设备提示、依赖安装状态和 CLI 可用性。它不会自动启动 embedding server，因为 embedding server 会占用当前终端；setup 完成后按脚本最后打印的 next steps 操作即可。
+
+下面是手动安装步骤，适合需要逐步排查环境问题时使用。
+
+3. 创建并进入 Python 虚拟环境：
 
 macOS / Linux：
 
@@ -133,13 +134,13 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-3. 升级基础安装工具：
+4. 升级基础安装工具：
 
 ```bash
 pip install -U pip
 ```
 
-4. 安装 tree 引擎和 RAG/embedding 依赖：
+5. 安装 tree 引擎和 RAG/embedding 依赖：
 
 ```bash
 pip install ".[rag]"
@@ -153,7 +154,7 @@ pip install ".[rag]"
 pip install -e ".[rag,dev]"
 ```
 
-5. 确认 CLI 可用：
+6. 确认 CLI 可用：
 
 ```bash
 tree-run --help
@@ -164,17 +165,17 @@ tree-run --help
 macOS / Linux：
 
 ```bash
-PYTHONPATH=. python -m tree.cli --help
+PYTHONPATH=tree_engine python -m tree.cli --help
 ```
 
 Windows PowerShell：
 
 ```powershell
-$env:PYTHONPATH = "."
+$env:PYTHONPATH = "tree_engine"
 python -m tree.cli --help
 ```
 
-6. 确认本地 embedding 依赖可用：
+7. 确认本地 embedding 依赖可用：
 
 ```bash
 python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
@@ -185,74 +186,74 @@ python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding
 如果你在 macOS / Linux 上需要重新编译 GPU/Metal/CUDA 版本的 `llama-cpp-python`，可以运行：
 
 ```bash
-./scripts/setup-embedding.sh
+./tree_engine/scripts/setup-embedding.sh
 ```
 
 Apple Silicon 推荐显式使用 Metal：
 
 ```bash
-./scripts/setup-embedding.sh --device metal
+./tree_engine/scripts/setup-embedding.sh --device metal
 ```
 
 CPU-only：
 
 ```bash
-./scripts/setup-embedding.sh --device cpu
+./tree_engine/scripts/setup-embedding.sh --device cpu
 ```
 
 NVIDIA CUDA：
 
 ```bash
-./scripts/setup-embedding.sh --device cuda
+./tree_engine/scripts/setup-embedding.sh --device cuda
 ```
 
 Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。Windows 已在 `pip install ".[rag]"` 中安装 embedding 依赖。
 
-7. 启动 embedding server。
+8. 启动 embedding server。
 
 macOS / Linux：
 
 ```bash
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 首次启动会自动下载 `Qwen3-Embedding-4B-Q8_0.gguf`，约 4.3 GB。下载完成后模型会留在本机 Hugging Face 缓存中，之后换工作区通常不需要重新下载。
 
 这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run run`。保持它开着，然后新开一个终端标签页。
 
-8. 在新终端标签页中回到项目根目录，并激活同一个 `.venv`：
+9. 在新终端标签页中回到项目根目录，并激活同一个 `.venv`：
 
 macOS / Linux：
 
 ```bash
-cd /path/to/tree
+cd /path/to/engine
 source .venv/bin/activate
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell：
 
 ```powershell
-cd C:\path\to\tree
+cd C:\path\to\engine
 .\.venv\Scripts\Activate.ps1
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-把 `/path/to/tree` 或 `C:\path\to\tree` 替换成你的实际仓库路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
+把 `/path/to/engine` 或 `C:\path\to\engine` 替换成你的实际仓库路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
 
-9. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
+10. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
 
 ```bash
 tree-run setup
 ```
 
-10. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+11. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
 tree-run run
@@ -267,11 +268,11 @@ tree-run run
 1. 克隆新工作区：
 
 ```bash
-git clone https://github.com/Waylon524/tree.git tree-new
-cd tree-new
+git clone https://github.com/Waylon524/tree.git engine
+cd engine
 ```
 
-后续命令都必须在 `tree-new` 这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`scripts/` 和 `tree/`。不要再执行 `cd tree`；里面的 `tree/` 是源码包目录，不是项目根目录。
+后续命令都必须在 `engine` 这个**项目根目录**执行。项目根目录里应该能看到 `pyproject.toml`、`README.md`、`raw_materials/`、`finished_outputs/` 和 `tree_engine/`。不要再执行 `cd tree`；`tree_engine/tree/` 才是源码包目录，不是项目根目录。
 
 可以用下面的命令检查：
 
@@ -279,17 +280,33 @@ macOS / Linux：
 
 ```bash
 pwd
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell：
 
 ```powershell
 Get-Location
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-2. 在新工作区创建并激活虚拟环境：
+2. 推荐直接运行 bootstrap。它会在新工作区创建 `.venv`、复用本机 pip/Hugging Face 缓存、安装依赖，并进入 `tree-run setup`：
+
+macOS / Linux：
+
+```bash
+./tree_engine/scripts/bootstrap.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\tree_engine\scripts\bootstrap.ps1
+```
+
+下面是手动安装步骤。
+
+3. 在新工作区创建并激活虚拟环境：
 
 macOS / Linux：
 
@@ -305,7 +322,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-3. 安装 tree 和 RAG/embedding 依赖：
+4. 安装 tree 和 RAG/embedding 依赖：
 
 ```bash
 pip install -U pip
@@ -314,7 +331,7 @@ pip install ".[rag]"
 
 这一步通常比首次安装快，因为 pip 会复用本机缓存。它不会重新下载 embedding 模型。
 
-4. 确认本地 embedding 依赖可用：
+5. 确认本地 embedding 依赖可用：
 
 ```bash
 python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
@@ -323,62 +340,62 @@ python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding
 如果这条命令失败，或者你需要重新编译 GPU/Metal/CUDA 版本的 `llama-cpp-python`，再运行：
 
 ```bash
-./scripts/setup-embedding.sh
+./tree_engine/scripts/setup-embedding.sh
 ```
 
 Apple Silicon 可用：
 
 ```bash
-./scripts/setup-embedding.sh --device metal
+./tree_engine/scripts/setup-embedding.sh --device metal
 ```
 
 Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。
 
-5. 启动 embedding server。
+6. 启动 embedding server。
 
 macOS / Linux：
 
 ```bash
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 如果本地模型缓存还在，这一步会直接复用缓存，不会重新下载 4.3 GB 模型。
 
 这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run run`。保持它开着，然后新开一个终端标签页。
 
-6. 在新终端标签页中回到 `tree-new` 项目根目录，并激活同一个 `.venv`：
+7. 在新终端标签页中回到 `engine` 项目根目录，并激活同一个 `.venv`：
 
 macOS / Linux：
 
 ```bash
-cd /path/to/tree-new
+cd /path/to/engine
 source .venv/bin/activate
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell：
 
 ```powershell
-cd C:\path\to\tree-new
+cd C:\path\to\engine
 .\.venv\Scripts\Activate.ps1
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-把 `/path/to/tree-new` 或 `C:\path\to\tree-new` 替换成你的实际工作区路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
+把 `/path/to/engine` 或 `C:\path\to\engine` 替换成你的实际工作区路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
 
-7. 每个工作区都需要自己的 `.env`。运行配置向导：
+8. 每个工作区都需要自己的 `.env`。运行配置向导：
 
 ```bash
 tree-run setup
 ```
 
-8. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
+9. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
 tree-run run
@@ -390,7 +407,7 @@ tree-run run
 find .. -path "*/.venv/bin/activate" -print
 ```
 
-然后激活找到的路径，并在新工作区重新执行 `pip install ".[rag]"`，让 `tree-run` 指向当前 checkout。不要照抄 `../tree/.venv/bin/activate`，除非你的旧工作区确实在这个位置。
+然后激活找到的路径，并在新工作区重新执行 `pip install ".[rag]"`，让 `tree-run` 指向当前 checkout。不要照抄 `../engine/.venv/bin/activate`，除非你的旧工作区确实在这个位置。
 
 Windows PowerShell 可用：
 
@@ -407,25 +424,25 @@ tree 默认使用 `Qwen/Qwen3-Embedding-4B-GGUF` 中的 `Qwen3-Embedding-4B-Q8_0
 macOS / Linux：
 
 ```bash
-./scripts/setup-embedding.sh
+./tree_engine/scripts/setup-embedding.sh
 ```
 
 Apple Silicon 推荐：
 
 ```bash
-./scripts/setup-embedding.sh --device metal
+./tree_engine/scripts/setup-embedding.sh --device metal
 ```
 
 CPU-only：
 
 ```bash
-./scripts/setup-embedding.sh --device cpu
+./tree_engine/scripts/setup-embedding.sh --device cpu
 ```
 
 NVIDIA CUDA：
 
 ```bash
-./scripts/setup-embedding.sh --device cuda
+./tree_engine/scripts/setup-embedding.sh --device cuda
 ```
 
 Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；如果 `pip install ".[rag]"` 已成功，可以直接启动服务。
@@ -435,13 +452,13 @@ Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；如果 `pi
 macOS / Linux：
 
 ```bash
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 这个终端会被 embedding server 占用。运行 `tree-run setup`、`tree-run run`、`tree-run ingest` 等命令时，请新开一个终端标签页，回到项目根目录，重新激活虚拟环境后再运行：macOS / Linux 使用 `source .venv/bin/activate`，Windows PowerShell 使用 `.\.venv\Scripts\Activate.ps1`。
@@ -480,6 +497,16 @@ curl -X POST http://localhost:8788/v1/embeddings \
 - `Examiner`、`Student`、`Writer`、`Archivist` 四个角色的模型
 
 PaddleOCR job URL 和 PaddleOCR model 是固定值，不需要填写。当前固定为 `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` 和 `PaddleOCR-VL-1.6`。
+
+获取 PaddleOCR API key：
+
+1. 打开 [PaddleOCR API 任务页](https://aistudio.baidu.com/paddleocr/task)。
+2. 登录百度 AI Studio / 飞桨账号。
+3. 在页面中找到 PaddleOCR-VL 的 API 调用示例或任务创建区域。
+4. 复制示例里的 `TOKEN` 或 `Authorization: bearer ...` 后面的 token。
+5. 运行 `tree-run setup` 时，把这个 token 粘贴到 `PaddleOCR API key` 输入项。
+
+不要把 PaddleOCR API key 写进 README、截图或提交到 Git。T.R.E.E. 会把它写入本地 `.env`，该文件已被 `.gitignore` 排除。
 
 输入 API key 时终端不会显示任何字符，这是正常的隐藏输入，类似输入密码。直接粘贴或输入完整 key，然后按 Enter 即可。配置完成后可以运行 `tree-run models`，它只会显示 key 是 `set` / `not set`，不会打印真实密钥。
 
@@ -606,7 +633,7 @@ tree-run run
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
 - 所有 source materials embedding 完成后，才进入考试-写作循环。
-- 没有新资料：直接从 `pipeline-state.json` 恢复循环。
+- 没有新资料：直接从 `tree_engine/.runtime/pipeline-state.json` 恢复循环。
 
 断点恢复：
 
@@ -728,8 +755,8 @@ OCR 上传默认每 5 秒提交一个文件；上传和轮询可以并发，embe
 当前仓库不保留内置样例数据和单元测试目录。修改代码后建议至少执行：
 
 ```bash
-ruff check tree rag ingest
-python -m compileall tree rag ingest
+ruff check tree_engine/tree tree_engine/rag tree_engine/ingest
+python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 ```
 
 需要端到端验证时，将真实资料放入 `raw_materials/`，启动 embedding server，然后运行：
@@ -746,14 +773,14 @@ tree-run run
 
 ```bash
 pip install ".[rag]"
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
 pip install ".[rag]"
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 **`tree-run` 无法导入本地包**
@@ -779,13 +806,13 @@ pip install --force-reinstall ".[rag]"
 macOS / Linux：
 
 ```bash
-PYTHONPATH=. python -m tree.cli --help
+PYTHONPATH=tree_engine python -m tree.cli --help
 ```
 
 Windows PowerShell：
 
 ```powershell
-$env:PYTHONPATH = "."
+$env:PYTHONPATH = "tree_engine"
 python -m tree.cli --help
 ```
 
@@ -818,7 +845,7 @@ The core loop is:
 5. `Writer` creates or optimizes the draft from an abstract bottleneck report.
 6. Passing drafts move to `finished_outputs/`, and the loop continues.
 
-The current runtime is a standalone Python orchestrator. Agent prompts are built into `tree/agents/prompts.py`; the engine does not require external agent configuration files.
+The current runtime is a standalone Python orchestrator. Agent prompts are built into `tree_engine/tree/agents/prompts.py`; the engine does not require external agent configuration files.
 
 ### Features
 
@@ -826,7 +853,7 @@ The current runtime is a standalone Python orchestrator. Agent prompts are built
 - OpenAI-compatible Chat Completions API, configured through `.env`
 - PaddleOCR API v2, default model `PaddleOCR-VL-1.6`
 - Local embedding server with `Qwen3-Embedding-4B-Q8_0` GGUF
-- Embedded Qdrant vector store at `rag-store/`
+- Embedded Qdrant vector store at `tree_engine/.runtime/rag-store/`
 - Source Markdown is deleted after successful source embedding
 - Finished outputs are kept on disk and indexed into RAG
 - Drafts are not indexed; the Student reads the current draft directly
@@ -834,35 +861,25 @@ The current runtime is a standalone Python orchestrator. Agent prompts are built
 ### Repository Layout
 
 ```text
-tree/
+engine/
 ├── README.md
 ├── pyproject.toml
 ├── raw_materials/          # User uploads; directory is kept, contents are ignored
-├── tree/                    # Main engine
-│   ├── cli.py               # tree-run CLI
-│   ├── engine.py            # Step 0-4 orchestration loop
-│   ├── ingest.py            # Engine-integrated ingest flow
-│   ├── agents/              # examiner/student/writer/archivist
-│   ├── model/               # OpenAI-compatible LLM client
-│   ├── io/                  # file/source/git operations
-│   ├── observability/       # trace, retry, iteration limiter
-│   ├── rag/                 # RAG client/indexer
-│   └── state/               # pipeline-state models
-├── rag/                     # Local embedding server and chunker
-├── ingest/                  # Low-level OCR/structuring ingest modules
-└── scripts/                 # Setup and runtime helper scripts
+├── finished_outputs/       # Final textbooks; directory is kept, contents are ignored
+└── tree_engine/            # Engine source, scripts, RAG, ingest, and internal runtime
+    ├── tree/               # Main engine Python package
+    ├── rag/                # Local embedding server and chunker
+    ├── ingest/             # Low-level OCR/structuring ingest modules
+    ├── scripts/            # Setup and runtime helper scripts
+    └── .runtime/           # Auto-created state, traces, drafts, sources, vector store
 ```
 
-Runtime paths are created automatically and ignored by Git. `raw_materials/` is kept as an empty upload directory, while real lecture files, exercises, and handouts inside it are not committed.
+Runtime paths are created automatically and ignored by Git. `raw_materials/` is kept as an empty upload directory, and `finished_outputs/` is kept for final textbooks. Real lecture files, exercises, handouts, and generated outputs inside those folders are not committed.
 
 ```text
 raw_materials/
-source_materials/
-drafts/
 finished_outputs/
-pipeline-state.json
-pipeline-temp/
-rag-store/
+tree_engine/.runtime/
 ```
 
 ### Installation
@@ -887,11 +904,11 @@ If Python or Git is missing, install [Python](https://www.python.org/downloads/)
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/Waylon524/tree.git
-cd tree
+git clone https://github.com/Waylon524/tree.git engine
+cd engine
 ```
 
-All following commands must be run from this **project root**. The project root should contain `pyproject.toml`, `README.md`, `scripts/`, and `tree/`. Do not run another `cd tree`; the inner `tree/` directory is the Python source package, not the project root.
+All following commands must be run from this **project root**. The project root should contain `pyproject.toml`, `README.md`, `raw_materials/`, `finished_outputs/`, and `tree_engine/`. Do not run another `cd tree`; `tree_engine/tree/` is the Python source package, not the project root.
 
 Check with:
 
@@ -899,17 +916,35 @@ macOS / Linux:
 
 ```bash
 pwd
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell:
 
 ```powershell
 Get-Location
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-2. Create and activate a Python virtual environment:
+2. Recommended: run the bootstrap script to check the device profile, create `.venv`, install dependencies, and start `tree-run setup`:
+
+macOS / Linux:
+
+```bash
+./tree_engine/scripts/bootstrap.sh
+```
+
+Windows PowerShell:
+
+```powershell
+.\tree_engine\scripts\bootstrap.ps1
+```
+
+The script checks Python, OS, Apple Silicon / CUDA / CPU hints, dependency status, and CLI availability. It does not start the embedding server automatically because that server occupies the current terminal. After setup, follow the next steps printed by the script.
+
+The manual steps below are useful when you need to debug the environment one step at a time.
+
+3. Create and activate a Python virtual environment:
 
 macOS / Linux:
 
@@ -925,13 +960,13 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-3. Upgrade the base installer:
+4. Upgrade the base installer:
 
 ```bash
 pip install -U pip
 ```
 
-4. Install the tree engine and RAG/embedding dependencies:
+5. Install the tree engine and RAG/embedding dependencies:
 
 ```bash
 pip install ".[rag]"
@@ -945,7 +980,7 @@ For source development and linting, use editable mode with the development extra
 pip install -e ".[rag,dev]"
 ```
 
-5. Confirm that the CLI is available:
+6. Confirm that the CLI is available:
 
 ```bash
 tree-run --help
@@ -956,17 +991,17 @@ If `tree-run` is not found, make sure the virtual environment is active. You can
 macOS / Linux:
 
 ```bash
-PYTHONPATH=. python -m tree.cli --help
+PYTHONPATH=tree_engine python -m tree.cli --help
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:PYTHONPATH = "."
+$env:PYTHONPATH = "tree_engine"
 python -m tree.cli --help
 ```
 
-6. Confirm that local embedding dependencies are available:
+7. Confirm that local embedding dependencies are available:
 
 ```bash
 python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
@@ -977,74 +1012,74 @@ If this command succeeds, continue to the next step.
 If you need to rebuild the GPU/Metal/CUDA version of `llama-cpp-python` on macOS / Linux, run:
 
 ```bash
-./scripts/setup-embedding.sh
+./tree_engine/scripts/setup-embedding.sh
 ```
 
 Apple Silicon:
 
 ```bash
-./scripts/setup-embedding.sh --device metal
+./tree_engine/scripts/setup-embedding.sh --device metal
 ```
 
 CPU-only:
 
 ```bash
-./scripts/setup-embedding.sh --device cpu
+./tree_engine/scripts/setup-embedding.sh --device cpu
 ```
 
 NVIDIA CUDA:
 
 ```bash
-./scripts/setup-embedding.sh --device cuda
+./tree_engine/scripts/setup-embedding.sh --device cuda
 ```
 
 Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script. Windows embedding dependencies were installed by `pip install ".[rag]"`.
 
-7. Start the embedding server.
+8. Start the embedding server.
 
 macOS / Linux:
 
 ```bash
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 The first start downloads `Qwen3-Embedding-4B-Q8_0.gguf`, about 4.3 GB. After that, the model stays in the local Hugging Face cache, so a second workspace usually does not download it again.
 
 This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run run` in that same terminal. Keep it open and start a new terminal tab.
 
-8. In the new terminal tab, return to the project root and activate the same `.venv`:
+9. In the new terminal tab, return to the project root and activate the same `.venv`:
 
 macOS / Linux:
 
 ```bash
-cd /path/to/tree
+cd /path/to/engine
 source .venv/bin/activate
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell:
 
 ```powershell
-cd C:\path\to\tree
+cd C:\path\to\engine
 .\.venv\Scripts\Activate.ps1
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-Replace `/path/to/tree` or `C:\path\to\tree` with your real repository path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
+Replace `/path/to/engine` or `C:\path\to\engine` with your real repository path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
 
-9. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
+10. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
 
 ```bash
 tree-run setup
 ```
 
-10. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+11. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
 tree-run run
@@ -1059,11 +1094,11 @@ The most reliable approach is: **create a new `.venv` for each workspace**. This
 1. Clone a new workspace:
 
 ```bash
-git clone https://github.com/Waylon524/tree.git tree-new
-cd tree-new
+git clone https://github.com/Waylon524/tree.git engine
+cd engine
 ```
 
-All following commands must be run from the `tree-new` **project root**. The project root should contain `pyproject.toml`, `README.md`, `scripts/`, and `tree/`. Do not run another `cd tree`; the inner `tree/` directory is the Python source package, not the project root.
+All following commands must be run from the `engine` **project root**. The project root should contain `pyproject.toml`, `README.md`, `raw_materials/`, `finished_outputs/`, and `tree_engine/`. Do not run another `cd tree`; `tree_engine/tree/` is the Python source package, not the project root.
 
 Check with:
 
@@ -1071,17 +1106,33 @@ macOS / Linux:
 
 ```bash
 pwd
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell:
 
 ```powershell
 Get-Location
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-2. Create and activate a virtual environment in the new workspace:
+2. Recommended: run bootstrap in the new workspace. It creates `.venv`, reuses local pip/Hugging Face caches, installs dependencies, and starts `tree-run setup`:
+
+macOS / Linux:
+
+```bash
+./tree_engine/scripts/bootstrap.sh
+```
+
+Windows PowerShell:
+
+```powershell
+.\tree_engine\scripts\bootstrap.ps1
+```
+
+The manual steps are below.
+
+3. Create and activate a virtual environment in the new workspace:
 
 macOS / Linux:
 
@@ -1097,7 +1148,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-3. Install tree and RAG/embedding dependencies:
+4. Install tree and RAG/embedding dependencies:
 
 ```bash
 pip install -U pip
@@ -1106,7 +1157,7 @@ pip install ".[rag]"
 
 This is usually faster than the first install because pip can reuse the local package cache. It does not download the embedding model again.
 
-4. Confirm that local embedding dependencies are present:
+5. Confirm that local embedding dependencies are present:
 
 ```bash
 python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
@@ -1115,62 +1166,62 @@ python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding
 If this command fails, or if you need to rebuild the GPU/Metal/CUDA version of `llama-cpp-python`, run:
 
 ```bash
-./scripts/setup-embedding.sh
+./tree_engine/scripts/setup-embedding.sh
 ```
 
 Apple Silicon:
 
 ```bash
-./scripts/setup-embedding.sh --device metal
+./tree_engine/scripts/setup-embedding.sh --device metal
 ```
 
 Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script.
 
-5. Start the embedding server.
+6. Start the embedding server.
 
 macOS / Linux:
 
 ```bash
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 If the local model cache is still present, this reuses it without downloading the 4.3 GB model again.
 
 This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run run` in that same terminal. Keep it open and start a new terminal tab.
 
-6. In the new terminal tab, return to the `tree-new` project root and activate the same `.venv`:
+7. In the new terminal tab, return to the `engine` project root and activate the same `.venv`:
 
 macOS / Linux:
 
 ```bash
-cd /path/to/tree-new
+cd /path/to/engine
 source .venv/bin/activate
-ls pyproject.toml README.md scripts
+ls pyproject.toml README.md tree_engine raw_materials finished_outputs
 ```
 
 Windows PowerShell:
 
 ```powershell
-cd C:\path\to\tree-new
+cd C:\path\to\engine
 .\.venv\Scripts\Activate.ps1
-Get-ChildItem pyproject.toml, README.md, scripts
+Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_outputs
 ```
 
-Replace `/path/to/tree-new` or `C:\path\to\tree-new` with your real workspace path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
+Replace `/path/to/engine` or `C:\path\to\engine` with your real workspace path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
 
-7. Each workspace needs its own `.env`. Run the setup wizard:
+8. Each workspace needs its own `.env`. Run the setup wizard:
 
 ```bash
 tree-run setup
 ```
 
-8. Put lectures, exercises, or handouts into `raw_materials/`, then run:
+9. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
 tree-run run
@@ -1182,7 +1233,7 @@ If you really want to reuse an old virtual environment, first locate its real pa
 find .. -path "*/.venv/bin/activate" -print
 ```
 
-Then activate the path you found and run `pip install ".[rag]"` from the new workspace, so `tree-run` points at the current checkout. Do not copy `../tree/.venv/bin/activate` unless your old workspace really is there.
+Then activate the path you found and run `pip install ".[rag]"` from the new workspace, so `tree-run` points at the current checkout. Do not copy `../engine/.venv/bin/activate` unless your old workspace really is there.
 
 On Windows PowerShell:
 
@@ -1199,25 +1250,25 @@ tree uses `Qwen3-Embedding-4B-Q8_0.gguf` from `Qwen/Qwen3-Embedding-4B-GGUF` by 
 macOS / Linux:
 
 ```bash
-./scripts/setup-embedding.sh
+./tree_engine/scripts/setup-embedding.sh
 ```
 
 Apple Silicon:
 
 ```bash
-./scripts/setup-embedding.sh --device metal
+./tree_engine/scripts/setup-embedding.sh --device metal
 ```
 
 CPU-only:
 
 ```bash
-./scripts/setup-embedding.sh --device cpu
+./tree_engine/scripts/setup-embedding.sh --device cpu
 ```
 
 NVIDIA CUDA:
 
 ```bash
-./scripts/setup-embedding.sh --device cuda
+./tree_engine/scripts/setup-embedding.sh --device cuda
 ```
 
 Windows PowerShell users usually do not need to run `setup-embedding.sh`; if `pip install ".[rag]"` succeeded, start the server directly.
@@ -1227,13 +1278,13 @@ Start the embedding server.
 macOS / Linux:
 
 ```bash
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 This terminal is now occupied by the embedding server. To run `tree-run setup`, `tree-run run`, or `tree-run ingest`, open a new terminal tab, return to the project root, and activate the virtual environment again first: use `source .venv/bin/activate` on macOS / Linux or `.\.venv\Scripts\Activate.ps1` on Windows PowerShell.
@@ -1272,6 +1323,16 @@ The first time you run a configuration-dependent command in a workspace, such as
 - role models for `Examiner`, `Student`, `Writer`, and `Archivist`
 
 The PaddleOCR job URL and PaddleOCR model are fixed and do not need input. They are currently fixed to `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` and `PaddleOCR-VL-1.6`.
+
+To get a PaddleOCR API key:
+
+1. Open the [PaddleOCR API task page](https://aistudio.baidu.com/paddleocr/task).
+2. Sign in with a Baidu AI Studio / PaddlePaddle account.
+3. Find the PaddleOCR-VL API call example or task creation area.
+4. Copy the `TOKEN` value, or the token after `Authorization: bearer ...`.
+5. When `tree-run setup` asks for `PaddleOCR API key`, paste that token.
+
+Do not put the PaddleOCR API key in README, screenshots, or Git commits. T.R.E.E. writes it to the local `.env`, which is ignored by Git.
 
 When entering API keys, the terminal does not display any characters. This is normal hidden input, like typing a password. Paste or type the full key, then press Enter. After setup, run `tree-run models` to verify that keys are `set` / `not set`; real secrets are never printed.
 
@@ -1388,7 +1449,7 @@ On every start, `tree-run run` checks `raw_materials/`:
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
 - the exam-writing loop starts only after all source materials are embedded
-- if no new material exists, the loop resumes from `pipeline-state.json`
+- if no new material exists, the loop resumes from `tree_engine/.runtime/pipeline-state.json`
 
 Resume:
 
@@ -1465,7 +1526,7 @@ raw materials
 
 ### RAG Strategy
 
-- Source materials are deleted from `source_materials/` after indexing.
+- Source materials are deleted from `tree_engine/.runtime/source_materials/` after indexing.
 - Finished outputs remain in `finished_outputs/` and are indexed.
 - Drafts are not indexed.
 - Retrieval uses semantic chunks plus adjacent chunk expansion.
@@ -1486,8 +1547,8 @@ MAX_TOKENS = {
 This repository no longer ships built-in sample data or a unit test directory. For code changes, run at least:
 
 ```bash
-ruff check tree rag ingest
-python -m compileall tree rag ingest
+ruff check tree_engine/tree tree_engine/rag tree_engine/ingest
+python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 ```
 
 For end-to-end verification, place real materials in `raw_materials/`, start the embedding server, and run:
@@ -1504,14 +1565,14 @@ Start the embedding server and make sure RAG dependencies are installed:
 
 ```bash
 pip install ".[rag]"
-./scripts/start-embed-server.sh
+./tree_engine/scripts/start-embed-server.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
 pip install ".[rag]"
-scripts\start-embed-server.bat
+tree_engine\scripts\start-embed-server.bat
 ```
 
 **`tree-run` cannot import the local package**
@@ -1537,13 +1598,13 @@ Or use the source-checkout fallback.
 macOS / Linux:
 
 ```bash
-PYTHONPATH=. python -m tree.cli --help
+PYTHONPATH=tree_engine python -m tree.cli --help
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:PYTHONPATH = "."
+$env:PYTHONPATH = "tree_engine"
 python -m tree.cli --help
 ```
 
