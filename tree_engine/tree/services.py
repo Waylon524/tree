@@ -97,8 +97,17 @@ def stop_service(root: Path, name: str, force: bool = False) -> ServiceStatus:
             _clear_stop(root, "tree")
         return status
     if force:
-        _terminate_pid(status.pid)
+        _terminate_pid(status.pid, force=False)
         deadline = time.time() + 5
+        while time.time() < deadline:
+            if not _pid_running(status.pid):
+                _clear_pid(root, name)
+                if name == "tree":
+                    _clear_stop(root, "tree")
+                return ServiceStatus(name=name, running=False, pid=None, log_path=status.log_path)
+            time.sleep(0.2)
+        _terminate_pid(status.pid, force=True)
+        deadline = time.time() + 3
         while time.time() < deadline:
             if not _pid_running(status.pid):
                 _clear_pid(root, name)
@@ -231,11 +240,23 @@ def _pid_running(pid: int) -> bool:
     return True
 
 
-def _terminate_pid(pid: int) -> None:
+def _service_state_label(running: bool) -> str:
+    return "running" if running else "stopped"
+
+
+def _terminate_pid(pid: int, force: bool = False) -> None:
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
         return
+    sig = signal.SIGKILL if force else signal.SIGTERM
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.killpg(pid, sig)
     except ProcessLookupError:
-        pass
+        return
+    except OSError:
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            pass

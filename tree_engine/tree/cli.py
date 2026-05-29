@@ -174,16 +174,20 @@ def stop(
 @app.command()
 def quit() -> None:
     """Stop TREE and the embedding server."""
-    from tree.services import request_tree_stop, stop_service
+    from tree.services import _service_state_label, request_tree_stop, stop_service
 
     root = Path.cwd()
     request_tree_stop(root)
     tree = stop_service(root, "tree", force=True)
     embed = stop_service(root, "embedding", force=True)
+    level = "green" if not tree.running and not embed.running else "yellow"
     rprint(
-        "[green]Quit complete.[/green] "
-        f"TREE running={tree.running}; embedding running={embed.running}"
+        f"[{level}]Quit complete.[/{level}] "
+        f"TREE={_service_state_label(tree.running)}; "
+        f"embedding={_service_state_label(embed.running)}"
     )
+    if tree.running or embed.running:
+        rprint("[yellow]One or more services did not exit within the timeout. Run /status to inspect.[/yellow]")
 
 
 @app.command("start-embedding", hidden=True)
