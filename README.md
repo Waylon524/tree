@@ -114,7 +114,7 @@ Windows PowerShell：
 .\tree_engine\scripts\bootstrap.ps1
 ```
 
-这个脚本会检查 Python 版本、系统类型、Apple Silicon / CUDA / CPU 设备提示、依赖安装状态和 CLI 可用性。它不会自动启动 embedding server，因为 embedding server 会占用当前终端；setup 完成后按脚本最后打印的 next steps 操作即可。
+这个脚本会检查 Python 版本、系统类型、Apple Silicon / CUDA / CPU 设备提示、依赖安装状态和 CLI 可用性。它会在 setup 完成后自动把 embedding server 启动到后台，并在当前终端显示启动日志。首次启动可能下载约 4.3 GB 模型，下载和加载过程会显示在终端中。
 
 下面是手动安装步骤，适合需要逐步排查环境问题时使用。
 
@@ -225,7 +225,7 @@ tree_engine\scripts\start-embed-server.bat
 
 首次启动会自动下载 `Qwen3-Embedding-4B-Q8_0.gguf`，约 4.3 GB。下载完成后模型会留在本机 Hugging Face 缓存中，之后换工作区通常不需要重新下载。
 
-这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run run`。保持它开着，然后新开一个终端标签页。
+这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run continue`。保持它开着，然后新开一个终端标签页。
 
 9. 在新终端标签页中回到项目根目录，并激活同一个 `.venv`：
 
@@ -247,7 +247,7 @@ Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_ou
 
 把 `/path/to/engine` 或 `C:\path\to\engine` 替换成你的实际仓库路径。如果你不确定路径，在启动 embedding server 的旧终端里运行 `pwd`（macOS / Linux）或 `Get-Location`（Windows PowerShell）复制完整路径。确认当前目录能看到 `pyproject.toml` 后，再继续。
 
-10. 配置 API key 和模型。第一次运行 `tree-run run` 时会自动弹出配置向导，也可以手动运行：
+10. 配置 API key 和模型。第一次运行 `tree-run continue` 时会自动弹出配置向导，也可以手动运行：
 
 ```bash
 tree-run setup
@@ -256,7 +256,7 @@ tree-run setup
 11. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
-tree-run run
+tree-run continue
 ```
 
 #### 二次安装（本机已下载过本地模型）
@@ -367,7 +367,7 @@ tree_engine\scripts\start-embed-server.bat
 
 如果本地模型缓存还在，这一步会直接复用缓存，不会重新下载 4.3 GB 模型。
 
-这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run run`。保持它开着，然后新开一个终端标签页。
+这个命令会一直占用当前终端运行服务。看到 `Model loaded` 或服务日志后，不要在这个终端继续输入 `tree-run setup` 或 `tree-run continue`。保持它开着，然后新开一个终端标签页。
 
 7. 在新终端标签页中回到 `engine` 项目根目录，并激活同一个 `.venv`：
 
@@ -398,7 +398,7 @@ tree-run setup
 9. 把课件、习题或讲义放入 `raw_materials/`，然后运行：
 
 ```bash
-tree-run run
+tree-run continue
 ```
 
 如果你确实想复用旧虚拟环境，先找到旧环境的真实路径：
@@ -461,7 +461,7 @@ Windows PowerShell：
 tree_engine\scripts\start-embed-server.bat
 ```
 
-这个终端会被 embedding server 占用。运行 `tree-run setup`、`tree-run run`、`tree-run ingest` 等命令时，请新开一个终端标签页，回到项目根目录，重新激活虚拟环境后再运行：macOS / Linux 使用 `source .venv/bin/activate`，Windows PowerShell 使用 `.\.venv\Scripts\Activate.ps1`。
+这个终端会被 embedding server 占用。运行 `tree-run setup`、`tree-run continue`、`tree-run ingest` 等命令时，请新开一个终端标签页，回到项目根目录，重新激活虚拟环境后再运行：macOS / Linux 使用 `source .venv/bin/activate`，Windows PowerShell 使用 `.\.venv\Scripts\Activate.ps1`。
 
 默认配置：
 
@@ -488,7 +488,7 @@ curl -X POST http://localhost:8788/v1/embeddings \
 
 ### 环境变量
 
-第一次在某个工作区中运行需要配置的命令时，例如 `tree-run run`、`tree-run ingest` 或 `tree-run doctor`，如果当前目录没有 `.env`，CLI 会自动启动交互式配置向导。向导会在命令行中要求输入：
+第一次在某个工作区中运行需要配置的命令时，例如 `tree-run continue`、`tree-run ingest` 或 `tree-run doctor`，如果当前目录没有 `.env`，CLI 会自动启动交互式配置向导。向导会在命令行中要求输入：
 
 - PaddleOCR API key
 - 子智能体共享 API key
@@ -618,17 +618,17 @@ macOS / Linux：
 
 ```bash
 source .venv/bin/activate
-tree-run run
+tree-run continue
 ```
 
 Windows PowerShell：
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-tree-run run
+tree-run continue
 ```
 
-每次 `tree-run run` 都会先检查 `raw_materials/`：
+每次 `tree-run continue` 都会先检查 `raw_materials/`：
 
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
@@ -638,7 +638,7 @@ tree-run run
 断点恢复：
 
 ```bash
-tree-run resume
+tree-run continue
 ```
 
 手动摄入某个文件或目录：
@@ -653,6 +653,9 @@ tree-run ingest --input raw_materials/课件 --collection 课件 --no-index
 
 ```bash
 tree-run --help
+tree-run continue
+tree-run stop
+tree-run quit
 tree-run run
 tree-run resume
 tree-run status
@@ -675,8 +678,11 @@ tree-run rag search "化学平衡常数" --kind source --top-k 5
 
 | 命令 | 作用 |
 | --- | --- |
-| `run` | 启动完整流水线 |
-| `resume` | 从现有状态继续 |
+| `run` | 前台启动完整流水线，适合调试 |
+| `continue` | 后台启动或继续 TREE，自动确保 embedding server 运行 |
+| `stop` | 停止 TREE，保留 embedding server |
+| `quit` | 停止 TREE 和 embedding server |
+| `resume` | 前台从现有状态继续，适合调试 |
 | `status` | 查看章节进度 |
 | `doctor` | 检查环境、服务和 Git 状态 |
 | `materials` | 查看 raw materials 摄入状态 |
@@ -762,7 +768,7 @@ python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 需要端到端验证时，将真实资料放入 `raw_materials/`，启动 embedding server，然后运行：
 
 ```bash
-tree-run run
+tree-run continue
 ```
 
 ### 常见问题
@@ -940,7 +946,7 @@ Windows PowerShell:
 .\tree_engine\scripts\bootstrap.ps1
 ```
 
-The script checks Python, OS, Apple Silicon / CUDA / CPU hints, dependency status, and CLI availability. It does not start the embedding server automatically because that server occupies the current terminal. After setup, follow the next steps printed by the script.
+The script checks Python, OS, Apple Silicon / CUDA / CPU hints, dependency status, and CLI availability. After setup, it starts the embedding server in the background and streams the startup log in the current terminal. The first start may download about 4.3 GB, and download/loading progress is shown while you wait.
 
 The manual steps below are useful when you need to debug the environment one step at a time.
 
@@ -1051,7 +1057,7 @@ tree_engine\scripts\start-embed-server.bat
 
 The first start downloads `Qwen3-Embedding-4B-Q8_0.gguf`, about 4.3 GB. After that, the model stays in the local Hugging Face cache, so a second workspace usually does not download it again.
 
-This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run run` in that same terminal. Keep it open and start a new terminal tab.
+This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run continue` in that same terminal. Keep it open and start a new terminal tab.
 
 9. In the new terminal tab, return to the project root and activate the same `.venv`:
 
@@ -1073,7 +1079,7 @@ Get-ChildItem pyproject.toml, README.md, tree_engine, raw_materials, finished_ou
 
 Replace `/path/to/engine` or `C:\path\to\engine` with your real repository path. If you are not sure, run `pwd` in the old macOS / Linux terminal or `Get-Location` in the old Windows PowerShell tab and copy the full path. Continue only after `pyproject.toml` is visible.
 
-10. Configure API keys and model names. The first `tree-run run` starts the setup wizard automatically, or you can run it manually:
+10. Configure API keys and model names. The first `tree-run continue` starts the setup wizard automatically, or you can run it manually:
 
 ```bash
 tree-run setup
@@ -1082,7 +1088,7 @@ tree-run setup
 11. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
-tree-run run
+tree-run continue
 ```
 
 #### Second Install (Local Model Already Downloaded)
@@ -1193,7 +1199,7 @@ tree_engine\scripts\start-embed-server.bat
 
 If the local model cache is still present, this reuses it without downloading the 4.3 GB model again.
 
-This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run run` in that same terminal. Keep it open and start a new terminal tab.
+This command keeps running and occupies the current terminal. After you see `Model loaded` or server logs, do not type `tree-run setup` or `tree-run continue` in that same terminal. Keep it open and start a new terminal tab.
 
 7. In the new terminal tab, return to the `engine` project root and activate the same `.venv`:
 
@@ -1224,7 +1230,7 @@ tree-run setup
 9. Put lectures, exercises, or handouts into `raw_materials/`, then run:
 
 ```bash
-tree-run run
+tree-run continue
 ```
 
 If you really want to reuse an old virtual environment, first locate its real path:
@@ -1287,7 +1293,7 @@ Windows PowerShell:
 tree_engine\scripts\start-embed-server.bat
 ```
 
-This terminal is now occupied by the embedding server. To run `tree-run setup`, `tree-run run`, or `tree-run ingest`, open a new terminal tab, return to the project root, and activate the virtual environment again first: use `source .venv/bin/activate` on macOS / Linux or `.\.venv\Scripts\Activate.ps1` on Windows PowerShell.
+This terminal is now occupied by the embedding server. To run `tree-run setup`, `tree-run continue`, or `tree-run ingest`, open a new terminal tab, return to the project root, and activate the virtual environment again first: use `source .venv/bin/activate` on macOS / Linux or `.\.venv\Scripts\Activate.ps1` on Windows PowerShell.
 
 Default settings:
 
@@ -1314,7 +1320,7 @@ curl -X POST http://localhost:8788/v1/embeddings \
 
 ### Environment
 
-The first time you run a configuration-dependent command in a workspace, such as `tree-run run`, `tree-run ingest`, or `tree-run doctor`, the CLI starts an interactive setup wizard if `.env` does not exist. The wizard asks for:
+The first time you run a configuration-dependent command in a workspace, such as `tree-run continue`, `tree-run ingest`, or `tree-run doctor`, the CLI starts an interactive setup wizard if `.env` does not exist. The wizard asks for:
 
 - PaddleOCR API key
 - shared API key for the agent provider
@@ -1434,17 +1440,17 @@ macOS / Linux:
 
 ```bash
 source .venv/bin/activate
-tree-run run
+tree-run continue
 ```
 
 Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-tree-run run
+tree-run continue
 ```
 
-On every start, `tree-run run` checks `raw_materials/`:
+On every start, `tree-run continue` checks `raw_materials/`:
 
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
@@ -1454,7 +1460,7 @@ On every start, `tree-run run` checks `raw_materials/`:
 Resume:
 
 ```bash
-tree-run resume
+tree-run continue
 ```
 
 Manual ingest:
@@ -1469,6 +1475,9 @@ tree-run ingest --input raw_materials/lectures --collection lectures --no-index
 
 ```bash
 tree-run --help
+tree-run continue
+tree-run stop
+tree-run quit
 tree-run run
 tree-run resume
 tree-run status
@@ -1489,8 +1498,11 @@ tree-run rag search "equilibrium constant" --kind source --top-k 5
 
 | Command | Purpose |
 | --- | --- |
-| `run` | Start the full pipeline |
-| `resume` | Continue from existing state |
+| `run` | Start the full pipeline in the foreground, useful for debugging |
+| `continue` | Start or continue TREE in the background and ensure embedding is running |
+| `stop` | Stop TREE while keeping the embedding server running |
+| `quit` | Stop TREE and the embedding server |
+| `resume` | Continue from existing state in the foreground, useful for debugging |
 | `status` | Show chapter progress |
 | `doctor` | Check configuration, services, and Git status |
 | `materials` | Show raw material ingest status |
@@ -1554,7 +1566,7 @@ python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 For end-to-end verification, place real materials in `raw_materials/`, start the embedding server, and run:
 
 ```bash
-tree-run run
+tree-run continue
 ```
 
 ### FAQ

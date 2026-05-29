@@ -5,11 +5,13 @@ Usage:
   .\tree_engine\scripts\bootstrap.ps1
   .\tree_engine\scripts\bootstrap.ps1 -Dev
   .\tree_engine\scripts\bootstrap.ps1 -SkipSetup
+  .\tree_engine\scripts\bootstrap.ps1 -SkipEmbeddingStart
 #>
 
 param(
     [switch]$Dev,
-    [switch]$SkipSetup
+    [switch]$SkipSetup,
+    [switch]$SkipEmbeddingStart
 )
 
 Set-StrictMode -Version Latest
@@ -73,6 +75,52 @@ function Invoke-Python {
     }
 }
 
+function Test-EmbeddingReady {
+    & $VenvPython -c "from pathlib import Path; from tree.services import embedding_health; raise SystemExit(0 if embedding_health(Path.cwd())[0] else 1)" *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Test-EmbeddingProcess {
+    $PidPath = Join-Path $ProjectRoot "tree_engine\.runtime\services\embedding.pid"
+    if (-not (Test-Path $PidPath)) {
+        return $false
+    }
+    $ServicePid = (Get-Content $PidPath -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if (-not $ServicePid) {
+        return $false
+    }
+    return [bool](Get-Process -Id ([int]$ServicePid) -ErrorAction SilentlyContinue)
+}
+
+function Start-EmbeddingWithProgress {
+    Write-Step "Starting embedding server in the background"
+    & $VenvPython -m tree.cli start-embedding --no-wait
+
+    $LogPath = Join-Path $ProjectRoot "tree_engine\.runtime\services\embedding.log"
+    New-Item -ItemType File -Force -Path $LogPath | Out-Null
+    Write-Host "Showing embedding server log while it starts. First launch may download ~4.3 GB."
+    $LogJob = Start-Job -ScriptBlock {
+        param($Path)
+        Get-Content -Path $Path -Wait -Tail 40
+    } -ArgumentList $LogPath
+
+    try {
+        while (-not (Test-EmbeddingReady)) {
+            Receive-Job $LogJob | ForEach-Object { Write-Host $_ }
+            if (-not (Test-EmbeddingProcess)) {
+                throw "Embedding server exited before becoming ready. Check $LogPath"
+            }
+            Start-Sleep -Seconds 2
+        }
+        Receive-Job $LogJob | ForEach-Object { Write-Host $_ }
+    } finally {
+        Stop-Job $LogJob -ErrorAction SilentlyContinue
+        Remove-Job $LogJob -ErrorAction SilentlyContinue
+    }
+    Write-Host ""
+    Write-Host "Embedding server is ready."
+}
+
 if (-not (Test-Path "pyproject.toml")) {
     throw "Run this script from a cloned tree checkout, or use tree_engine\scripts\bootstrap.ps1 from the project root."
 }
@@ -115,12 +163,20 @@ if (-not $SkipSetup) {
     Write-Step "Skipping workspace setup"
 }
 
+if (-not $SkipEmbeddingStart) {
+    Start-EmbeddingWithProgress
+} else {
+    Write-Step "Skipping embedding server startup"
+}
+
 Write-Host ""
 Write-Host "Bootstrap complete."
 Write-Host ""
 Write-Host "Next:"
-Write-Host "  1. Start the embedding server in one terminal:"
-Write-Host "       tree_engine\scripts\start-embed-server.bat"
-Write-Host "  2. Open another terminal, activate .venv, then run:"
-Write-Host "       .\.venv\Scripts\Activate.ps1"
-Write-Host "       tree-run run"
+Write-Host "  1. Put course files into raw_materials\"
+Write-Host "  2. Continue TREE in the background:"
+Write-Host "       tree-run continue"
+Write-Host "  3. Check status or stop later:"
+Write-Host "       tree-run status"
+Write-Host "       tree-run stop"
+Write-Host "       tree-run quit"

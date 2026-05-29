@@ -5,6 +5,7 @@
 #   ./tree_engine/scripts/bootstrap.sh
 #   ./tree_engine/scripts/bootstrap.sh --dev
 #   ./tree_engine/scripts/bootstrap.sh --skip-setup
+#   ./tree_engine/scripts/bootstrap.sh --skip-embedding-start
 #   ./tree_engine/scripts/bootstrap.sh --force-embedding-rebuild
 
 set -euo pipefail
@@ -15,6 +16,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INSTALL_EXTRAS="rag"
 RUN_SETUP=1
 FORCE_EMBEDDING_REBUILD=0
+START_EMBEDDING=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -23,6 +25,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-setup)
       RUN_SETUP=0
+      ;;
+    --skip-embedding-start)
+      START_EMBEDDING=0
       ;;
     --force-embedding-rebuild)
       FORCE_EMBEDDING_REBUILD=1
@@ -108,6 +113,47 @@ verify_embedding_deps() {
   "$1" -c 'import llama_cpp, huggingface_hub, fastapi, uvicorn' >/dev/null 2>&1
 }
 
+embedding_ready() {
+  "$VENV_PYTHON" -c 'from pathlib import Path; from tree.services import embedding_health; raise SystemExit(0 if embedding_health(Path.cwd())[0] else 1)' >/dev/null 2>&1
+}
+
+embedding_pid_running() {
+  local pid_file="tree_engine/.runtime/services/embedding.pid"
+  [ -f "$pid_file" ] || return 1
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" >/dev/null 2>&1
+}
+
+start_embedding_with_progress() {
+  log "Starting embedding server in the background"
+  "$VENV_PYTHON" -m tree.cli start-embedding --no-wait
+
+  local log_file="tree_engine/.runtime/services/embedding.log"
+  local tail_pid=""
+  if command -v tail >/dev/null 2>&1; then
+    touch "$log_file"
+    echo "Showing embedding server log while it starts. First launch may download ~4.3 GB."
+    tail -n 40 -f "$log_file" &
+    tail_pid="$!"
+  else
+    echo "Embedding log: $PROJECT_ROOT/$log_file"
+  fi
+
+  while ! embedding_ready; do
+    if ! embedding_pid_running; then
+      [ -n "$tail_pid" ] && kill "$tail_pid" >/dev/null 2>&1 || true
+      fail "Embedding server exited before becoming ready. Check $PROJECT_ROOT/$log_file"
+    fi
+    sleep 2
+  done
+
+  [ -n "$tail_pid" ] && kill "$tail_pid" >/dev/null 2>&1 || true
+  echo ""
+  echo "Embedding server is ready."
+}
+
 require_project_root
 
 DEVICE="$(detect_device)"
@@ -142,14 +188,22 @@ else
   log "Skipping workspace setup"
 fi
 
+if [ "$START_EMBEDDING" -eq 1 ]; then
+  start_embedding_with_progress
+else
+  log "Skipping embedding server startup"
+fi
+
 cat <<'NEXT'
 
 Bootstrap complete.
 
 Next:
-  1. Start the embedding server in one terminal:
-       ./tree_engine/scripts/start-embed-server.sh
-  2. Open another terminal, activate .venv, then run:
-       source .venv/bin/activate
-       tree-run run
+  1. Put course files into raw_materials/
+  2. Continue TREE in the background:
+       tree-run continue
+  3. Check status or stop later:
+       tree-run status
+       tree-run stop
+       tree-run quit
 NEXT

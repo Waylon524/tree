@@ -8,8 +8,6 @@ import os
 import re
 import shutil
 import subprocess
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import typer
@@ -48,30 +46,119 @@ _DEFAULT_ENV = {
 def run() -> None:
     """Start the T.R.E.E. pipeline from current state."""
     from tree.config import Settings
-    from tree.engine import TreeEngine
+    from tree.engine import StopRequested, TreeEngine
+    from tree.services import clear_stop
 
-    _ensure_workspace_config(Path.cwd())
+    root = Path.cwd()
+    _ensure_workspace_config(root)
+    clear_stop(root, "tree")
     settings = Settings.from_env()
     engine = TreeEngine(settings)
     try:
         asyncio.run(_run_engine(engine))
+    except StopRequested:
+        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tree-run continue' to resume.[/yellow]")
     except KeyboardInterrupt:
-        rprint("[yellow]Pipeline interrupted. Use 'tree resume' to continue.[/yellow]")
+        rprint("[yellow]Pipeline interrupted. Use 'tree-run continue' to continue.[/yellow]")
 
 
 @app.command()
 def resume() -> None:
     """Resume pipeline from the last checkpoint in tree_engine/.runtime."""
     from tree.config import Settings
-    from tree.engine import TreeEngine
+    from tree.engine import StopRequested, TreeEngine
+    from tree.services import clear_stop
 
-    _ensure_workspace_config(Path.cwd())
+    root = Path.cwd()
+    _ensure_workspace_config(root)
+    clear_stop(root, "tree")
     settings = Settings.from_env()
     engine = TreeEngine(settings)
     try:
         asyncio.run(_run_engine(engine))
+    except StopRequested:
+        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tree-run continue' to resume.[/yellow]")
     except KeyboardInterrupt:
-        rprint("[yellow]Pipeline interrupted. Use 'tree resume' to continue.[/yellow]")
+        rprint("[yellow]Pipeline interrupted. Use 'tree-run continue' to continue.[/yellow]")
+
+
+@app.command("continue")
+def continue_(
+    wait_embedding: bool = typer.Option(
+        True,
+        "--wait-embedding/--no-wait-embedding",
+        help="Wait until the embedding server health check is ready.",
+    ),
+) -> None:
+    """Start or continue TREE in the background."""
+    from tree.services import start_embedding, start_tree, wait_for_embedding
+
+    root = Path.cwd()
+    _ensure_workspace_config(root)
+    embed = start_embedding(root)
+    rprint(f"[green]{embed.message}[/green] pid={embed.pid} log={embed.log_path}")
+    if wait_embedding:
+        rprint("[dim]Waiting for embedding server health check...[/dim]")
+        if wait_for_embedding(root, timeout_sec=7200):
+            rprint("[green]Embedding server ready.[/green]")
+        else:
+            rprint(f"[yellow]Embedding server is not ready yet. Check {embed.log_path}[/yellow]")
+            return
+
+    tree = start_tree(root)
+    rprint(f"[green]{tree.message}[/green] pid={tree.pid} log={tree.log_path}")
+
+
+@app.command()
+def stop(
+    force: bool = typer.Option(False, "--force", help="Terminate TREE immediately"),
+) -> None:
+    """Stop TREE while keeping the embedding server running."""
+    from tree.services import request_tree_stop, service_status, stop_service
+
+    root = Path.cwd()
+    request_tree_stop(root)
+    status = stop_service(root, "tree", force=force)
+    if status.running:
+        rprint(
+            f"[yellow]TREE stop requested.[/yellow] "
+            f"It will exit at the next safe checkpoint. pid={status.pid} log={status.log_path}"
+        )
+    else:
+        rprint("[green]TREE is stopped. Embedding server was left running.[/green]")
+    embed = service_status(root, "embedding")
+    if embed.running:
+        rprint(f"[dim]Embedding server still running: pid={embed.pid} log={embed.log_path}[/dim]")
+
+
+@app.command()
+def quit() -> None:
+    """Stop TREE and the embedding server."""
+    from tree.services import request_tree_stop, stop_service
+
+    root = Path.cwd()
+    request_tree_stop(root)
+    tree = stop_service(root, "tree", force=True)
+    embed = stop_service(root, "embedding", force=True)
+    rprint(
+        "[green]Quit complete.[/green] "
+        f"TREE running={tree.running}; embedding running={embed.running}"
+    )
+
+
+@app.command("start-embedding", hidden=True)
+def start_embedding_command(
+    wait: bool = typer.Option(False, "--wait/--no-wait", help="Wait for health check"),
+) -> None:
+    """Internal helper used by bootstrap to start embedding in the background."""
+    from tree.services import start_embedding, wait_for_embedding
+
+    root = Path.cwd()
+    _ensure_workspace_config(root, require_llm=False)
+    result = start_embedding(root)
+    rprint(f"{result.message}: pid={result.pid} log={result.log_path}")
+    if wait and not wait_for_embedding(root, timeout_sec=7200):
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -80,10 +167,26 @@ def status(
 ) -> None:
     """Display current pipeline state, chapter progress, iteration counts."""
     from tree.state.manager import StateManager
+    from tree.services import service_status
 
     project_root = Path.cwd()
     mgr = StateManager(paths.pipeline_state_path(project_root))
     state = mgr.load()
+
+    services = Table(title="Services")
+    services.add_column("Service")
+    services.add_column("Status")
+    services.add_column("PID")
+    services.add_column("Log")
+    for name in ("tree", "embedding"):
+        svc = service_status(project_root, name)
+        services.add_row(
+            name,
+            "[green]running[/green]" if svc.running else "[dim]stopped[/dim]",
+            str(svc.pid or ""),
+            str(svc.log_path),
+        )
+    rprint(services)
 
     if not state.chapters:
         rprint("[dim]No chapters yet. Pipeline has not started.[/dim]")
@@ -756,13 +859,10 @@ def _quote_env_value(value: str) -> str:
 
 
 def _embedding_health() -> tuple[bool, str]:
-    base_url = os.environ.get("EMBED_API_URL", "http://localhost:8788").rstrip("/")
-    try:
-        with urllib.request.urlopen(f"{base_url}/health", timeout=3) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-        return True, _truncate(body, 120)
-    except (OSError, urllib.error.URLError) as exc:
-        return False, f"{base_url}/health unavailable: {exc}"
+    from tree.services import embedding_health
+
+    ok, detail = embedding_health(Path.cwd())
+    return ok, _truncate(detail, 120)
 
 
 def _git_status_summary(root: Path) -> tuple[bool, str]:

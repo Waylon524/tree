@@ -19,6 +19,7 @@ from tree.model.client import LLMClient
 from tree.io import file_ops, git_ops, paths, source_ops
 from tree.observability.limiter import IterationLimiter
 from tree.observability.logger import TraceLogger
+from tree.services import stop_requested
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditResult,
@@ -42,6 +43,10 @@ RAW_MATERIAL_EXTENSIONS = {
     ".txt",
     ".webp",
 }
+
+
+class StopRequested(Exception):
+    """Raised when a background stop request reaches a safe checkpoint."""
 
 
 class TreeEngine:
@@ -70,8 +75,10 @@ class TreeEngine:
     async def run(self) -> None:
         """Entry point for `tree run`."""
         self.tracer.log_pipeline_start()
+        self._raise_if_stop_requested()
         await self._prepare_source_materials_for_loop()
         while True:
+            self._raise_if_stop_requested()
             state = self.state_mgr.load()
             chapter = self.state_mgr.find_in_progress(state)
             if chapter is None:
@@ -112,6 +119,7 @@ class TreeEngine:
     async def _prepare_source_materials_for_loop(self) -> None:
         """Ingest new uploads and ensure every source material is embedded."""
         root = self.settings.project_root
+        self._raise_if_stop_requested()
         manifest = _load_source_manifest(root)
         pending = _pending_raw_materials(root, manifest)
 
@@ -138,6 +146,7 @@ class TreeEngine:
             async def embed_outputs(raw_path: Path, collection: str, outputs: list[Path]) -> int:
                 indexed = 0
                 for output in outputs:
+                    self._raise_if_stop_requested()
                     async with embedding_sem:
                         indexed += await asyncio.to_thread(
                             _index_source_output,
@@ -153,6 +162,7 @@ class TreeEngine:
 
             tasks = [asyncio.create_task(ingest_one(raw_path, collection)) for raw_path, collection in pending]
             for task in asyncio.as_completed(tasks):
+                self._raise_if_stop_requested()
                 raw_path, collection, outputs = await task
                 async with manifest_lock:
                     _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
@@ -171,6 +181,7 @@ class TreeEngine:
     def _ensure_all_source_materials_embedded(self) -> None:
         """Block the TREE loop until all structured source materials are indexed."""
         root = self.settings.project_root
+        self._raise_if_stop_requested()
         collections = source_ops.read_all_collections(root)
         docs = [(collection, doc.path) for collection, items in collections.items() for doc in items]
         if not docs:
@@ -185,6 +196,7 @@ class TreeEngine:
 
         indexed = 0
         for collection, path in docs:
+            self._raise_if_stop_requested()
             indexed += _index_source_output(root, collection, path, indexer)
         if indexed:
             print(f"Source ingest: embedded {indexed} source material file(s).")
@@ -192,6 +204,7 @@ class TreeEngine:
     async def process_chapter(self, chapter_name: str) -> None:
         """Run Step 0→1→2→3→4 loop for one chapter until CHAPTER_COMPLETE."""
         while True:
+            self._raise_if_stop_requested()
             state = self.state_mgr.load()
             chapter = next(c for c in state.chapters if c.chapter_name == chapter_name)
             next_seq = str(len(chapter.files_completed) + 1).zfill(2)
@@ -199,6 +212,7 @@ class TreeEngine:
             # Step 1: Examiner composes exam
             t0 = time.time()
             exam_sections, is_complete = await self._step1_compose(chapter, next_seq)
+            self._raise_if_stop_requested()
             self.tracer.log_step(
                 "S1", chapter_name, next_seq, "examiner", "compose_exam",
                 duration_ms=int((time.time() - t0) * 1000),
@@ -224,12 +238,14 @@ class TreeEngine:
     async def _iteration_loop(self, iter_state: IterationState, chapter_name: str) -> None:
         """Step 2→3→4→2 loop until PASS or iteration limit."""
         while True:
+            self._raise_if_stop_requested()
             iter_state.iteration += 1
             self.limiter.check(iter_state.chapter, iter_state.file_seq, iter_state.iteration)
 
             # Step 2: Student blind test
             t0 = time.time()
             answer = await self._step2_blind_test(iter_state)
+            self._raise_if_stop_requested()
             self.tracer.log_step(
                 "S2", chapter_name, iter_state.file_seq, "student", "blind_test",
                 duration_ms=int((time.time() - t0) * 1000),
@@ -240,6 +256,7 @@ class TreeEngine:
             # Step 3: Examiner audit
             t0 = time.time()
             audit = await self._step3_audit(iter_state, answer)
+            self._raise_if_stop_requested()
             self.tracer.log_step(
                 "S3", chapter_name, iter_state.file_seq, "examiner", "audit",
                 duration_ms=int((time.time() - t0) * 1000),
@@ -257,6 +274,7 @@ class TreeEngine:
             # Step 4: Writer creates/optimizes draft
             t0 = time.time()
             writer_result = await self._step4_writer(iter_state, audit)
+            self._raise_if_stop_requested()
             self.tracer.log_step(
                 "S4", chapter_name, iter_state.file_seq, "writer",
                 "optimize_draft" if iter_state.draft_path else "create_draft",
@@ -473,6 +491,10 @@ class TreeEngine:
 
     async def close(self) -> None:
         await self.client.close()
+
+    def _raise_if_stop_requested(self) -> None:
+        if stop_requested(self.settings.project_root, "tree"):
+            raise StopRequested("TREE stop requested")
 
     def _init_rag(self) -> None:
         """Initialize optional local RAG components when dependencies are installed."""

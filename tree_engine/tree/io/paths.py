@@ -31,3 +31,19 @@ def pipeline_state_path(root: Path) -> Path:
 
 def rag_store_path(root: Path) -> Path:
     return runtime_root(root) / "rag-store"
+
+
+def services_root(root: Path) -> Path:
+    return runtime_root(root) / "services"
+
+
+def service_pid_path(root: Path, name: str) -> Path:
+    return services_root(root) / f"{name}.pid"
+
+
+def service_log_path(root: Path, name: str) -> Path:
+    return services_root(root) / f"{name}.log"
+
+
+def service_stop_path(root: Path, name: str) -> Path:
+    return services_root(root) / f"{name}.stop"
