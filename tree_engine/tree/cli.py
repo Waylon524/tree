@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -74,6 +75,10 @@ _DEFAULT_ENV = {
     "EMBED_N_GPU_LAYERS": "-1",
     "EMBED_N_SEQ_MAX": "1",
 }
+
+
+class _InteractiveQuitRequested(Exception):
+    """Raised when the interactive shell receives a terminal close signal."""
 
 
 @app.callback(invoke_without_command=True)
@@ -205,20 +210,7 @@ def stop(
 @app.command()
 def quit() -> None:
     """Stop TREE and the embedding server."""
-    from tree.services import _service_state_label, request_tree_stop, stop_service
-
-    root = Path.cwd()
-    request_tree_stop(root)
-    tree = stop_service(root, "tree", force=True)
-    embed = stop_service(root, "embedding", force=True)
-    level = "green" if not tree.running and not embed.running else "yellow"
-    rprint(
-        f"[{level}]Quit complete.[/{level}] "
-        f"TREE={_service_state_label(tree.running)}; "
-        f"embedding={_service_state_label(embed.running)}"
-    )
-    if tree.running or embed.running:
-        rprint("[yellow]One or more services did not exit within the timeout. Run /status to inspect.[/yellow]")
+    _quit_services(Path.cwd())
 
 
 @app.command("start-embedding", hidden=True)
@@ -859,43 +851,85 @@ def _tail_panel(path: Path, title: str, line_count: int = 6) -> Panel:
 
 
 def _interactive_shell() -> None:
-    rprint(
-        Panel(
-            "Type [bold]/start[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
-            "[bold]/watch[/bold] to follow progress, or [bold]/help[/bold] for commands.",
-            title=f"[bold {_TREE_TITLE}]TREE[/]",
-            border_style=_TREE_BORDER,
+    root = Path.cwd()
+    old_signal_handlers = _install_interactive_quit_handlers()
+    try:
+        rprint(
+            Panel(
+                "Type [bold]/start[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
+                "[bold]/watch[/bold] to follow progress, or [bold]/help[/bold] for commands.",
+                title=f"[bold {_TREE_TITLE}]TREE[/]",
+                border_style=_TREE_BORDER,
+            )
         )
+        while True:
+            try:
+                line = input("TREE> ")
+            except (EOFError, KeyboardInterrupt, _InteractiveQuitRequested):
+                rprint("\n[yellow]TREE interactive closed. Running /quit...[/yellow]")
+                _quit_services(root)
+                return
+
+            try:
+                args = _parse_interactive_command(line)
+            except ValueError as exc:
+                rprint(f"[red]{exc}[/red]")
+                continue
+            if not args:
+                continue
+
+            command = args[0]
+            if command == "exit":
+                rprint("[dim]Leaving TREE. TREE services were not changed.[/dim]")
+                return
+            if command == "help":
+                _print_interactive_help(args[1:])
+                continue
+
+            _invoke_cli_args(args)
+            if command == "quit":
+                return
+    except _InteractiveQuitRequested:
+        rprint("\n[yellow]TREE interactive closed. Running /quit...[/yellow]")
+        _quit_services(root)
+    finally:
+        _restore_signal_handlers(old_signal_handlers)
+
+
+def _install_interactive_quit_handlers() -> dict[signal.Signals, object]:
+    handlers = {}
+
+    def request_quit(signum, frame) -> None:
+        raise _InteractiveQuitRequested
+
+    for signal_name in ("SIGHUP", "SIGTERM"):
+        signum = getattr(signal, signal_name, None)
+        if signum is None:
+            continue
+        handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, request_quit)
+    return handlers
+
+
+def _restore_signal_handlers(handlers: dict[signal.Signals, object]) -> None:
+    for signum, handler in handlers.items():
+        signal.signal(signum, handler)
+
+
+def _quit_services(root: Path) -> None:
+    from tree.services import _service_state_label, request_tree_stop, stop_service
+
+    request_tree_stop(root)
+    tree = stop_service(root, "tree", force=True)
+    embed = stop_service(root, "embedding", force=True)
+    level = "green" if not tree.running and not embed.running else "yellow"
+    rprint(
+        f"[{level}]Quit complete.[/{level}] "
+        f"TREE={_service_state_label(tree.running)}; "
+        f"embedding={_service_state_label(embed.running)}"
     )
-    while True:
-        try:
-            line = input("TREE> ")
-        except EOFError:
-            rprint("\n[dim]Leaving TREE.[/dim]")
-            return
-        except KeyboardInterrupt:
-            rprint("\n[dim]Leaving TREE. TREE services were not changed.[/dim]")
-            return
-
-        try:
-            args = _parse_interactive_command(line)
-        except ValueError as exc:
-            rprint(f"[red]{exc}[/red]")
-            continue
-        if not args:
-            continue
-
-        command = args[0]
-        if command == "exit":
-            rprint("[dim]Leaving TREE. TREE services were not changed.[/dim]")
-            return
-        if command == "help":
-            _print_interactive_help(args[1:])
-            continue
-
-        _invoke_cli_args(args)
-        if command == "quit":
-            return
+    if tree.running or embed.running:
+        rprint("[yellow]One or more services did not exit within the timeout. Run /status to inspect.[/yellow]")
 
 
 def _parse_interactive_command(line: str) -> list[str] | None:

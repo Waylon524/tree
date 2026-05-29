@@ -204,6 +204,8 @@ tre
 - 所有 source materials embedding 完成后，才进入考试-写作循环。
 - 没有新资料：直接从 `.tree/runtime/pipeline-state.json` 恢复循环。
 
+强行关闭 `TREE` 交互界面（例如 Ctrl+C、终端关闭或输入流断开）会自动执行 `/quit`，停止 TREE 和 embedding server。只有主动输入 `/exit` 才会只离开交互界面而保留后台服务。
+
 更多命令、手动摄入和排错用法见下方高级设置。
 
 <details>
@@ -793,6 +795,8 @@ For daily use, stay inside `TREE>` and type these slash commands. Every `/start`
 - embedding starts as soon as the first source material is produced
 - the exam-writing loop starts only after all source materials are embedded
 - if no new material exists, the loop resumes from `.tree/runtime/pipeline-state.json`
+
+Force-closing the `TREE` interactive shell, such as Ctrl+C, terminal close, or input-stream disconnect, automatically runs `/quit` and stops TREE plus the embedding server. Only typing `/exit` leaves the shell while keeping background services unchanged.
 
 More commands, manual ingest, and troubleshooting usage are in the advanced section below.
 
