@@ -142,12 +142,12 @@ pip install -U pip
 4. 安装 tree 引擎和 RAG/embedding 依赖：
 
 ```bash
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
-这个命令会把当前仓库安装为可编辑模式，并注册 `tree-run` 命令。后续修改源码后无需重新安装。
+这个命令会把当前仓库安装进虚拟环境，并注册 `tree-run` 命令。普通用户建议使用这种非 editable 安装，入口脚本更稳定。
 
-如果你只是开发或调试，也可以安装开发依赖：
+如果你要开发或调试源码，可以改用 editable 模式安装开发依赖：
 
 ```bash
 pip install -e ".[rag,dev]"
@@ -206,7 +206,7 @@ NVIDIA CUDA：
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。Windows 已在 `pip install -e ".[rag]"` 中安装 embedding 依赖。
+Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。Windows 已在 `pip install ".[rag]"` 中安装 embedding 依赖。
 
 7. 启动 embedding server。
 
@@ -309,7 +309,7 @@ py -3.12 -m venv .venv
 
 ```bash
 pip install -U pip
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
 这一步通常比首次安装快，因为 pip 会复用本机缓存。它不会重新下载 embedding 模型。
@@ -390,7 +390,7 @@ tree-run run
 find .. -path "*/.venv/bin/activate" -print
 ```
 
-然后激活找到的路径，并在新工作区重新执行 `pip install -e ".[rag]"`，让 `tree-run` 指向当前 checkout。不要照抄 `../tree/.venv/bin/activate`，除非你的旧工作区确实在这个位置。
+然后激活找到的路径，并在新工作区重新执行 `pip install ".[rag]"`，让 `tree-run` 指向当前 checkout。不要照抄 `../tree/.venv/bin/activate`，除非你的旧工作区确实在这个位置。
 
 Windows PowerShell 可用：
 
@@ -402,7 +402,7 @@ Get-ChildItem .. -Recurse -Filter Activate.ps1 -ErrorAction SilentlyContinue
 
 tree 默认使用 `Qwen/Qwen3-Embedding-4B-GGUF` 中的 `Qwen3-Embedding-4B-Q8_0.gguf`。首次启动 embedding server 时会自动下载模型，文件大小约 4.3 GB。
 
-`pip install -e ".[rag]"` 已经安装了 embedding server 所需的 Python 依赖。下面的 `setup-embedding.sh` 主要用于 macOS / Linux 上重新编译或强制选择 Metal/CUDA/CPU 版本的 `llama-cpp-python`。
+`pip install ".[rag]"` 已经安装了 embedding server 所需的 Python 依赖。下面的 `setup-embedding.sh` 主要用于 macOS / Linux 上重新编译或强制选择 Metal/CUDA/CPU 版本的 `llama-cpp-python`。
 
 macOS / Linux：
 
@@ -428,7 +428,7 @@ NVIDIA CUDA：
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；如果 `pip install -e ".[rag]"` 已成功，可以直接启动服务。
+Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；如果 `pip install ".[rag]"` 已成功，可以直接启动服务。
 
 启动 embedding server。
 
@@ -501,7 +501,7 @@ macOS / Linux：
 ```bash
 git pull
 source .venv/bin/activate
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
 Windows PowerShell：
@@ -509,7 +509,7 @@ Windows PowerShell：
 ```powershell
 git pull
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
 你也可以手动启动向导：
@@ -745,33 +745,33 @@ tree-run run
 说明 embedding server 未启动或 RAG 依赖未安装。
 
 ```bash
-pip install -e ".[rag]"
+pip install ".[rag]"
 ./scripts/start-embed-server.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
-pip install -e ".[rag]"
+pip install ".[rag]"
 scripts\start-embed-server.bat
 ```
 
 **`tree-run` 无法导入本地包**
 
-先确认已经在虚拟环境中安装当前项目：
+如果看到 `ModuleNotFoundError: No module named 'tree'`，通常是旧的 editable 安装没有正确绑定源码路径。请在项目根目录重新用非 editable 模式安装：
 
 macOS / Linux：
 
 ```bash
 source .venv/bin/activate
-pip install -e .
+pip install --force-reinstall ".[rag]"
 ```
 
 Windows PowerShell：
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -e .
+pip install --force-reinstall ".[rag]"
 ```
 
 源码调试时也可临时使用。
@@ -934,12 +934,12 @@ pip install -U pip
 4. Install the tree engine and RAG/embedding dependencies:
 
 ```bash
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
-This installs the current checkout in editable mode and registers the `tree-run` command. Source changes take effect without reinstalling.
+This installs the current checkout into the virtual environment and registers the `tree-run` command. For regular users, this non-editable install is more stable for console scripts.
 
-For development and linting, install the development extras:
+For source development and linting, use editable mode with the development extras:
 
 ```bash
 pip install -e ".[rag,dev]"
@@ -998,7 +998,7 @@ NVIDIA CUDA:
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script. Windows embedding dependencies were installed by `pip install -e ".[rag]"`.
+Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script. Windows embedding dependencies were installed by `pip install ".[rag]"`.
 
 7. Start the embedding server.
 
@@ -1101,7 +1101,7 @@ py -3.12 -m venv .venv
 
 ```bash
 pip install -U pip
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
 This is usually faster than the first install because pip can reuse the local package cache. It does not download the embedding model again.
@@ -1182,7 +1182,7 @@ If you really want to reuse an old virtual environment, first locate its real pa
 find .. -path "*/.venv/bin/activate" -print
 ```
 
-Then activate the path you found and run `pip install -e ".[rag]"` from the new workspace, so `tree-run` points at the current checkout. Do not copy `../tree/.venv/bin/activate` unless your old workspace really is there.
+Then activate the path you found and run `pip install ".[rag]"` from the new workspace, so `tree-run` points at the current checkout. Do not copy `../tree/.venv/bin/activate` unless your old workspace really is there.
 
 On Windows PowerShell:
 
@@ -1194,7 +1194,7 @@ Get-ChildItem .. -Recurse -Filter Activate.ps1 -ErrorAction SilentlyContinue
 
 tree uses `Qwen3-Embedding-4B-Q8_0.gguf` from `Qwen/Qwen3-Embedding-4B-GGUF` by default. The model is downloaded automatically on the first embedding server start. The file is about 4.3 GB.
 
-`pip install -e ".[rag]"` already installs the Python dependencies required by the embedding server. The `setup-embedding.sh` script below is mainly for rebuilding or forcing a Metal/CUDA/CPU `llama-cpp-python` variant on macOS / Linux.
+`pip install ".[rag]"` already installs the Python dependencies required by the embedding server. The `setup-embedding.sh` script below is mainly for rebuilding or forcing a Metal/CUDA/CPU `llama-cpp-python` variant on macOS / Linux.
 
 macOS / Linux:
 
@@ -1220,7 +1220,7 @@ NVIDIA CUDA:
 ./scripts/setup-embedding.sh --device cuda
 ```
 
-Windows PowerShell users usually do not need to run `setup-embedding.sh`; if `pip install -e ".[rag]"` succeeded, start the server directly.
+Windows PowerShell users usually do not need to run `setup-embedding.sh`; if `pip install ".[rag]"` succeeded, start the server directly.
 
 Start the embedding server.
 
@@ -1293,7 +1293,7 @@ macOS / Linux:
 ```bash
 git pull
 source .venv/bin/activate
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
 Windows PowerShell:
@@ -1301,7 +1301,7 @@ Windows PowerShell:
 ```powershell
 git pull
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[rag]"
+pip install ".[rag]"
 ```
 
 You can also start the wizard manually:
@@ -1503,33 +1503,33 @@ tree-run run
 Start the embedding server and make sure RAG dependencies are installed:
 
 ```bash
-pip install -e ".[rag]"
+pip install ".[rag]"
 ./scripts/start-embed-server.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-pip install -e ".[rag]"
+pip install ".[rag]"
 scripts\start-embed-server.bat
 ```
 
 **`tree-run` cannot import the local package**
 
-Install the project into the active environment:
+If you see `ModuleNotFoundError: No module named 'tree'`, an old editable install probably did not bind the source path correctly. From the project root, reinstall in non-editable mode:
 
 macOS / Linux:
 
 ```bash
 source .venv/bin/activate
-pip install -e .
+pip install --force-reinstall ".[rag]"
 ```
 
 Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -e .
+pip install --force-reinstall ".[rag]"
 ```
 
 Or use the source-checkout fallback.
