@@ -78,7 +78,7 @@ rag-store/              # embedded Qdrant 数据库
 安装分两种情况：
 
 - **首次安装**：这台电脑从未安装过 tree 的依赖，也没有下载过本地 embedding 模型。
-- **二次安装**：这台电脑已经安装过 Python 依赖和本地 embedding 模型，只是换了一个新的工作区或重新 clone 仓库。
+- **二次安装**：这台电脑已经下载过本地 embedding 模型，只是换了一个新的工作区或重新 clone 仓库。
 
 #### 首次安装（无依赖）
 
@@ -189,9 +189,11 @@ tree-run setup
 tree-run run
 ```
 
-#### 二次安装（已有依赖和本地模型）
+#### 二次安装（本机已下载过本地模型）
 
-适用于：你已经在这台电脑上成功跑过 tree，本地 Python 环境里已有 RAG/embedding 依赖，Hugging Face 缓存里也已有 `Qwen3-Embedding-4B-Q8_0.gguf`，现在只是换一个新工作区。
+适用于：你已经在这台电脑上成功跑过 tree，Hugging Face 缓存里已有 `Qwen3-Embedding-4B-Q8_0.gguf`，现在只是换一个新工作区。
+
+最稳妥的做法是：**每个工作区创建自己的 `.venv`**。这样不会因为找不到旧虚拟环境目录而卡住，也不会让 `tree-run` 指向旧 checkout。二次安装仍然会安装 Python 包到新 `.venv`，但通常会复用 pip 缓存；重点是不用重新下载 4.3 GB 的 embedding 模型。
 
 1. 克隆新工作区：
 
@@ -200,39 +202,46 @@ git clone https://github.com/Waylon524/tree.git tree-new
 cd tree-new
 ```
 
-2. 激活之前已经装好依赖的 Python 环境。新工作区里通常还没有 `.venv`，所以这里要使用**上一个工作区**或**共享虚拟环境**的实际路径。例如，上一个工作区在相邻目录 `tree/`：
+2. 在新工作区创建并激活虚拟环境：
 
 ```bash
-source ../tree/.venv/bin/activate
-```
-
-如果你使用的是独立共享环境，把路径替换成你的实际环境路径：
-
-```bash
-source /path/to/tree-env/bin/activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 ```
 
 Windows PowerShell：
 
 ```powershell
-..\tree\.venv\Scripts\Activate.ps1
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-3. 将新工作区绑定到当前环境，确保 `tree-run` 指向这个新 checkout：
+3. 安装 tree 和 RAG/embedding 依赖：
 
 ```bash
+pip install -U pip
 pip install -e ".[rag]"
 ```
 
-这一步通常很快；依赖已经存在时不会重新下载大模型。
+这一步通常比首次安装快，因为 pip 会复用本机缓存。它不会重新下载 embedding 模型。
 
-4. 可选：确认本地 embedding 依赖已经存在：
+4. 确认本地 embedding 依赖可用：
 
 ```bash
 python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
 ```
 
-如果这条命令失败，再回到“首次安装”的第 6 步运行 `./scripts/setup-embedding.sh`。
+如果这条命令失败，或者你需要重新编译 GPU/Metal/CUDA 版本的 `llama-cpp-python`，再运行：
+
+```bash
+./scripts/setup-embedding.sh
+```
+
+Apple Silicon 可用：
+
+```bash
+./scripts/setup-embedding.sh --device metal
+```
 
 5. 启动 embedding server：
 
@@ -252,6 +261,20 @@ tree-run setup
 
 ```bash
 tree-run run
+```
+
+如果你确实想复用旧虚拟环境，先找到旧环境的真实路径：
+
+```bash
+find .. -path "*/.venv/bin/activate" -print
+```
+
+然后激活找到的路径，并在新工作区重新执行 `pip install -e ".[rag]"`，让 `tree-run` 指向当前 checkout。不要照抄 `../tree/.venv/bin/activate`，除非你的旧工作区确实在这个位置。
+
+Windows PowerShell 可用：
+
+```powershell
+Get-ChildItem .. -Recurse -Filter Activate.ps1 -ErrorAction SilentlyContinue
 ```
 
 ### 本地 Embedding 模型
@@ -646,7 +669,7 @@ rag-store/
 There are two installation paths:
 
 - **First install**: this machine has no tree dependencies and no local embedding model yet.
-- **Second install**: this machine has already installed the Python dependencies and local embedding model, and you are only creating another workspace or cloning the repository again.
+- **Second install**: this machine has already downloaded the local embedding model, and you are only creating another workspace or cloning the repository again.
 
 #### First Install (No Dependencies)
 
@@ -757,9 +780,11 @@ tree-run setup
 tree-run run
 ```
 
-#### Second Install (Existing Dependencies and Local Model)
+#### Second Install (Local Model Already Downloaded)
 
-Use this path when you have already run tree successfully on this machine, the local Python environment already has RAG/embedding dependencies, and `Qwen3-Embedding-4B-Q8_0.gguf` is already in the Hugging Face cache.
+Use this path when you have already run tree successfully on this machine and `Qwen3-Embedding-4B-Q8_0.gguf` is already in the Hugging Face cache.
+
+The most reliable approach is: **create a new `.venv` for each workspace**. This avoids missing old environment paths and prevents `tree-run` from pointing at an old checkout. A second install still installs Python packages into the new `.venv`, but it usually reuses pip cache; the important part is that it does not download the 4.3 GB embedding model again.
 
 1. Clone a new workspace:
 
@@ -768,39 +793,46 @@ git clone https://github.com/Waylon524/tree.git tree-new
 cd tree-new
 ```
 
-2. Activate the Python environment that already has the dependencies. A fresh workspace usually does not have its own `.venv` yet, so use the real path to the previous workspace or a shared virtual environment. For example, if the previous workspace is in the adjacent `tree/` directory:
+2. Create and activate a virtual environment in the new workspace:
 
 ```bash
-source ../tree/.venv/bin/activate
-```
-
-For a shared environment, replace the path with your real environment path:
-
-```bash
-source /path/to/tree-env/bin/activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 ```
 
 On Windows PowerShell:
 
 ```powershell
-..\tree\.venv\Scripts\Activate.ps1
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-3. Bind the new workspace to the active environment so `tree-run` points at this checkout:
+3. Install tree and RAG/embedding dependencies:
 
 ```bash
+pip install -U pip
 pip install -e ".[rag]"
 ```
 
-This is usually quick when dependencies already exist. It does not download the large embedding model.
+This is usually faster than the first install because pip can reuse the local package cache. It does not download the embedding model again.
 
-4. Optional: confirm that local embedding dependencies are present:
+4. Confirm that local embedding dependencies are present:
 
 ```bash
 python -c "import llama_cpp, huggingface_hub, fastapi, uvicorn; print('embedding deps ok')"
 ```
 
-If this command fails, go back to step 6 in "First Install" and run `./scripts/setup-embedding.sh`.
+If this command fails, or if you need to rebuild the GPU/Metal/CUDA version of `llama-cpp-python`, run:
+
+```bash
+./scripts/setup-embedding.sh
+```
+
+Apple Silicon:
+
+```bash
+./scripts/setup-embedding.sh --device metal
+```
 
 5. Start the embedding server:
 
@@ -820,6 +852,20 @@ tree-run setup
 
 ```bash
 tree-run run
+```
+
+If you really want to reuse an old virtual environment, first locate its real path:
+
+```bash
+find .. -path "*/.venv/bin/activate" -print
+```
+
+Then activate the path you found and run `pip install -e ".[rag]"` from the new workspace, so `tree-run` points at the current checkout. Do not copy `../tree/.venv/bin/activate` unless your old workspace really is there.
+
+On Windows PowerShell:
+
+```powershell
+Get-ChildItem .. -Recurse -Filter Activate.ps1 -ErrorAction SilentlyContinue
 ```
 
 ### Local Embedding Model
