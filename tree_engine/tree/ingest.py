@@ -66,6 +66,7 @@ async def ingest_path(
             ocr_sem=ocr_sem,
             archivist_sem=archivist_sem,
             embedding_sem=embedding_sem,
+            progress=progress,
         )
         return path, outputs
 
@@ -80,6 +81,7 @@ async def ingest_path(
             ocr_sem=ocr_sem,
             archivist_sem=archivist_sem,
             embedding_sem=embedding_sem,
+            progress=progress,
         )
         if progress and track_files:
             progress.source_file_done(input_path.name, 1, 1)
@@ -113,6 +115,7 @@ async def _ingest_file_pipeline(
     ocr_sem: asyncio.Semaphore,
     archivist_sem: asyncio.Semaphore,
     embedding_sem: asyncio.Semaphore,
+    progress: ProgressTracker | None = None,
 ) -> list[Path]:
     outputs = await ingest_file(
         input_path,
@@ -122,6 +125,7 @@ async def _ingest_file_pipeline(
         archivist=archivist,
         ocr_sem=ocr_sem,
         archivist_sem=archivist_sem,
+        progress=progress,
     )
     for out in outputs:
         await _index_output(settings.project_root, collection, out, indexer, embedding_sem)
@@ -136,6 +140,7 @@ async def ingest_file(
     archivist: MarkdownStructurer | None = None,
     ocr_sem: asyncio.Semaphore | None = None,
     archivist_sem: asyncio.Semaphore | None = None,
+    progress: ProgressTracker | None = None,
 ) -> list[Path]:
     """Process one file using PaddleOCR extraction and optional archivist cleanup."""
     start = time.time()
@@ -146,6 +151,8 @@ async def ingest_file(
         async with ocr_sem:
             await _wait_for_ocr_upload_slot(ocr_upload_interval_sec)
             raw_text = await asyncio.to_thread(extract_text, input_path)
+    if progress:
+        progress.ocr_file_done(input_path.name)
     if not raw_text.strip():
         logger.warning("No text extracted from %s, skipping", input_path.name)
         return []

@@ -21,7 +21,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Any
+from typing import Any, Callable
 
 import httpx
 
@@ -33,6 +33,11 @@ _DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT = 600
 _PDF_MAX_PAGES_PER_JOB = 100
+_HTTP_RETRY_ATTEMPTS = 5
+_HTTP_RETRY_INITIAL_DELAY = 2.0
+_HTTP_RETRY_MAX_DELAY = 30.0
+_RETRYABLE_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_RETRYABLE_API_CODES = {500, 10010, 12002}
 
 _DEFAULT_OPTIONS = {
     "useDocOrientationClassify": True,
@@ -195,9 +200,16 @@ class OCREngine:
             "model": self._model,
             "optionalPayload": self._options,
         }
-        resp = self._client.post(self._job_url, json=payload, headers=self._headers("application/json"))
-        resp.raise_for_status()
-        return resp.json()["data"]["jobId"]
+        resp = self._request_with_retries(
+            "submit URL OCR job",
+            lambda: self._client.post(
+                self._job_url,
+                json=payload,
+                headers=self._headers("application/json"),
+            ),
+            check_api_code=True,
+        )
+        return _api_data(resp)["jobId"]
 
     def _submit_local(self, file_path: str) -> str:
         """Submit job with a local file (multipart upload)."""
@@ -205,20 +217,36 @@ class OCREngine:
             "model": self._model,
             "optionalPayload": json.dumps(self._options),
         }
-        with open(file_path, "rb") as f:
-            files = {"file": (Path(file_path).name, f)}
-            resp = self._client.post(self._job_url, headers=self._headers(), data=data, files=files)
-        resp.raise_for_status()
-        return resp.json()["data"]["jobId"]
+
+        def post_file() -> httpx.Response:
+            with open(file_path, "rb") as f:
+                files = {"file": (Path(file_path).name, f)}
+                return self._client.post(
+                    self._job_url,
+                    headers=self._headers(),
+                    data=data,
+                    files=files,
+                )
+
+        resp = self._request_with_retries(
+            "submit local OCR job",
+            post_file,
+            check_api_code=True,
+        )
+        return _api_data(resp)["jobId"]
 
     def _poll(self, job_id: str, context: dict[str, Any] | None = None) -> str:
         """Poll job status until done, return JSONL result URL."""
         context = context or {}
         deadline = time.time() + self._poll_timeout
         while time.time() < deadline:
-            resp = self._client.get(f"{self._job_url}/{job_id}", headers=self._headers())
-            resp.raise_for_status()
-            body = resp.json()["data"]
+            resp = self._request_with_retries(
+                "poll OCR job",
+                lambda: self._client.get(f"{self._job_url}/{job_id}", headers=self._headers()),
+                check_api_code=True,
+                progress_context={"job_id": job_id, **context},
+            )
+            body = _api_data(resp)
             state = body["state"]
 
             if state == "done":
@@ -273,7 +301,11 @@ class OCREngine:
 
     def _download_result(self, jsonl_url: str) -> str:
         """Download JSONL result and extract merged markdown text."""
-        resp = self._client.get(jsonl_url)
+        resp = self._request_with_retries(
+            "download OCR result",
+            lambda: self._client.get(jsonl_url),
+            check_api_code=False,
+        )
         resp.raise_for_status()
         parts = []
         for line in resp.text.strip().splitlines():
@@ -290,6 +322,53 @@ class OCREngine:
 
     def close(self):
         self._client.close()
+
+    def _request_with_retries(
+        self,
+        action: str,
+        send: Callable[[], httpx.Response],
+        *,
+        check_api_code: bool,
+        progress_context: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        delay = _HTTP_RETRY_INITIAL_DELAY
+        last_error: Exception | None = None
+        for attempt in range(1, _HTTP_RETRY_ATTEMPTS + 1):
+            try:
+                resp = send()
+                if _should_retry_response(resp, check_api_code):
+                    last_error = _response_error(resp)
+                    if attempt == _HTTP_RETRY_ATTEMPTS:
+                        break
+                    _emit_retry_progress(action, attempt, delay, progress_context)
+                    logger.warning(
+                        "PaddleOCR %s retry %d/%d after response %s",
+                        action,
+                        attempt,
+                        _HTTP_RETRY_ATTEMPTS,
+                        _response_summary(resp),
+                    )
+                    time.sleep(delay)
+                    delay = min(delay * 2, _HTTP_RETRY_MAX_DELAY)
+                    continue
+                return resp
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == _HTTP_RETRY_ATTEMPTS:
+                    break
+                _emit_retry_progress(action, attempt, delay, progress_context)
+                logger.warning(
+                    "PaddleOCR %s retry %d/%d after network error: %s",
+                    action,
+                    attempt,
+                    _HTTP_RETRY_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, _HTTP_RETRY_MAX_DELAY)
+
+        assert last_error is not None
+        raise last_error
 
     def __del__(self):
         try:
@@ -320,6 +399,76 @@ def _emit_progress(event: dict[str, Any]) -> None:
         _progress_callback(event)
     except Exception:
         logger.debug("OCR progress callback failed", exc_info=True)
+
+
+def _emit_retry_progress(
+    action: str,
+    attempt: int,
+    delay: float,
+    context: dict[str, Any] | None,
+) -> None:
+    _emit_progress(
+        {
+            "state": "retrying",
+            "retry_action": action,
+            "retry_attempt": attempt,
+            "retry_delay_sec": delay,
+            **(context or {}),
+        }
+    )
+
+
+def _should_retry_response(resp: httpx.Response, check_api_code: bool) -> bool:
+    if resp.status_code in _RETRYABLE_HTTP_STATUS:
+        return True
+    if not check_api_code:
+        return False
+    code = _api_code(resp)
+    return code in _RETRYABLE_API_CODES
+
+
+def _api_data(resp: httpx.Response) -> dict[str, Any]:
+    if resp.status_code >= 400:
+        resp.raise_for_status()
+    body = resp.json()
+    code = body.get("code", 0)
+    if code not in (0, None):
+        raise RuntimeError(f"PaddleOCR API error {code}: {body.get('msg', 'unknown error')}")
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("PaddleOCR API response missing data object")
+    return data
+
+
+def _api_code(resp: httpx.Response) -> int | None:
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    code = body.get("code") if isinstance(body, dict) else None
+    return _int_or_none(code)
+
+
+def _response_error(resp: httpx.Response) -> Exception:
+    if resp.status_code >= 400:
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return exc
+    code = _api_code(resp)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    msg = body.get("msg", "retryable PaddleOCR API response") if isinstance(body, dict) else ""
+    return RuntimeError(f"PaddleOCR API retryable response {code}: {msg}")
+
+
+def _response_summary(resp: httpx.Response) -> str:
+    code = _api_code(resp)
+    if code is None:
+        return f"HTTP {resp.status_code}"
+    return f"HTTP {resp.status_code}, API code {code}"
 
 
 def _int_or_none(value: Any) -> int | None:

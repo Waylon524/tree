@@ -606,6 +606,14 @@ class TreeEngine:
         return name
 
     async def close(self) -> None:
+        rag_client = getattr(self, "rag_client", None)
+        if rag_client is not None:
+            try:
+                rag_client.close()
+            except Exception:
+                pass
+            self.rag_client = None
+            self.rag_indexer = None
         await self.client.close()
 
     def _raise_if_stop_requested(self) -> None:

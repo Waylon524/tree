@@ -264,6 +264,10 @@ class RAGClient:
         )
         return bool(records)
 
+    def close(self) -> None:
+        """Release the embedded Qdrant client before interpreter shutdown."""
+        self._client.close()
+
     def get_chapter_ledger(self, chapter: str) -> list[dict]:
         """Get a summary of all indexed files in a chapter (for auto-briefing)."""
         records, _ = self._client.scroll(

@@ -64,18 +64,32 @@ class ProgressTracker:
                 "current_file": current_file,
             },
         )
-        self.update_nested(
-            "source_ingest.ocr",
-            {
-                "files_done": files_done,
-                "files_total": files_total,
-                "state": "done" if files_done >= files_total else "running",
-            },
-        )
 
     def ocr_event(self, event: dict[str, Any]) -> None:
         self.update({"phase": "source_ingest", "message": "OCR processing source materials"})
         self.update_nested("source_ingest.ocr", event)
+
+    def ocr_file_done(self, current_file: str) -> None:
+        with _WRITE_LOCK:
+            state = self.read()
+            source_ingest = _dict_node(state, "source_ingest")
+            ocr = _dict_node(source_ingest, "ocr")
+            files_total = _int_value(ocr.get("files_total")) or _int_value(source_ingest.get("files_total"))
+            files_done = _int_value(ocr.get("files_done")) + 1
+            if files_total:
+                files_done = min(files_done, files_total)
+            ocr.update(
+                {
+                    "current_file": current_file,
+                    "files_done": files_done,
+                    "files_total": files_total,
+                    "state": "done" if files_total and files_done >= files_total else "running",
+                    "updated_at": _now(),
+                }
+            )
+            source_ingest["ocr"] = ocr
+            state["source_ingest"] = source_ingest
+            self.write(state)
 
     def embedding_start(self, chunks_total: int) -> None:
         self.update({"phase": "source_ingest", "message": "Embedding source materials"})
@@ -211,6 +225,22 @@ def _deep_update(target: dict[str, Any], patch: dict[str, Any]) -> None:
             _deep_update(target[key], value)
         else:
             target[key] = value
+
+
+def _dict_node(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    value = parent.get(key)
+    if isinstance(value, dict):
+        return value
+    child: dict[str, Any] = {}
+    parent[key] = child
+    return child
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _now() -> str:

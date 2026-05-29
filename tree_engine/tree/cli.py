@@ -836,36 +836,24 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
         )
 
     progress_state = load_progress(root)
-    material_counts = _source_material_progress(root)
-    materials = Table(title="Source Materials", expand=True)
-    materials.add_column("Metric")
-    materials.add_column("Count", justify="right")
-    materials.add_row("known materials", str(material_counts["total"]))
-    materials.add_row("embedded", str(material_counts["embedded"]))
-    materials.add_row("structured, waiting embedding", str(material_counts["structured"]))
-    materials.add_row("new or changed", str(material_counts["pending"]))
-
-    live_progress = _live_progress_table(progress_state)
-
     state = StateManager(paths.pipeline_state_path(root)).load()
-    pipeline = Table(title="Pipeline", expand=True)
-    pipeline.add_column("Metric")
-    pipeline.add_column("Value")
-    completed = [ch for ch in state.chapters if ch.status == "completed"]
+    completed_files = sum(len(ch.files_completed) for ch in state.chapters)
     active = next((ch for ch in state.chapters if ch.status == "in_progress"), None)
-    pipeline.add_row("completed chapters", str(len(completed)))
-    pipeline.add_row("active chapter", active.chapter_name if active else "(none)")
-    pipeline.add_row(
-        "active completed files",
-        str(len(active.files_completed)) if active else "0",
+    active_chapter = active.chapter_name if active else ""
+    live_progress = _live_progress_table(
+        progress_state,
+        completed_files=completed_files,
+        active_chapter=active_chapter,
     )
-
-    trace = _trace_table(root, tail=tail)
     tree_log = _tail_panel(paths.service_log_path(root, "tree"), title="TREE Log Tail")
-    return Group(services, live_progress, materials, pipeline, trace, tree_log)
+    return Group(services, live_progress, tree_log)
 
 
-def _live_progress_table(progress_state: dict[str, object]) -> Table:
+def _live_progress_table(
+    progress_state: dict[str, object],
+    completed_files: int = 0,
+    active_chapter: str = "",
+) -> Table:
     table = Table(title="Live Progress", expand=True)
     table.add_column("Track")
     table.add_column("Progress")
@@ -880,13 +868,14 @@ def _live_progress_table(progress_state: dict[str, object]) -> Table:
     ocr_total = _int_value(ocr.get("pages_total"))
     ocr_file_done = _int_value(ocr.get("files_done"))
     ocr_file_total = _int_value(ocr.get("files_total"))
-    ocr_label = _progress_label(ocr_done, ocr_total)
-    if ocr_label == "n/a" and ocr_file_total:
-        ocr_label = _progress_label(ocr_file_done, ocr_file_total)
+    ocr_progress_done = ocr_file_done if ocr_file_total else ocr_done
+    ocr_progress_total = ocr_file_total if ocr_file_total else ocr_total
+    ocr_label = _ocr_progress_label(ocr_file_done, ocr_file_total, ocr_done, ocr_total)
+    ocr_current = _ocr_current_label(ocr)
     table.add_row(
         "OCR",
-        f"{_progress_bar(ocr_done or ocr_file_done, ocr_total or ocr_file_total)} {ocr_label}",
-        _truncate(str(ocr.get("current_chunk") or ocr.get("current_file") or ocr.get("state") or ""), 42),
+        f"{_progress_bar(ocr_progress_done, ocr_progress_total)} {ocr_label}",
+        _truncate(ocr_current, 42),
     )
 
     embed_done = _int_value(embedding.get("chunks_done"))
@@ -908,6 +897,12 @@ def _live_progress_table(progress_state: dict[str, object]) -> Table:
 
     stage_rows = _knowledge_stage_rows(str(learning.get("stage") or ""), stage_total or 6)
     table.add_row("Stage", stage_rows, _truncate(str(progress_state.get("message") or ""), 42))
+
+    table.add_row(
+        "Completed files",
+        str(completed_files),
+        _truncate(active_chapter, 42),
+    )
     return table
 
 
@@ -969,6 +964,29 @@ def _progress_label(done: int, total: int) -> str:
     if total <= 0:
         return "n/a"
     return f"{min(done, total)}/{total}"
+
+
+def _ocr_progress_label(
+    files_done: int,
+    files_total: int,
+    pages_done: int,
+    pages_total: int,
+) -> str:
+    labels = []
+    if files_total:
+        labels.append(f"files {_progress_label(files_done, files_total)}")
+    if pages_total:
+        labels.append(f"pages {_progress_label(pages_done, pages_total)}")
+    return ", ".join(labels) if labels else "n/a"
+
+
+def _ocr_current_label(ocr: dict[str, object]) -> str:
+    current = str(ocr.get("current_chunk") or ocr.get("current_file") or ocr.get("state") or "")
+    pages_done = _int_value(ocr.get("pages_done"))
+    pages_total = _int_value(ocr.get("pages_total"))
+    if pages_total:
+        return f"{current} pages {_progress_label(pages_done, pages_total)}"
+    return current
 
 
 def _progress_bar(done: int, total: int, width: int = 18) -> str:
