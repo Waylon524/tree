@@ -8,6 +8,7 @@
 
 # 运行时状态
 /tree_engine/.runtime/
+/.tree/
 
 # 本地配置
 AGENTS.md

@@ -81,22 +81,20 @@ function Test-EmbeddingReady {
 }
 
 function Test-EmbeddingProcess {
-    $PidPath = Join-Path $ProjectRoot "tree_engine\.runtime\services\embedding.pid"
-    if (-not (Test-Path $PidPath)) {
-        return $false
-    }
-    $ServicePid = (Get-Content $PidPath -ErrorAction SilentlyContinue | Select-Object -First 1)
-    if (-not $ServicePid) {
-        return $false
-    }
-    return [bool](Get-Process -Id ([int]$ServicePid) -ErrorAction SilentlyContinue)
+    & $VenvPython -c "from pathlib import Path; from tree.services import service_status; raise SystemExit(0 if service_status(Path.cwd(), 'embedding').running else 1)" *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Get-EmbeddingLogPath {
+    $Result = & $VenvPython -c "from pathlib import Path; from tree.io import paths; print(paths.service_log_path(Path.cwd(), 'embedding'))"
+    return $Result
 }
 
 function Start-EmbeddingWithProgress {
     Write-Step "Starting embedding server in the background"
     & $VenvPython -m tree.cli start-embedding --no-wait
 
-    $LogPath = Join-Path $ProjectRoot "tree_engine\.runtime\services\embedding.log"
+    $LogPath = Get-EmbeddingLogPath
     New-Item -ItemType File -Force -Path $LogPath | Out-Null
     Write-Host "Showing embedding server log while it starts. First launch may download ~4.3 GB."
     $LogJob = Start-Job -ScriptBlock {
@@ -135,7 +133,7 @@ if ((Test-Path (Join-Path $ParentRoot "pyproject.toml")) -and (Test-Path (Join-P
     throw "This looks like a nested tree checkout: $($ProjectRoot.Path) inside $ParentRoot. Run bootstrap from the outer checkout or clone into an empty directory."
 }
 
-New-Item -ItemType Directory -Force -Path "raw_materials", "finished_outputs", "tree_engine\.runtime" | Out-Null
+New-Item -ItemType Directory -Force -Path "raw_materials", "finished_outputs", ".tree\runtime" | Out-Null
 
 $Python = Find-Python
 $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -182,7 +180,7 @@ Write-Host ""
 Write-Host "Next:"
 Write-Host "  1. Put course files into raw_materials\"
 Write-Host "  2. Open the TREE interactive CLI:"
-Write-Host "       .\.venv\Scripts\tree-run.exe"
+Write-Host "       .\.venv\Scripts\tre.exe"
 Write-Host "  3. Type slash commands inside TREE:"
 Write-Host "       /continue"
 Write-Host "       /status"
@@ -191,4 +189,4 @@ Write-Host "       /quit"
 Write-Host ""
 Write-Host "Tip:"
 Write-Host "  After running: .\.venv\Scripts\Activate.ps1"
-Write-Host "  you can use: tree-run"
+Write-Host "  you can use: tre"

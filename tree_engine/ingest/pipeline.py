@@ -1,10 +1,10 @@
 """Main ingest pipeline orchestrator.
 
-Processes files from raw_materials/ → tree_engine/.runtime/source_materials/<chapter>/
+Processes files from raw_materials/ → .tree/runtime/source_materials/<chapter>/
 using remote PaddleOCR-VL 1.6 API service for all file types.
 
 Usage:
-    python -m ingest.pipeline --input raw_materials/ --output tree_engine/.runtime/source_materials/01-化学/
+    python -m ingest.pipeline --input raw_materials/ --output .tree/runtime/source_materials/01-化学/
     python -m ingest.pipeline --input "raw_materials/课件/5. 化学平衡通论.pdf"
 """
 
@@ -14,13 +14,9 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from ingest.extractors import docx_extractor, image_extractor, pdf_extractor
 from ingest.ocr_engine import get_engine
 from ingest.structurer import structure
-
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 logger = logging.getLogger(__name__)
 

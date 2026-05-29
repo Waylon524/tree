@@ -21,9 +21,15 @@ else
   PYTHON_BIN="${PYTHON:-python}"
 fi
 
-# Load .env if present
+# Load config if present
+if [ -f "$HOME/.tree/config.env" ]; then
+  set -a; source "$HOME/.tree/config.env"; set +a
+fi
 if [ -f .env ]; then
   set -a; source .env; set +a
+fi
+if [ -f .tree/config.env ]; then
+  set -a; source .tree/config.env; set +a
 fi
 
 PORT="${EMBED_PORT:-8788}"
@@ -31,7 +37,7 @@ N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:--1}"
 N_CTX="${EMBED_N_CTX:-32768}"
 N_SEQ_MAX="${EMBED_N_SEQ_MAX:-1}"
 
-# Export proxy for HuggingFace downloads (if set in .env)
+# Export proxy for HuggingFace downloads (if set in config)
 export HTTPS_PROXY="${HTTPS_PROXY:-${HTTP_PROXY:-}}"
 export HTTP_PROXY="${HTTP_PROXY:-}"
 export PYTHONPATH="$PROJECT_ROOT/tree_engine:${PYTHONPATH:-}"

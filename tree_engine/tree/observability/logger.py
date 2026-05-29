@@ -1,4 +1,4 @@
-"""Structured logging under tree_engine/.runtime/pipeline-temp/."""
+"""Structured logging under .tree/runtime/pipeline-temp/."""
 
 from __future__ import annotations
 

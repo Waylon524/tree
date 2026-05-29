@@ -72,7 +72,7 @@ require_project_root() {
   if [ -f "$parent_root/pyproject.toml" ] && [ -d "$parent_root/tree_engine" ]; then
     fail "This looks like a nested tree checkout: $PROJECT_ROOT inside $parent_root. Run bootstrap from the outer checkout or clone into an empty directory."
   fi
-  mkdir -p raw_materials finished_outputs tree_engine/.runtime
+  mkdir -p raw_materials finished_outputs .tree/runtime
 }
 
 python_ok() {
@@ -128,19 +128,19 @@ embedding_ready() {
 }
 
 embedding_pid_running() {
-  local pid_file="tree_engine/.runtime/services/embedding.pid"
-  [ -f "$pid_file" ] || return 1
-  local pid
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1
+  "$VENV_PYTHON" -c 'from pathlib import Path; from tree.services import service_status; raise SystemExit(0 if service_status(Path.cwd(), "embedding").running else 1)' >/dev/null 2>&1
+}
+
+embedding_log_path() {
+  "$VENV_PYTHON" -c 'from pathlib import Path; from tree.io import paths; print(paths.service_log_path(Path.cwd(), "embedding"))'
 }
 
 start_embedding_with_progress() {
   log "Starting embedding server in the background"
   "$VENV_PYTHON" -m tree.cli start-embedding --no-wait
 
-  local log_file="tree_engine/.runtime/services/embedding.log"
+  local log_file
+  log_file="$(embedding_log_path)"
   local tail_pid=""
   stop_log_tail() {
     if [ -n "$tail_pid" ]; then
@@ -156,13 +156,13 @@ start_embedding_with_progress() {
     tail -n 40 -f "$log_file" &
     tail_pid="$!"
   else
-    echo "Embedding log: $PROJECT_ROOT/$log_file"
+    echo "Embedding log: $log_file"
   fi
 
   while ! embedding_ready; do
     if ! embedding_pid_running; then
       stop_log_tail
-      fail "Embedding server exited before becoming ready. Check $PROJECT_ROOT/$log_file"
+      fail "Embedding server exited before becoming ready. Check $log_file"
     fi
     sleep 2
   done
@@ -219,7 +219,7 @@ Bootstrap complete.
 Next:
   1. Put course files into raw_materials/
   2. Open the TREE interactive CLI:
-       .venv/bin/tree-run
+       .venv/bin/tre
   3. Type slash commands inside TREE:
        /continue
        /status
@@ -228,5 +228,5 @@ Next:
 
 Tip:
   After running: source .venv/bin/activate
-  you can use: tree-run
+  you can use: tre
 NEXT

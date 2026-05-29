@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from tree.io import paths
+
 
 class ConfigurationError(Exception):
     pass
@@ -51,7 +53,9 @@ class Settings:
     @classmethod
     def from_env(cls, project_root: Path | None = None, require_llm: bool = True) -> Settings:
         root = project_root or Path.cwd()
-        load_dotenv(root / ".env", override=True)
+        load_dotenv(paths.global_config_path(), override=True)
+        load_dotenv(paths.legacy_workspace_env_path(root), override=True)
+        load_dotenv(paths.workspace_config_path(root), override=True)
 
         # Default LLM config (fallback for all roles)
         default_key = os.environ.get("LLM_API_KEY", "")
@@ -64,7 +68,7 @@ class Settings:
             if not any_key:
                 raise ConfigurationError(
                     "No LLM_API_KEY or role-specific API key found. "
-                    "Set LLM_API_KEY (default) or EXAMINER_API_KEY/STUDENT_API_KEY/WRITER_API_KEY/ARCHIVIST_API_KEY in .env"
+                    "Set LLM_API_KEY (default) or EXAMINER_API_KEY/STUDENT_API_KEY/WRITER_API_KEY/ARCHIVIST_API_KEY in TREE config"
                 )
 
         examiner = _role_config("EXAMINER", default_key, default_url, default_model)

@@ -5,7 +5,7 @@ Provides chunk→embed→upsert indexing and semantic query with metadata filter
 Usage:
     from tree.rag.client import RAGClient
 
-    rag = RAGClient()                           # defaults: tree_engine/.runtime/rag-store
+    rag = RAGClient()                           # defaults: .tree/runtime/rag-store
     rag.index_file("01", "01.质点与参考系.md", text, chapter="01-力学")
     results = rag.query("质点定义", top_k=5, filters={"chapter": "01-力学"})
 """

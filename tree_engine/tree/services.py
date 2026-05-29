@@ -84,7 +84,7 @@ def start_tree(root: Path) -> ServiceStart:
 
 
 def request_tree_stop(root: Path) -> None:
-    paths.services_root(root).mkdir(parents=True, exist_ok=True)
+    paths.service_root(root, "tree").mkdir(parents=True, exist_ok=True)
     paths.service_stop_path(root, "tree").write_text(str(time.time()), encoding="utf-8")
 
 
@@ -156,7 +156,7 @@ def embedding_health(root: Path) -> tuple[bool, str]:
 
 
 def _spawn(root: Path, name: str, cmd: list[str], env: dict[str, str]) -> int:
-    paths.services_root(root).mkdir(parents=True, exist_ok=True)
+    paths.service_root(root, name).mkdir(parents=True, exist_ok=True)
     log_path = paths.service_log_path(root, name)
     log = log_path.open("a", encoding="utf-8")
     log.write(f"\n--- starting {name}: {' '.join(cmd)} ---\n")
@@ -180,8 +180,12 @@ def _spawn(root: Path, name: str, cmd: list[str], env: dict[str, str]) -> int:
 
 def _service_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.update(_read_env(root / ".env"))
-    env["PYTHONPATH"] = f"{root / 'tree_engine'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env.update(_read_env(paths.global_config_path()))
+    env.update(_read_env(paths.legacy_workspace_env_path(root)))
+    env.update(_read_env(paths.workspace_config_path(root)))
+    local_package_dir = root / "tree_engine"
+    if local_package_dir.exists():
+        env["PYTHONPATH"] = f"{local_package_dir}{os.pathsep}{env.get('PYTHONPATH', '')}"
     env["PYTHONUNBUFFERED"] = "1"
     return env
 

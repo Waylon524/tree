@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -39,6 +40,7 @@ _INTERACTIVE_ALIASES = {
 }
 _INTERACTIVE_COMMANDS = [
     ("/continue", "Start or continue TREE in the background"),
+    ("/init", "Initialize the current folder as a TREE workspace"),
     ("/status", "Show service and pipeline status"),
     ("/progress", "Show current services, ingest, chapter, and recent trace"),
     ("/watch", "Refresh /progress until Ctrl+C"),
@@ -46,7 +48,7 @@ _INTERACTIVE_COMMANDS = [
     ("/quit", "Stop TREE and embedding, then leave interactive mode"),
     ("/logs --tail 20", "Show recent pipeline trace entries"),
     ("/materials", "Show raw material ingest and embedding status"),
-    ("/doctor", "Check workspace configuration and services"),
+    ("/doctor", "Check installation, configuration, and services"),
     ("/models", "Show or update model/provider settings"),
     ("/setup", "Create or update workspace configuration"),
     ("/rag status", "Show local RAG index status"),
@@ -54,8 +56,6 @@ _INTERACTIVE_COMMANDS = [
     ("/exit", "Leave interactive mode without stopping services"),
 ]
 _DEFAULT_ENV = {
-    "LLM_BASE_URL": "https://api.deepseek.com/v1",
-    "LLM_MODEL": "deepseek-v4-flash",
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
     "SOURCE_INGEST_CONCURRENCY": "16",
@@ -77,6 +77,7 @@ _DEFAULT_ENV = {
 def main(ctx: typer.Context) -> None:
     """Run a command, or enter interactive slash-command mode with no arguments."""
     if ctx.invoked_subcommand is None:
+        _ensure_workspace_dirs(Path.cwd())
         _interactive_shell()
         raise typer.Exit()
 
@@ -91,19 +92,19 @@ def run() -> None:
     root = Path.cwd()
     _ensure_workspace_config(root)
     clear_stop(root, "tree")
-    settings = Settings.from_env()
+    settings = Settings.from_env(project_root=root)
     engine = TreeEngine(settings)
     try:
         asyncio.run(_run_engine(engine))
     except StopRequested:
-        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tree-run continue' to resume.[/yellow]")
+        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tre continue' to resume.[/yellow]")
     except KeyboardInterrupt:
-        rprint("[yellow]Pipeline interrupted. Use 'tree-run continue' to continue.[/yellow]")
+        rprint("[yellow]Pipeline interrupted. Use 'tre continue' to continue.[/yellow]")
 
 
 @app.command()
 def resume() -> None:
-    """Resume pipeline from the last checkpoint in tree_engine/.runtime."""
+    """Resume pipeline from the last workspace checkpoint."""
     from tree.config import Settings
     from tree.engine import StopRequested, TreeEngine
     from tree.services import clear_stop
@@ -111,14 +112,14 @@ def resume() -> None:
     root = Path.cwd()
     _ensure_workspace_config(root)
     clear_stop(root, "tree")
-    settings = Settings.from_env()
+    settings = Settings.from_env(project_root=root)
     engine = TreeEngine(settings)
     try:
         asyncio.run(_run_engine(engine))
     except StopRequested:
-        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tree-run continue' to resume.[/yellow]")
+        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tre continue' to resume.[/yellow]")
     except KeyboardInterrupt:
-        rprint("[yellow]Pipeline interrupted. Use 'tree-run continue' to continue.[/yellow]")
+        rprint("[yellow]Pipeline interrupted. Use 'tre continue' to continue.[/yellow]")
 
 
 @app.command("continue")
@@ -146,7 +147,18 @@ def continue_(
 
     tree = start_tree(root)
     rprint(f"[green]{tree.message}[/green] pid={tree.pid} log={tree.log_path}")
-    rprint("[dim]Use /watch in interactive mode, or tree-run watch, to follow progress.[/dim]")
+    rprint("[dim]Use /watch in interactive mode, or tre watch, to follow progress.[/dim]")
+
+
+@app.command()
+def init() -> None:
+    """Initialize the current directory as a TREE workspace."""
+    root = Path.cwd()
+    _ensure_workspace_dirs(root)
+    rprint(f"[green]Workspace ready[/green] {root}")
+    rprint(f"[green]Ready[/green] {root / 'raw_materials'}")
+    rprint(f"[green]Ready[/green] {root / 'finished_outputs'}")
+    rprint(f"[green]Ready[/green] {paths.workspace_home(root)}")
 
 
 @app.command()
@@ -258,20 +270,27 @@ def status(
 
 @app.command()
 def doctor() -> None:
-    """Check local configuration, runtime directories, services, and Git state."""
+    """Check installation, configuration, workspace directories, services, and Git state."""
     from tree.config import Settings
 
     root = Path.cwd()
-    _ensure_workspace_config(root)
-    settings = Settings.from_env(require_llm=False)
+    _ensure_workspace_dirs(root)
+    settings = Settings.from_env(project_root=root, require_llm=False)
     table = Table(title="T.R.E.E. Doctor")
     table.add_column("Check")
     table.add_column("Status")
     table.add_column("Details")
 
-    _add_check(table, "Project root", (root / "pyproject.toml").exists(), str(root))
-    _add_check(table, "tree_engine", (root / "tree_engine").exists(), "engine source and scripts")
-    _add_check(table, ".env", (root / ".env").exists(), "loaded if present")
+    _add_check(table, "Python", sys.version_info >= (3, 12), _python_summary())
+    cli_ok, cli_detail = _cli_executable_summary()
+    _add_check(table, "tre command", cli_ok, cli_detail)
+    pkg_ok, pkg_detail = _package_summary()
+    _add_check(table, "tree package", pkg_ok, pkg_detail)
+    _add_check(table, "TREE_HOME", True, str(paths.app_home()))
+    _add_check(table, "Workspace root", paths.workspace_home(root).exists(), str(root))
+    _add_check(table, "Global config", paths.global_config_path().exists(), str(paths.global_config_path()))
+    _add_check(table, "Workspace config", paths.workspace_config_path(root).exists(), str(paths.workspace_config_path(root)))
+    _add_check(table, "Legacy .env", paths.legacy_workspace_env_path(root).exists(), "loaded if present")
     _add_check(
         table,
         "LLM API key",
@@ -286,6 +305,8 @@ def doctor() -> None:
     )
     _add_check(table, "raw_materials", (root / "raw_materials").exists(), "user uploads")
     _add_check(table, "finished_outputs", (root / "finished_outputs").exists(), "final outputs")
+    _add_check(table, "Runtime", paths.runtime_root(root).exists(), str(paths.runtime_root(root)))
+    _add_check(table, "Global services", paths.global_services_root().exists(), str(paths.global_services_root()))
     _add_check(
         table,
         "pipeline-state.json",
@@ -363,7 +384,7 @@ def logs(
     """Show recent pipeline trace entries."""
     trace_path = paths.pipeline_temp_root(Path.cwd()) / "trace.jsonl"
     if not trace_path.exists():
-        rprint("[dim]No trace log found at tree_engine/.runtime/pipeline-temp/trace.jsonl.[/dim]")
+        rprint(f"[dim]No trace log found at {trace_path}.[/dim]")
         return
 
     entries = []
@@ -428,12 +449,12 @@ def clean(
     pipeline_temp: bool = typer.Option(
         False,
         "--pipeline-temp",
-        help="Remove internal tree_engine/.runtime/pipeline-temp/",
+        help="Remove internal .tree/runtime/pipeline-temp/",
     ),
     source_materials: bool = typer.Option(
         False,
         "--source-materials",
-        help="Remove internal tree_engine/.runtime/source_materials/",
+        help="Remove internal .tree/runtime/source_materials/",
     ),
     all_targets: bool = typer.Option(False, "--all", help="Clean all supported runtime targets"),
     dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview by default; use --apply to delete"),
@@ -496,15 +517,17 @@ def prompts(
 
 @app.command()
 def setup(
-    force: bool = typer.Option(False, "--force", help="Run the setup wizard even if .env exists"),
+    force: bool = typer.Option(False, "--force", help="Run the setup wizard even if config exists"),
+    workspace: bool = typer.Option(False, "--workspace", help="Write settings only for the current workspace"),
 ) -> None:
-    """Create or update workspace configuration interactively."""
+    """Create or update global or workspace configuration interactively."""
     root = Path.cwd()
-    env_path = root / ".env"
+    _ensure_workspace_dirs(root)
+    env_path = paths.workspace_config_path(root) if workspace else paths.global_config_path()
     if env_path.exists() and not force:
-        rprint("[green].env already exists.[/green] Use --force to run the wizard again.")
+        rprint(f"[green]{env_path} already exists.[/green] Use --force to run the wizard again.")
         return
-    _run_setup_wizard(root, force=force)
+    _run_setup_wizard(root, env_path=env_path, force=force, scope="workspace" if workspace else "global")
 
 
 @app.command()
@@ -517,15 +540,18 @@ def models(
     archivist: str | None = typer.Option(None, "--archivist", help="Set Archivist model"),
     api_key: bool = typer.Option(False, "--api-key", help="Prompt for shared LLM API key"),
     paddleocr_key: bool = typer.Option(False, "--paddleocr-key", help="Prompt for PaddleOCR API key"),
+    workspace: bool = typer.Option(False, "--workspace", help="Read and update current workspace config"),
 ) -> None:
-    """Show or update model/provider settings stored in .env."""
+    """Show or update model/provider settings."""
     root = Path.cwd()
-    env_path = root / ".env"
+    _ensure_workspace_dirs(root)
+    env_path = paths.workspace_config_path(root) if workspace else paths.global_config_path()
     if not env_path.exists():
-        rprint("[yellow].env does not exist yet. Starting setup wizard.[/yellow]")
-        _run_setup_wizard(root, force=False)
+        rprint(f"[yellow]{env_path} does not exist yet. Starting setup wizard.[/yellow]")
+        _run_setup_wizard(root, env_path=env_path, force=False, scope="workspace" if workspace else "global")
 
-    env = _read_env_file(env_path)
+    env = _read_effective_env(root)
+    target_env = _read_env_file(env_path)
     updates: dict[str, str] = {}
     if base_url is not None:
         updates["LLM_BASE_URL"] = _clean_prompt_value(base_url)
@@ -545,8 +571,9 @@ def models(
         updates["PADDLEOCR_API_TOKEN"] = typer.prompt("PaddleOCR API key", hide_input=True)
 
     if updates:
+        target_env.update(updates)
+        _write_env_file(env_path, target_env)
         env.update(updates)
-        _write_env_file(env_path, env)
         _load_env_into_process(env)
         rprint(f"[green]Updated[/green] {env_path}")
 
@@ -580,7 +607,7 @@ def ingest(
     collection_name = collection or input_path.stem
 
     if no_structure:
-        settings = Settings.from_env(require_llm=False)
+        settings = Settings.from_env(project_root=root, require_llm=False)
         outputs = asyncio.run(
             ingest_path(
                 input_path,
@@ -592,7 +619,7 @@ def ingest(
             )
         )
     else:
-        settings = Settings.from_env()
+        settings = Settings.from_env(project_root=root)
         engine = TreeEngine(settings)
         try:
             outputs = asyncio.run(
@@ -885,7 +912,7 @@ def _print_interactive_help(args: list[str] | None = None) -> None:
 def _invoke_cli_args(args: list[str]) -> None:
     command = typer.main.get_command(app)
     try:
-        command.main(args=args, prog_name="tree-run", standalone_mode=False)
+        command.main(args=args, prog_name="tre", standalone_mode=False)
     except click.ClickException as exc:
         exc.show()
     except click.exceptions.Exit as exc:
@@ -912,26 +939,52 @@ def _has_any_llm_key() -> bool:
     return any(os.environ.get(key) for key in keys)
 
 
+def _ensure_workspace_dirs(root: Path) -> None:
+    (root / "raw_materials").mkdir(exist_ok=True)
+    (root / "finished_outputs").mkdir(exist_ok=True)
+    paths.runtime_root(root).mkdir(parents=True, exist_ok=True)
+
+
+def _has_any_config(root: Path) -> bool:
+    config_file_exists = any(
+        path.exists()
+        for path in (
+            paths.global_config_path(),
+            paths.workspace_config_path(root),
+            paths.legacy_workspace_env_path(root),
+        )
+    )
+    return config_file_exists or any(os.environ.get(key) for key in ("LLM_API_KEY", "PADDLEOCR_API_TOKEN"))
+
+
 def _ensure_workspace_config(root: Path, require_llm: bool = True) -> None:
-    env_path = root / ".env"
-    if env_path.exists():
+    _ensure_workspace_dirs(root)
+    if _has_any_config(root):
         return
     rprint(Panel(
-        "This workspace has no .env yet.\n"
-        "T.R.E.E. needs provider settings before it can call OCR and agents.",
+        "TREE has no global provider config yet.\n"
+        "These settings are written once to your user-level TREE home and reused across workspaces.",
         title="First-time setup",
     ))
-    _run_setup_wizard(root, force=False, require_llm=require_llm)
+    _run_setup_wizard(root, env_path=paths.global_config_path(), force=False, require_llm=require_llm, scope="global")
 
 
-def _run_setup_wizard(root: Path, force: bool, require_llm: bool = True) -> None:
-    env_path = root / ".env"
+def _run_setup_wizard(
+    root: Path,
+    env_path: Path,
+    force: bool,
+    require_llm: bool = True,
+    scope: str = "global",
+) -> None:
     existed = env_path.exists()
     existing = _read_env_file(env_path) if env_path.exists() else {}
-    values = {**_DEFAULT_ENV, **existing}
+    values = {**_DEFAULT_ENV, **_read_effective_env(root), **existing}
 
-    rprint("[bold]T.R.E.E. workspace setup[/bold]")
-    rprint("[dim]Secrets are written only to the local .env file, which is ignored by Git.[/dim]\n")
+    _ensure_workspace_dirs(root)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rprint(f"[bold]T.R.E.E. {scope} setup[/bold]")
+    rprint(f"[dim]Secrets are written to {env_path}.[/dim]\n")
 
     if require_llm or typer.confirm("Configure LLM / agent provider now?", default=True):
         values["LLM_API_KEY"] = _prompt_secret(
@@ -939,35 +992,37 @@ def _run_setup_wizard(root: Path, force: bool, require_llm: bool = True) -> None
             current=values.get("LLM_API_KEY", ""),
             required=require_llm,
         )
-        values["LLM_BASE_URL"] = typer.prompt(
+        values["LLM_BASE_URL"] = _prompt_visible(
             "LLM base URL",
-            default=values.get("LLM_BASE_URL", _DEFAULT_ENV["LLM_BASE_URL"]),
+            current=existing.get("LLM_BASE_URL", ""),
+            required=require_llm,
         )
         values["LLM_BASE_URL"] = _clean_prompt_value(values["LLM_BASE_URL"])
-        values["LLM_MODEL"] = typer.prompt(
+        values["LLM_MODEL"] = _prompt_visible(
             "Default LLM model",
-            default=values.get("LLM_MODEL", _DEFAULT_ENV["LLM_MODEL"]),
+            current=existing.get("LLM_MODEL", ""),
+            required=require_llm,
         )
         values["LLM_MODEL"] = _clean_prompt_value(values["LLM_MODEL"])
         default_model = values["LLM_MODEL"]
         values["EXAMINER_MODEL"] = typer.prompt(
             "Examiner model",
-            default=values.get("EXAMINER_MODEL", default_model),
+            default=existing.get("EXAMINER_MODEL", default_model),
         )
         values["EXAMINER_MODEL"] = _clean_prompt_value(values["EXAMINER_MODEL"])
         values["STUDENT_MODEL"] = typer.prompt(
             "Student model",
-            default=values.get("STUDENT_MODEL", default_model),
+            default=existing.get("STUDENT_MODEL", default_model),
         )
         values["STUDENT_MODEL"] = _clean_prompt_value(values["STUDENT_MODEL"])
         values["WRITER_MODEL"] = typer.prompt(
             "Writer model",
-            default=values.get("WRITER_MODEL", default_model),
+            default=existing.get("WRITER_MODEL", default_model),
         )
         values["WRITER_MODEL"] = _clean_prompt_value(values["WRITER_MODEL"])
         values["ARCHIVIST_MODEL"] = typer.prompt(
             "Archivist model",
-            default=values.get("ARCHIVIST_MODEL", default_model),
+            default=existing.get("ARCHIVIST_MODEL", default_model),
         )
         values["ARCHIVIST_MODEL"] = _clean_prompt_value(values["ARCHIVIST_MODEL"])
 
@@ -983,15 +1038,13 @@ def _run_setup_wizard(root: Path, force: bool, require_llm: bool = True) -> None
         values.setdefault(key, default)
 
     _write_env_file(env_path, values)
-    (root / "raw_materials").mkdir(exist_ok=True)
-    (root / "finished_outputs").mkdir(exist_ok=True)
-    paths.runtime_root(root).mkdir(parents=True, exist_ok=True)
     _load_env_into_process(values)
     action = "Updated" if existed else "Created"
     rprint(f"\n[green]{action}[/green] {env_path}")
     rprint(f"[green]Ready[/green] {root / 'raw_materials'}")
     rprint(f"[green]Ready[/green] {root / 'finished_outputs'}")
-    rprint("[dim]Use 'tree-run models' to view or update provider/model settings later.[/dim]")
+    rprint(f"[green]Ready[/green] {paths.workspace_home(root)}")
+    rprint("[dim]Use 'tre models' to view or update provider/model settings later.[/dim]")
 
 
 def _prompt_secret(label: str, current: str = "", required: bool = False) -> str:
@@ -1000,8 +1053,25 @@ def _prompt_secret(label: str, current: str = "", required: bool = False) -> str
         if keep:
             return current
     while True:
-        value = typer.prompt(label, hide_input=True, default="" if not required else None)
+        if required:
+            value = typer.prompt(label, hide_input=True)
+        else:
+            value = typer.prompt(label, hide_input=True, default="")
         value = value.strip()
+        if value or not required:
+            return value
+        rprint("[red]This value is required.[/red]")
+
+
+def _prompt_visible(label: str, current: str = "", required: bool = False) -> str:
+    while True:
+        if current:
+            value = typer.prompt(label, default=current)
+        elif required:
+            value = typer.prompt(label)
+        else:
+            value = typer.prompt(label, default="")
+        value = str(value).strip()
         if value or not required:
             return value
         rprint("[red]This value is required.[/red]")
@@ -1023,6 +1093,19 @@ def _read_env_file(path: Path) -> dict[str, str]:
         key, value = stripped.split("=", 1)
         values[key.strip()] = _unquote_env_value(value.strip())
     return values
+
+
+def _read_effective_env(root: Path) -> dict[str, str]:
+    env: dict[str, str] = {
+        key: value
+        for key, value in os.environ.items()
+        if key.startswith(_ROLE_NAMES)
+        or key.startswith(("LLM_", "PADDLEOCR_", "SOURCE_", "EMBED_", "MAX_", "PRO_"))
+    }
+    env.update(_read_env_file(paths.global_config_path()))
+    env.update(_read_env_file(paths.legacy_workspace_env_path(root)))
+    env.update(_read_env_file(paths.workspace_config_path(root)))
+    return env
 
 
 def _write_env_file(path: Path, values: dict[str, str]) -> None:
@@ -1074,6 +1157,7 @@ def _write_env_file(path: Path, values: dict[str, str]) -> None:
         for key in extra_keys:
             lines.append(f"{key}={_quote_env_value(values[key])}")
         lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
@@ -1127,6 +1211,37 @@ def _embedding_health() -> tuple[bool, str]:
     return ok, _truncate(detail, 120)
 
 
+def _python_summary() -> str:
+    version = ".".join(str(part) for part in sys.version_info[:3])
+    return f"{version} at {sys.executable}"
+
+
+def _cli_executable_summary() -> tuple[bool, str]:
+    executable = shutil.which("tre")
+    if executable:
+        return True, executable
+    launched = Path(sys.argv[0]).name if sys.argv else ""
+    if launched == "tre":
+        return True, str(Path(sys.argv[0]).resolve())
+    return False, "tre is not on PATH; run pipx ensurepath or reinstall"
+
+
+def _package_summary() -> tuple[bool, str]:
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        package_version = version("tree-engine")
+    except PackageNotFoundError:
+        package_version = "unknown"
+    try:
+        import tree
+
+        package_path = Path(tree.__file__ or "").resolve()
+    except Exception as exc:
+        return False, f"cannot import tree package: {exc}"
+    return True, f"tree-engine {package_version} at {package_path}"
+
+
 def _git_status_summary(root: Path) -> tuple[bool, str]:
     try:
         result = subprocess.run(
@@ -1139,7 +1254,10 @@ def _git_status_summary(root: Path) -> tuple[bool, str]:
     except OSError as exc:
         return False, str(exc)
     if result.returncode != 0:
-        return False, result.stderr.strip() or "git status failed"
+        detail = result.stderr.strip() or "git status failed"
+        if "not a git repository" in detail:
+            return True, "not a Git workspace"
+        return False, detail
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if not lines:
         return True, "clean"
@@ -1156,7 +1274,7 @@ def _format_bytes(size: int) -> str:
 
 
 def _iter_project_pycache_dirs(root: Path) -> list[Path]:
-    ignored = {".git", ".venv", ".runtime", "rag-store", "node_modules"}
+    ignored = {".git", ".venv", ".tree", ".runtime", "rag-store", "node_modules"}
     matches = []
     for current_root, dirnames, _ in os.walk(root):
         dirnames[:] = [name for name in dirnames if name not in ignored]

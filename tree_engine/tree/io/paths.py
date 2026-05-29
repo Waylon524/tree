@@ -2,15 +2,42 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
-def engine_dir(root: Path) -> Path:
-    return root / "tree_engine"
+def app_home() -> Path:
+    """Return the per-user TREE home used for global config and services."""
+    override = os.environ.get("TREE_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".tree"
+
+
+def global_config_path() -> Path:
+    return app_home() / "config.env"
+
+
+def global_services_root() -> Path:
+    return app_home() / "services"
+
+
+def workspace_home(root: Path) -> Path:
+    return root / ".tree"
+
+
+def workspace_config_path(root: Path) -> Path:
+    return workspace_home(root) / "config.env"
+
+
+def legacy_workspace_env_path(root: Path) -> Path:
+    return root / ".env"
+
+
+def legacy_runtime_root(root: Path) -> Path:
+    return root / "tree_engine" / ".runtime"
 
 
 def runtime_root(root: Path) -> Path:
-    return engine_dir(root) / ".runtime"
+    return workspace_home(root) / "runtime"
 
 
 def source_root(root: Path) -> Path:
@@ -37,13 +64,19 @@ def services_root(root: Path) -> Path:
     return runtime_root(root) / "services"
 
 
+def service_root(root: Path, name: str) -> Path:
+    if name == "embedding":
+        return global_services_root()
+    return services_root(root)
+
+
 def service_pid_path(root: Path, name: str) -> Path:
-    return services_root(root) / f"{name}.pid"
+    return service_root(root, name) / f"{name}.pid"
 
 
 def service_log_path(root: Path, name: str) -> Path:
-    return services_root(root) / f"{name}.log"
+    return service_root(root, name) / f"{name}.log"
 
 
 def service_stop_path(root: Path, name: str) -> Path:
-    return services_root(root) / f"{name}.stop"
+    return service_root(root, name) / f"{name}.stop"

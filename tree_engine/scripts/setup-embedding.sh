@@ -59,9 +59,15 @@ fi
 
 echo "=== Installing llama-cpp-python ($DEVICE) ==="
 
-# Load .env for proxy
+# Load config for proxy
+if [ -f "$HOME/.tree/config.env" ]; then
+  set -a; source "$HOME/.tree/config.env"; set +a
+fi
 if [ -f .env ]; then
   set -a; source .env; set +a
+fi
+if [ -f .tree/config.env ]; then
+  set -a; source .tree/config.env; set +a
 fi
 export HTTPS_PROXY="${HTTPS_PROXY:-${HTTP_PROXY:-}}"
 export HTTP_PROXY="${HTTP_PROXY:-}"
