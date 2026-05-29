@@ -56,6 +56,7 @@ _INTERACTIVE_COMMANDS = [
     ("/help", "Show this slash-command help"),
     ("/exit", "Leave interactive mode without stopping services"),
 ]
+_TREE_THEME = "#003366"
 _DEFAULT_ENV = {
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
@@ -861,17 +862,18 @@ def _interactive_shell() -> None:
         Panel(
             "Type [bold]/start[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
             "[bold]/watch[/bold] to follow progress, or [bold]/help[/bold] for commands.",
-            title="TREE Interactive",
+            title=f"[bold {_TREE_THEME}]TREE[/]",
+            border_style=_TREE_THEME,
         )
     )
     while True:
         try:
             line = input("TREE> ")
         except EOFError:
-            rprint("\n[dim]Leaving TREE interactive mode.[/dim]")
+            rprint("\n[dim]Leaving TREE.[/dim]")
             return
         except KeyboardInterrupt:
-            rprint("\n[dim]Leaving TREE interactive mode. TREE services were not changed.[/dim]")
+            rprint("\n[dim]Leaving TREE. TREE services were not changed.[/dim]")
             return
 
         try:
@@ -884,7 +886,7 @@ def _interactive_shell() -> None:
 
         command = args[0]
         if command == "exit":
-            rprint("[dim]Leaving TREE interactive mode. TREE services were not changed.[/dim]")
+            rprint("[dim]Leaving TREE. TREE services were not changed.[/dim]")
             return
         if command == "help":
             _print_interactive_help(args[1:])
@@ -917,7 +919,10 @@ def _print_interactive_help(args: list[str] | None = None) -> None:
     if args:
         _invoke_cli_args([args[0], "--help", *args[1:]])
         return
-    table = Table(title="TREE Slash Commands")
+    table = Table(
+        title=f"[bold {_TREE_THEME}]TREE Slash Commands[/]",
+        border_style=_TREE_THEME,
+    )
     table.add_column("Command")
     table.add_column("Action")
     for command, description in _INTERACTIVE_COMMANDS:
