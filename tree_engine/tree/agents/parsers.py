@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from tree.state.models import ExamSections, Route
+from tree.state.models import ChapterScanResult, ExamSections, Route
 
 
 class ParseError(Exception):
@@ -26,6 +26,13 @@ def extract_section(text: str, header: str) -> str:
     if not match:
         raise ParseError(f"Section ## [{header}] not found in output")
     return match.group(1).strip()
+
+
+def extract_optional_section(text: str, header: str) -> str:
+    try:
+        return extract_section(text, header)
+    except ParseError:
+        return ""
 
 
 def parse_route(text: str) -> Route:
@@ -70,6 +77,45 @@ def parse_exam_output(text: str) -> ExamSections:
         answer_key=ak,
         writer_instructions=wi,
     )
+
+
+def parse_chapter_scan_output(text: str) -> ChapterScanResult:
+    """Parse examiner Phase C output into chapter metadata plus first exam sections."""
+    chapter_name = extract_section(text, "Next_Chapter").strip()
+    if not chapter_name:
+        raise ParseError("Section ## [Next_Chapter] is empty")
+    source_collection = _normalize_optional_section(extract_section(text, "Source_Collection"))
+    source_collections = _split_optional_list(extract_optional_section(text, "Source_Collections"))
+    if source_collection and source_collection not in source_collections:
+        source_collections.insert(0, source_collection)
+    graph_node_id = _normalize_optional_section(extract_optional_section(text, "Graph_Node"))
+    required_nodes = _split_optional_list(extract_optional_section(text, "Required_Nodes"))
+    return ChapterScanResult(
+        chapter_name=chapter_name,
+        source_collection=source_collection,
+        source_collections=source_collections,
+        graph_node_id=graph_node_id,
+        required_nodes=required_nodes,
+        exam_sections=parse_exam_output(text),
+        selection_rationale=extract_optional_section(text, "Selection_Rationale"),
+    )
+
+
+def _normalize_optional_section(value: str) -> str | None:
+    normalized = value.strip()
+    if normalized.lower() in {"", "none", "null", "n/a", "unknown", "(none)"}:
+        return None
+    return normalized
+
+
+def _split_optional_list(value: str) -> list[str]:
+    normalized = value.strip()
+    if not normalized:
+        return []
+    if normalized.lower() in {"none", "null", "n/a", "unknown", "(none)"}:
+        return []
+    items = re.split(r"[,\n，、]+", normalized)
+    return [item.strip() for item in items if item.strip()]
 
 
 def extract_bottleneck_report(text: str) -> str:

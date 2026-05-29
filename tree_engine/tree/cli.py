@@ -56,6 +56,10 @@ _INTERACTIVE_COMMANDS = [
     ("/models", "Show or update model/provider settings"),
     ("/setup", "Create or update workspace configuration"),
     ("/rag status", "Show local RAG index status"),
+    ("/rag ledger", "Show finished-output knowledge ledger"),
+    ("/rag inventory", "Show chunk-level source inventory"),
+    ("/rag map", "Show curriculum map candidates"),
+    ("/rag graph", "Show knowledge graph nodes and relations"),
     ("/help", "Show this slash-command help"),
     ("/exit", "Leave interactive mode without stopping services"),
 ]
@@ -774,6 +778,288 @@ def rag_status() -> None:
         )
         table.add_row(key[0], key[1], str(len(grouped[key])), str(chunk_count))
     rprint(table)
+
+
+@rag_app.command("ledger")
+def rag_ledger(
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
+) -> None:
+    """Show the compact finished-output knowledge ledger used for duplicate checks."""
+    try:
+        from tree.curriculum.ledger import reconcile_finished_outputs
+
+        ledger = reconcile_finished_outputs(Path.cwd())
+    except Exception as exc:
+        rprint(f"[red]Knowledge ledger unavailable:[/red] {exc}")
+        return
+
+    records = [item for item in ledger.get("records", []) if isinstance(item, dict)]
+    if not records:
+        rprint("[dim]Knowledge ledger is empty. Finish at least one output first.[/dim]")
+        return
+
+    table = Table(title="Knowledge Ledger")
+    table.add_column("Seq")
+    table.add_column("Chapter")
+    table.add_column("Knowledge Point")
+    table.add_column("Concepts")
+    table.add_column("Path")
+    for record in records[:limit]:
+        concepts = ", ".join(record.get("covered_concepts", [])[:6])
+        table.add_row(
+            str(record.get("file_seq", "")),
+            str(record.get("chapter", "")),
+            str(record.get("knowledge_point", "")),
+            _truncate(concepts, 72),
+            str(record.get("path", "")),
+        )
+    rprint(table)
+    if len(records) > limit:
+        rprint(f"[dim]{len(records) - limit} more records omitted. Use --limit to show more.[/dim]")
+
+
+@rag_app.command("inventory")
+def rag_inventory(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild from source RAG chunks first"),
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
+) -> None:
+    """Show chunk-level source inventory used for chapter selection."""
+    try:
+        from tree.curriculum.inventory import load_inventory, rebuild_source_inventory
+        from tree.rag.client import RAGClient
+
+        root = Path.cwd()
+        if rebuild or not paths.source_inventory_path(root).exists():
+            rag = RAGClient(store_path=paths.rag_store_path(root))
+            try:
+                source_chunks = rag.scroll_chunks(
+                    filters={"content_kind": "source"},
+                    include_drafts=False,
+                    limit=10000,
+                )
+                inventory = rebuild_source_inventory(root, source_chunks)
+            finally:
+                rag.close()
+        else:
+            inventory = load_inventory(root)
+    except Exception as exc:
+        rprint(f"[red]Source inventory unavailable:[/red] {exc}")
+        return
+
+    collections = [item for item in inventory.get("collections", []) if isinstance(item, dict)]
+    if not collections:
+        rprint("[dim]Source inventory is empty. Ingest and embed source materials first.[/dim]")
+        return
+
+    table = Table(title="Source Inventory")
+    table.add_column("Collection")
+    table.add_column("Docs", justify="right")
+    table.add_column("Chunks", justify="right")
+    table.add_column("Core Concepts")
+    table.add_column("Sections")
+    table.add_column("Related")
+    for collection in collections[:limit]:
+        concepts = ", ".join(collection.get("core_concepts", [])[:8])
+        sections = ", ".join(collection.get("section_ids", [])[:5])
+        related = ", ".join(
+            f"{item.get('source_collection')}:{item.get('score', 0):.2f}"
+            for item in collection.get("related_collections", [])[:4]
+            if isinstance(item, dict)
+        )
+        table.add_row(
+            str(collection.get("source_collection", "")),
+            str(collection.get("doc_count", 0)),
+            str(collection.get("chunk_count", 0)),
+            _truncate(concepts, 72),
+            _truncate(sections, 58),
+            related,
+        )
+    rprint(table)
+    if len(collections) > limit:
+        rprint(f"[dim]{len(collections) - limit} more collections omitted. Use --limit to show more.[/dim]")
+
+
+@rag_app.command("map")
+def rag_map(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and map first"),
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
+) -> None:
+    """Show curriculum map candidates derived from source inventory."""
+    try:
+        from tree.curriculum.inventory import load_inventory, rebuild_source_inventory
+        from tree.curriculum.map import load_curriculum_map, rebuild_curriculum_map
+        from tree.rag.client import RAGClient
+        from tree.state.manager import StateManager
+
+        root = Path.cwd()
+        state = StateManager(paths.pipeline_state_path(root)).load()
+        completed = {
+            collection
+            for chapter in state.chapters
+            if chapter.status == "completed"
+            for collection in ([chapter.source_collection] + list(chapter.source_collections or []))
+            if collection
+        }
+        if rebuild or not paths.curriculum_map_path(root).exists():
+            if rebuild or not paths.source_inventory_path(root).exists():
+                rag = RAGClient(store_path=paths.rag_store_path(root))
+                try:
+                    source_chunks = rag.scroll_chunks(
+                        filters={"content_kind": "source"},
+                        include_drafts=False,
+                        limit=10000,
+                    )
+                    inventory = rebuild_source_inventory(root, source_chunks)
+                finally:
+                    rag.close()
+            else:
+                inventory = load_inventory(root)
+            curriculum_map = rebuild_curriculum_map(root, inventory, completed_collections=completed)
+        else:
+            curriculum_map = load_curriculum_map(root)
+    except Exception as exc:
+        rprint(f"[red]Curriculum map unavailable:[/red] {exc}")
+        return
+
+    candidates = [
+        item for item in curriculum_map.get("chapter_candidates", []) if isinstance(item, dict)
+    ]
+    if not candidates:
+        rprint("[dim]Curriculum map is empty. Build source inventory first.[/dim]")
+        return
+
+    table = Table(title="Curriculum Map Candidates")
+    table.add_column("Candidate")
+    table.add_column("Status")
+    table.add_column("Title Hint")
+    table.add_column("Collections")
+    table.add_column("Prerequisites")
+    table.add_column("Core Concepts")
+    for candidate in candidates[:limit]:
+        table.add_row(
+            str(candidate.get("candidate_id", "")),
+            str(candidate.get("status", "")),
+            _truncate(str(candidate.get("title_hint", "")), 34),
+            ", ".join(candidate.get("source_collections", [])),
+            _truncate(", ".join(candidate.get("prerequisite_concepts", [])[:5]), 42),
+            _truncate(", ".join(candidate.get("core_concepts", [])[:8]), 72),
+        )
+    rprint(table)
+    if len(candidates) > limit:
+        rprint(f"[dim]{len(candidates) - limit} more candidates omitted. Use --limit to show more.[/dim]")
+
+
+@rag_app.command("graph")
+def rag_graph(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild graph from map and ledger first"),
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
+) -> None:
+    """Show knowledge graph nodes and relation edges."""
+    try:
+        from tree.curriculum.graph import load_knowledge_graph, rebuild_knowledge_graph
+        from tree.curriculum.ledger import reconcile_finished_outputs
+        from tree.curriculum.map import load_curriculum_map
+
+        root = Path.cwd()
+        if rebuild or not paths.knowledge_graph_path(root).exists():
+            ledger = reconcile_finished_outputs(root)
+            curriculum_map = load_curriculum_map(root)
+            graph = rebuild_knowledge_graph(root, curriculum_map, ledger)
+        else:
+            graph = load_knowledge_graph(root)
+    except Exception as exc:
+        rprint(f"[red]Knowledge graph unavailable:[/red] {exc}")
+        return
+
+    nodes = [item for item in graph.get("nodes", []) if isinstance(item, dict)]
+    edges = [item for item in graph.get("edges", []) if isinstance(item, dict)]
+    stats = graph.get("stats", {})
+    planner = graph.get("planner", {})
+    rprint(
+        "[dim]"
+        f"finished={stats.get('finished_count', 0)} "
+        f"planned={stats.get('planned_count', 0)} "
+        f"eligible={stats.get('eligible_count', 0)} "
+        f"blocked={stats.get('blocked_count', 0)} "
+        f"roots={stats.get('root_count', 0)} "
+        f"backbone={stats.get('backbone_count', 0)} "
+        f"edges={stats.get('edge_count', 0)}"
+        "[/dim]"
+    )
+    rprint(
+        "[dim]"
+        f"planner_selected={planner.get('selected_node') or 'none'} "
+        f"frontier={len(planner.get('frontier_nodes', []) or [])}"
+        "[/dim]"
+    )
+    if not nodes:
+        rprint("[dim]Knowledge graph is empty. Build curriculum map first.[/dim]")
+        return
+    selected = next(
+        (node for node in nodes if node.get("node_id") == planner.get("selected_node")),
+        None,
+    )
+    if selected:
+        rprint(f"[dim]why_selected={selected.get('why_selected', 'n/a')}[/dim]")
+
+    node_table = Table(title="Knowledge Graph Nodes")
+    node_table.add_column("Node")
+    node_table.add_column("Status")
+    node_table.add_column("Eligible")
+    node_table.add_column("Tree")
+    node_table.add_column("Title")
+    node_table.add_column("Requires")
+    node_table.add_column("Concepts")
+    for node in nodes[:limit]:
+        tree_flags = []
+        if node.get("is_root"):
+            tree_flags.append("root")
+        if node.get("planner_selected"):
+            tree_flags.append("selected")
+        parent = node.get("backbone_parent")
+        if parent:
+            tree_flags.append(f"p:{parent}")
+        node_table.add_row(
+            str(node.get("node_id", "")),
+            str(node.get("status", "")),
+            "yes" if node.get("eligible") else "",
+            _truncate(", ".join(tree_flags), 42),
+            _truncate(str(node.get("title", "")), 34),
+            _truncate(", ".join(node.get("required_nodes", [])[:4]), 42),
+            _truncate(", ".join(node.get("core_concepts", [])[:6]), 64),
+        )
+    rprint(node_table)
+
+    if edges:
+        edge_table = Table(title="Knowledge Graph Relations")
+        edge_table.add_column("Relation")
+        edge_table.add_column("From")
+        edge_table.add_column("To")
+        edge_table.add_column("Scores")
+        edge_table.add_column("Evidence")
+        for edge in edges[:limit]:
+            scores = edge.get("scores", {})
+            evidence = edge.get("evidence", {})
+            evidence_text = ", ".join(evidence.get("matched_concepts", [])[:4])
+            if not evidence_text:
+                evidence_text = ", ".join(evidence.get("prerequisite_hits", [])[:4])
+            if not evidence_text:
+                evidence_text = ", ".join(evidence.get("matched_chunks", [])[:3])
+            edge_table.add_row(
+                str(edge.get("relation", "")),
+                _truncate(str(edge.get("from", "")), 36),
+                _truncate(str(edge.get("to", "")), 36),
+                (
+                    f"a={scores.get('affinity', 0):.2f} "
+                    f"c={scores.get('concept', 0):.2f} "
+                    f"k={scores.get('chunk', 0):.2f} "
+                    f"s={scores.get('source', 0):.2f}"
+                ),
+                _truncate(evidence_text or "n/a", 50),
+            )
+        rprint(edge_table)
+        if len(edges) > limit:
+            rprint(f"[dim]{len(edges) - limit} more edges omitted. Use --limit to show more.[/dim]")
 
 
 @rag_app.command("search")

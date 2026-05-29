@@ -34,12 +34,21 @@ class StateManager:
         state: PipelineState,
         name: str,
         source_collection: str | None = None,
+        source_collections: list[str] | None = None,
+        graph_node_id: str | None = None,
+        required_nodes: list[str] | None = None,
     ) -> PipelineState:
+        collections = list(source_collections or [])
+        if source_collection and source_collection not in collections:
+            collections.insert(0, source_collection)
         chapters = list(state.chapters) + [
             ChapterRecord(
                 chapter_name=name,
                 status="in_progress",
                 source_collection=source_collection,
+                source_collections=collections,
+                graph_node_id=graph_node_id,
+                required_nodes=list(required_nodes or []),
             )
         ]
         return PipelineState(chapters=chapters)

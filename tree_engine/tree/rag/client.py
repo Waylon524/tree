@@ -338,9 +338,17 @@ class RAGClient:
                 "path",
                 "doc_id",
             ):
-                conditions.append(
-                    models.FieldCondition(key=key, match=models.MatchValue(value=value))
-                )
+                if isinstance(value, (list, tuple, set)):
+                    values = [item for item in value if item is not None]
+                    if not values:
+                        continue
+                    conditions.append(
+                        models.FieldCondition(key=key, match=models.MatchAny(any=values))
+                    )
+                else:
+                    conditions.append(
+                        models.FieldCondition(key=key, match=models.MatchValue(value=value))
+                    )
         if not include_drafts:
             conditions.append(
                 models.FieldCondition(key="is_draft", match=models.MatchValue(value=False))

@@ -83,13 +83,20 @@ class WriterAgent:
 
 
 def _format_retrieved_context(retrieved_context: list[dict]) -> str:
-    parts = ["Retrieved RAG context (use as supporting source excerpts):\n"]
+    parts = [
+        "Retrieved RAG context:\n"
+        "- content_kind=source hits may teach the current new knowledge point.\n"
+        "- content_kind=finished hits are already taught material. Cite them briefly as prerequisites; "
+        "do not duplicate their definitions, examples, or misconception explanations.\n"
+        "- content_kind=ledger hits summarize the delta that must remain after removing duplicates.\n"
+    ]
     for i, hit in enumerate(retrieved_context, start=1):
         metadata = hit.get("metadata") or {}
+        kind = metadata.get("content_kind") or "unknown"
         source = metadata.get("path") or metadata.get("filename") or metadata.get("doc_id") or "unknown"
         score = hit.get("score")
         score_text = f", score={score:.4f}" if isinstance(score, float) else ""
-        parts.append(f"--- RAG Hit {i}: {source}{score_text} ---\n{hit.get('text', '')}\n")
+        parts.append(f"--- RAG Hit {i}: kind={kind}, {source}{score_text} ---\n{hit.get('text', '')}\n")
     return "\n".join(parts)
 
 

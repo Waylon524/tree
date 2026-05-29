@@ -13,6 +13,9 @@ class ChapterRecord(BaseModel):
     status: str  # "in_progress" | "completed"
     files_completed: list[str] = []
     source_collection: str | None = None
+    source_collections: list[str] = []
+    graph_node_id: str | None = None
+    required_nodes: list[str] = []
 
 
 class PipelineState(BaseModel):
@@ -29,6 +32,16 @@ class ExamSections(BaseModel):
     blind_exam: str
     answer_key: str
     writer_instructions: str
+
+
+class ChapterScanResult(BaseModel):
+    chapter_name: str
+    source_collection: str | None = None
+    source_collections: list[str] = []
+    graph_node_id: str | None = None
+    required_nodes: list[str] = []
+    exam_sections: ExamSections
+    selection_rationale: str = ""
 
 
 class AuditResult(BaseModel):

@@ -68,6 +68,22 @@ def progress_path(root: Path) -> Path:
     return runtime_root(root) / "progress.json"
 
 
+def knowledge_ledger_path(root: Path) -> Path:
+    return runtime_root(root) / "knowledge-ledger.json"
+
+
+def source_inventory_path(root: Path) -> Path:
+    return runtime_root(root) / "source-inventory.json"
+
+
+def curriculum_map_path(root: Path) -> Path:
+    return runtime_root(root) / "curriculum-map.json"
+
+
+def knowledge_graph_path(root: Path) -> Path:
+    return runtime_root(root) / "knowledge-graph.json"
+
+
 def rag_store_path(root: Path) -> Path:
     return runtime_root(root) / "rag-store"
 

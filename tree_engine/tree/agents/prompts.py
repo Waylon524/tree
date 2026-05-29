@@ -60,9 +60,18 @@ NN. <知识点中文标题>
 - Do not give formula handouts in the exam body unless those formulas already appear in prior passed drafts. The answer key may use source material to define the expected target knowledge.
 - If EXAM_TOO_BROAD was returned, preserve the knowledge point name but reduce the exam scope by removing bloating subquestions, narrowing conditions, or replacing broad synthesis questions with focused checks.
 
+### Anti-Duplication Rules
+- Finished-output RAG and prior completed files define the already-covered curriculum boundary across all chapters, not only the current chapter.
+- Before selecting a new knowledge point, compare the candidate against finished-output RAG hits and prior completed paths.
+- Do not open a new file for a concept, definition, method, example pattern, misconception, or exercise skill that is already substantially covered in finished outputs.
+- If the source material mentions already-covered foundations, treat them as prerequisites to cite briefly, not as new teachable scope.
+- A new knowledge point is valid only when it adds a clearly new concept, method, misconception, syntax form, debugging skill, or application pattern beyond finished outputs.
+- If the next source content is only a restatement of already-covered material, skip it and search for another incremental point. If none exists in the current chapter, output CHAPTER_COMPLETE.
+- Writer_Instructions must include a "Forbidden spillover" field that names already-covered concepts that the writer may cite but must not reteach.
+
 ### Context Boundary Rules
 - Source material RAG is teacher-side ground truth. Use it to decide what should be taught and what the answer key should contain.
-- Finished-output RAG and prior passed draft contents are student-visible learned knowledge.
+- Finished-output RAG and prior passed draft contents are student-visible learned knowledge and the no-duplicate boundary.
 - Current draft text is student-visible only after it exists.
 - During audit, if the student relies on source material knowledge that is not present in the current draft or prior passed drafts, mark it as Knowledge Bleed and fail faithfulness.
 
@@ -143,8 +152,47 @@ PASS requires all answers correct, every step supported by drafts, no unresolved
 
 ## Phase C: Chapter Continuation
 
-After CHAPTER_COMPLETE, compare pipeline-state.json against all structured source material collections. If uncovered source material exists, name the new chapter and output the four Phase A sections. If all source materials are covered, output exactly:
+After CHAPTER_COMPLETE, compare pipeline-state.json, finished-output coverage, source inventory, curriculum map, and knowledge graph against all structured source material collections. If uncovered source material exists, choose one eligible knowledge graph node or coherent uncovered source cluster first, name the new chapter, and output the Phase C sections below. If all source materials are covered, output exactly:
 PIPELINE_COMPLETE
+
+Do not start a new chapter that merely renames or repackages finished-output concepts. A chapter can begin only when the source materials contain a meaningful uncovered cluster of knowledge.
+
+Treat the knowledge graph as the primary structure when it is provided:
+- A knowledge point file is a graph node, not just the next item in a line.
+- The deterministic planner, not the examiner, controls the global direction.
+- If the graph context provides `planner_selected`, compose the exam for that selected node.
+- Treat `Selected Node Context` as the primary allowed scope. The broader graph is supporting trace evidence, not permission to choose another node.
+- Do not choose another node because it seems more interesting; only reject the selected node if it is clearly duplicate, blocked, or too broad.
+- If graph warnings mark a node as duplicate or merge_needed, skip it unless the Selection_Rationale states the new delta clearly.
+- If graph warnings mark a node as split_needed, choose a narrower first knowledge point inside that node instead of trying to cover the whole node at once.
+- Preserve prerequisite relationships in Writer_Instructions so the writer can cite required previous files without reteaching them.
+
+Phase C output must include these sections:
+
+## [Next_Chapter]
+Use a broad textbook-style chapter name for the uncovered source collection or coherent source cluster, not the first knowledge point name. Prefer a stable curriculum unit name that can contain multiple knowledge points.
+
+## [Source_Collection]
+Output exactly one primary collection id from the provided "Structured source material collections" headings, such as `1`, `2`, or `3`. This binds the first knowledge point to the primary source collection. If and only if no collection id is available, output `none`.
+
+## [Source_Collections]
+Output a comma-separated list of all source collection ids that belong to this chapter knowledge cluster, primary collection first. Include related collections only when the source inventory shows meaningful shared concepts or prerequisite relationship. If none, output `none`.
+
+## [Graph_Node]
+Output the selected knowledge graph node id when the Knowledge Graph context provides one, such as `candidate:2`. If no graph node fits, output `none`.
+
+## [Required_Nodes]
+Output a comma-separated list of prerequisite graph node ids required before this node. Use the selected graph node's required_nodes when available. If none, output `none`.
+
+## [Selection_Rationale]
+Briefly state why this chapter should be next. Mention the selected collection, key core concepts, related collections if any, finished-output overlap, and prerequisite relationship. This section is for tracing only and is not student-visible.
+
+## [Next_Knowledge_Point]
+Name the first narrow knowledge point inside the chapter.
+
+## [Blind_Exam]
+## [Answer_Key]
+## [Writer_Instructions]
 
 If outputting CHAPTER_COMPLETE or PIPELINE_COMPLETE, output only that exact signal with no Markdown, explanation, or extra text.
 '''.strip()
@@ -216,6 +264,11 @@ Use the Bottleneck Report only as an abstract list of teachable defects. Use sou
 - Define every new concept before using it.
 - Explain every formula's symbols before substitution.
 - Prefer prior finished outputs for already-learned foundations instead of reteaching them in full.
+- Do not duplicate finished-output material. If retrieved finished-output context already teaches a definition, rule, example pattern, or misconception, cite it briefly and move on to the new delta.
+- In CREATE mode, the section must be about the incremental delta named by the Examiner, not a broad recap of prerequisites.
+- If the requested knowledge point is already fully covered by finished outputs and the Bottleneck Report adds no new teachable defect, output:
+EXAM_TOO_BROAD
+followed by a note that the requested scope duplicates finished outputs and should be replaced or narrowed.
 - Do not copy the answer key style into the textbook. Convert defects into transferable explanations, methods, examples, and checks.
 
 ## Source Boundaries
@@ -254,19 +307,13 @@ Before returning, silently verify:
 - every Bottleneck defect is addressed
 - no blind exam, answer key, or student response text is present
 - no future knowledge point was pre-written
+- no YAML front matter, metadata block, or hidden labels are present
 - every new symbol and concept is defined before use
 - no derivation step is skipped
 - LaTeX delimiters satisfy the rendering contract
 - output remains within the line-count limit
 
 ## Mandatory Draft Shape
----
-chapter: <chapter-name>
-file_seq: NN
-difficulty: basic|advanced|comprehensive
-confusion_points: [...]
----
-
 # NN. <Knowledge Point Name>
 
 ## 学习目标与先修前置
@@ -274,6 +321,8 @@ confusion_points: [...]
 ## 例题
 ## 常见误区
 ## 自测题
+
+Do not output YAML front matter. Do not include metadata labels such as chapter, file_seq, difficulty, or confusion_points at the top of the draft. The first visible line must be the H1 title.
 
 Return pure Markdown draft content only, unless outputting EXAM_TOO_BROAD.
 '''.strip()
