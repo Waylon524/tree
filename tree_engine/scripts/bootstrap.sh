@@ -132,6 +132,14 @@ start_embedding_with_progress() {
 
   local log_file="tree_engine/.runtime/services/embedding.log"
   local tail_pid=""
+  stop_log_tail() {
+    if [ -n "$tail_pid" ]; then
+      kill "$tail_pid" >/dev/null 2>&1 || true
+      wait "$tail_pid" 2>/dev/null || true
+      tail_pid=""
+    fi
+  }
+
   if command -v tail >/dev/null 2>&1; then
     touch "$log_file"
     echo "Showing embedding server log while it starts. First launch may download ~4.3 GB."
@@ -143,13 +151,13 @@ start_embedding_with_progress() {
 
   while ! embedding_ready; do
     if ! embedding_pid_running; then
-      [ -n "$tail_pid" ] && kill "$tail_pid" >/dev/null 2>&1 || true
+      stop_log_tail
       fail "Embedding server exited before becoming ready. Check $PROJECT_ROOT/$log_file"
     fi
     sleep 2
   done
 
-  [ -n "$tail_pid" ] && kill "$tail_pid" >/dev/null 2>&1 || true
+  stop_log_tail
   echo ""
   echo "Embedding server is ready."
 }
@@ -200,10 +208,15 @@ Bootstrap complete.
 
 Next:
   1. Put course files into raw_materials/
-  2. Continue TREE in the background:
-       tree-run continue
-  3. Check status or stop later:
-       tree-run status
-       tree-run stop
-       tree-run quit
+  2. Open the TREE interactive CLI:
+       .venv/bin/tree-run
+  3. Type slash commands inside TREE:
+       /continue
+       /status
+       /stop
+       /quit
+
+Tip:
+  After running: source .venv/bin/activate
+  you can use: tree-run
 NEXT

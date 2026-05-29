@@ -116,6 +116,22 @@ Windows PowerShell：
 
 这个脚本会检查 Python 版本、系统类型、Apple Silicon / CUDA / CPU 设备提示、依赖安装状态和 CLI 可用性。它会在 setup 完成后自动把 embedding server 启动到后台，并在当前终端显示启动日志。首次启动可能下载约 4.3 GB 模型，下载和加载过程会显示在终端中。
 
+bootstrap 结束后，当前终端不会自动进入 `.venv`。因此可以直接使用虚拟环境里的完整命令进入交互模式：
+
+macOS / Linux：
+
+```bash
+.venv/bin/tree-run
+```
+
+Windows PowerShell：
+
+```powershell
+.\.venv\Scripts\tree-run.exe
+```
+
+进入 `TREE>` 后输入 `/continue` 启动流水线，输入 `/status`、`/stop`、`/quit` 管理运行状态。如果先手动激活虚拟环境，之后也可以继续使用短命令 `tree-run`。
+
 下面是手动安装步骤，适合需要逐步排查环境问题时使用。
 
 3. 创建并进入 Python 虚拟环境：
@@ -303,6 +319,8 @@ Windows PowerShell：
 ```powershell
 .\tree_engine\scripts\bootstrap.ps1
 ```
+
+bootstrap 结束后，当前终端不会自动进入 `.venv`。可以直接运行 `.venv/bin/tree-run`（macOS / Linux）或 `.\.venv\Scripts\tree-run.exe`（Windows PowerShell）进入交互模式，然后输入 `/continue`。如果先手动激活虚拟环境，也可以使用短命令 `tree-run`。
 
 下面是手动安装步骤。
 
@@ -612,23 +630,29 @@ raw_materials/
 
 支持 PDF、图片、DOCX、Markdown、TXT 等格式，具体以后缀集合 `tree.engine.RAW_MATERIAL_EXTENSIONS` 为准。
 
-启动流水线：
+启动流水线。推荐进入交互模式：
 
 macOS / Linux：
 
 ```bash
 source .venv/bin/activate
-tree-run continue
+tree-run
 ```
 
 Windows PowerShell：
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-tree-run continue
+tree-run
 ```
 
-每次 `tree-run continue` 都会先检查 `raw_materials/`：
+在 `TREE>` 提示符中输入：
+
+```text
+/continue
+```
+
+也可以不进入交互模式，直接运行 `tree-run continue`。每次 `/continue` 或 `tree-run continue` 都会先检查 `raw_materials/`：
 
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
@@ -650,6 +674,29 @@ tree-run ingest --input raw_materials/课件 --collection 课件 --no-index
 ```
 
 ### CLI 命令
+
+交互模式：
+
+```bash
+tree-run
+```
+
+进入 `TREE>` 后可以输入：
+
+```text
+/continue
+/status
+/stop
+/quit
+/logs --tail 20
+/materials
+/doctor
+/models
+/rag status
+/help
+```
+
+传统一次性命令仍然可用：
 
 ```bash
 tree-run --help
@@ -948,6 +995,22 @@ Windows PowerShell:
 
 The script checks Python, OS, Apple Silicon / CUDA / CPU hints, dependency status, and CLI availability. After setup, it starts the embedding server in the background and streams the startup log in the current terminal. The first start may download about 4.3 GB, and download/loading progress is shown while you wait.
 
+After bootstrap finishes, the current terminal is not automatically activated into `.venv`. You can run the virtual-environment command directly to enter interactive mode:
+
+macOS / Linux:
+
+```bash
+.venv/bin/tree-run
+```
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\tree-run.exe
+```
+
+At the `TREE>` prompt, type `/continue` to start the pipeline, or use `/status`, `/stop`, and `/quit` to manage it. If you activate the virtual environment manually first, the shorter `tree-run` command works too.
+
 The manual steps below are useful when you need to debug the environment one step at a time.
 
 3. Create and activate a Python virtual environment:
@@ -1135,6 +1198,8 @@ Windows PowerShell:
 ```powershell
 .\tree_engine\scripts\bootstrap.ps1
 ```
+
+After bootstrap finishes, the current terminal is not automatically activated into `.venv`. Run `.venv/bin/tree-run` on macOS / Linux or `.\.venv\Scripts\tree-run.exe` on Windows PowerShell to enter interactive mode, then type `/continue`. If you activate the virtual environment manually first, the shorter `tree-run` command works too.
 
 The manual steps are below.
 
@@ -1434,23 +1499,29 @@ raw_materials/
     └── homework-02.pdf
 ```
 
-Start the pipeline:
+Start the pipeline. The recommended path is interactive mode:
 
 macOS / Linux:
 
 ```bash
 source .venv/bin/activate
-tree-run continue
+tree-run
 ```
 
 Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-tree-run continue
+tree-run
 ```
 
-On every start, `tree-run continue` checks `raw_materials/`:
+At the `TREE>` prompt, type:
+
+```text
+/continue
+```
+
+You can also skip interactive mode and run `tree-run continue` directly. On every `/continue` or `tree-run continue`, tree checks `raw_materials/`:
 
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
@@ -1472,6 +1543,29 @@ tree-run ingest --input raw_materials/lectures --collection lectures --no-index
 ```
 
 ### CLI Commands
+
+Interactive mode:
+
+```bash
+tree-run
+```
+
+At the `TREE>` prompt, type:
+
+```text
+/continue
+/status
+/stop
+/quit
+/logs --tail 20
+/materials
+/doctor
+/models
+/rag status
+/help
+```
+
+Traditional one-shot commands are still available:
 
 ```bash
 tree-run --help

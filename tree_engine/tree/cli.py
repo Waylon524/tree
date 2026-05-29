@@ -6,10 +6,12 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
+import click
 import typer
 from rich import print as rprint
 from rich.panel import Panel
@@ -17,11 +19,35 @@ from rich.table import Table
 
 from tree.io import paths
 
-app = typer.Typer(name="tree", help="T.R.E.E. independent orchestration engine")
+app = typer.Typer(
+    name="tree",
+    help="T.R.E.E. independent orchestration engine",
+    no_args_is_help=False,
+)
 rag_app = typer.Typer(help="Inspect and query the local RAG index")
 app.add_typer(rag_app, name="rag")
 
 _ROLE_NAMES = ("EXAMINER", "STUDENT", "WRITER", "ARCHIVIST")
+_INTERACTIVE_ALIASES = {
+    "?": "help",
+    "c": "continue",
+    "s": "status",
+    "q": "quit",
+}
+_INTERACTIVE_COMMANDS = [
+    ("/continue", "Start or continue TREE in the background"),
+    ("/status", "Show service and pipeline status"),
+    ("/stop", "Stop TREE but keep embedding running"),
+    ("/quit", "Stop TREE and embedding, then leave interactive mode"),
+    ("/logs --tail 20", "Show recent pipeline trace entries"),
+    ("/materials", "Show raw material ingest and embedding status"),
+    ("/doctor", "Check workspace configuration and services"),
+    ("/models", "Show or update model/provider settings"),
+    ("/setup", "Create or update workspace configuration"),
+    ("/rag status", "Show local RAG index status"),
+    ("/help", "Show this slash-command help"),
+    ("/exit", "Leave interactive mode without stopping services"),
+]
 _DEFAULT_ENV = {
     "LLM_BASE_URL": "https://api.deepseek.com/v1",
     "LLM_MODEL": "deepseek-v4-flash",
@@ -40,6 +66,14 @@ _DEFAULT_ENV = {
     "EMBED_N_GPU_LAYERS": "-1",
     "EMBED_N_SEQ_MAX": "1",
 }
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    """Run a command, or enter interactive slash-command mode with no arguments."""
+    if ctx.invoked_subcommand is None:
+        _interactive_shell()
+        raise typer.Exit()
 
 
 @app.command()
@@ -631,6 +665,89 @@ def rag_search(
         score_text = f"{score:.4f}" if isinstance(score, float) else "n/a"
         excerpt = _truncate((hit.get("text") or "").replace("\n", " "), 700)
         rprint(Panel(excerpt, title=f"#{idx} {source} score={score_text}"))
+
+
+def _interactive_shell() -> None:
+    rprint(
+        Panel(
+            "Type [bold]/continue[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
+            "or [bold]/help[/bold] for commands.",
+            title="TREE Interactive",
+        )
+    )
+    while True:
+        try:
+            line = input("TREE> ")
+        except EOFError:
+            rprint("\n[dim]Leaving TREE interactive mode.[/dim]")
+            return
+        except KeyboardInterrupt:
+            rprint("\n[dim]Leaving TREE interactive mode. TREE services were not changed.[/dim]")
+            return
+
+        try:
+            args = _parse_interactive_command(line)
+        except ValueError as exc:
+            rprint(f"[red]{exc}[/red]")
+            continue
+        if not args:
+            continue
+
+        command = args[0]
+        if command == "exit":
+            rprint("[dim]Leaving TREE interactive mode. TREE services were not changed.[/dim]")
+            return
+        if command == "help":
+            _print_interactive_help(args[1:])
+            continue
+
+        _invoke_cli_args(args)
+        if command == "quit":
+            return
+
+
+def _parse_interactive_command(line: str) -> list[str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if stripped.startswith("/"):
+        stripped = stripped[1:].strip()
+    if not stripped:
+        return None
+    try:
+        parts = shlex.split(stripped)
+    except ValueError as exc:
+        raise ValueError(f"Could not parse command: {exc}") from exc
+    if not parts:
+        return None
+    command = _INTERACTIVE_ALIASES.get(parts[0].lower(), parts[0].lower())
+    return [command, *parts[1:]]
+
+
+def _print_interactive_help(args: list[str] | None = None) -> None:
+    if args:
+        _invoke_cli_args([args[0], "--help", *args[1:]])
+        return
+    table = Table(title="TREE Slash Commands")
+    table.add_column("Command")
+    table.add_column("Action")
+    for command, description in _INTERACTIVE_COMMANDS:
+        table.add_row(command, description)
+    rprint(table)
+    rprint("[dim]Options work too, for example: /logs --tail 50 or /rag search \"equilibrium\"[/dim]")
+
+
+def _invoke_cli_args(args: list[str]) -> None:
+    command = typer.main.get_command(app)
+    try:
+        command.main(args=args, prog_name="tree-run", standalone_mode=False)
+    except click.ClickException as exc:
+        exc.show()
+    except click.exceptions.Exit as exc:
+        if exc.exit_code not in (0, None):
+            rprint(f"[red]Command exited with code {exc.exit_code}[/red]")
+    except Exception as exc:
+        rprint(f"[red]{type(exc).__name__}:[/red] {exc}")
 
 
 def _add_check(table: Table, name: str, ok: bool, details: str) -> None:
