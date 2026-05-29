@@ -221,7 +221,7 @@ Next:
   2. Open the TREE interactive CLI:
        .venv/bin/tre
   3. Type slash commands inside TREE:
-       /continue
+       /start
        /status
        /stop
        /quit

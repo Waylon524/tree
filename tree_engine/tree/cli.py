@@ -34,12 +34,13 @@ app.add_typer(rag_app, name="rag")
 _ROLE_NAMES = ("EXAMINER", "STUDENT", "WRITER", "ARCHIVIST")
 _INTERACTIVE_ALIASES = {
     "?": "help",
-    "c": "continue",
+    "c": "start",
+    "continue": "start",
     "s": "status",
     "q": "quit",
 }
 _INTERACTIVE_COMMANDS = [
-    ("/continue", "Start or continue TREE in the background"),
+    ("/start", "Start TREE in the background"),
     ("/init", "Initialize the current folder as a TREE workspace"),
     ("/status", "Show service and pipeline status"),
     ("/progress", "Show current services, ingest, chapter, and recent trace"),
@@ -97,9 +98,9 @@ def run() -> None:
     try:
         asyncio.run(_run_engine(engine))
     except StopRequested:
-        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tre continue' to resume.[/yellow]")
+        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tre start' to resume.[/yellow]")
     except KeyboardInterrupt:
-        rprint("[yellow]Pipeline interrupted. Use 'tre continue' to continue.[/yellow]")
+        rprint("[yellow]Pipeline interrupted. Use 'tre start' to continue.[/yellow]")
 
 
 @app.command()
@@ -117,12 +118,24 @@ def resume() -> None:
     try:
         asyncio.run(_run_engine(engine))
     except StopRequested:
-        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tre continue' to resume.[/yellow]")
+        rprint("[yellow]TREE stopped at a safe checkpoint. Use 'tre start' to resume.[/yellow]")
     except KeyboardInterrupt:
-        rprint("[yellow]Pipeline interrupted. Use 'tre continue' to continue.[/yellow]")
+        rprint("[yellow]Pipeline interrupted. Use 'tre start' to continue.[/yellow]")
 
 
-@app.command("continue")
+@app.command("start")
+def start(
+    wait_embedding: bool = typer.Option(
+        True,
+        "--wait-embedding/--no-wait-embedding",
+        help="Wait until the embedding server health check is ready.",
+    ),
+) -> None:
+    """Start TREE in the background."""
+    _start_background_tree(wait_embedding=wait_embedding)
+
+
+@app.command("continue", hidden=True)
 def continue_(
     wait_embedding: bool = typer.Option(
         True,
@@ -130,7 +143,11 @@ def continue_(
         help="Wait until the embedding server health check is ready.",
     ),
 ) -> None:
-    """Start or continue TREE in the background."""
+    """Backward-compatible alias for start."""
+    _start_background_tree(wait_embedding=wait_embedding)
+
+
+def _start_background_tree(wait_embedding: bool) -> None:
     from tree.services import start_embedding, start_tree, wait_for_embedding
 
     root = Path.cwd()
@@ -842,7 +859,7 @@ def _tail_panel(path: Path, title: str, line_count: int = 6) -> Panel:
 def _interactive_shell() -> None:
     rprint(
         Panel(
-            "Type [bold]/continue[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
+            "Type [bold]/start[/bold] to start TREE, [bold]/status[/bold] to inspect it, "
             "[bold]/watch[/bold] to follow progress, or [bold]/help[/bold] for commands.",
             title="TREE Interactive",
         )

@@ -55,7 +55,7 @@ cd /path/to/your/course-folder
 tre
 ```
 
-进入 `TREE>` 后使用 `/continue`、`/watch`、`/status`、`/stop`、`/quit` 等 slash commands。
+进入 `TREE>` 后使用 `/start`、`/watch`、`/status`、`/stop`、`/quit` 等 slash commands。
 
 #### Windows PowerShell
 
@@ -74,7 +74,7 @@ cd C:\path\to\your\course-folder
 tre
 ```
 
-进入 `TREE>` 后使用 `/continue`、`/watch`、`/status`、`/stop`、`/quit` 等 slash commands。
+进入 `TREE>` 后使用 `/start`、`/watch`、`/status`、`/stop`、`/quit` 等 slash commands。
 
 第一次在某个文件夹运行 `tre` 时，CLI 会自动创建：
 
@@ -96,7 +96,7 @@ tre doctor
 
 ### 配置
 
-第一次运行需要配置的命令时，例如 `tre continue` 或 `tre ingest`，如果用户目录没有全局配置，CLI 会自动启动交互式配置向导。也可以手动运行：
+第一次运行需要配置的命令时，例如 `tre start` 或 `tre ingest`，如果用户目录没有全局配置，CLI 会自动启动交互式配置向导。也可以手动运行：
 
 ```bash
 tre setup
@@ -156,7 +156,7 @@ tre
 进入 `TREE>` 后常用：
 
 ```text
-/continue   # 后台启动或继续 TREE，自动确保 embedding server 运行
+/start   # 后台启动 TREE，自动确保 embedding server 运行
 /watch      # 持续刷新当前进度，按 Ctrl+C 回到 TREE>
 /progress   # 显示一屏进度快照
 /status     # 查看服务和章节状态
@@ -165,12 +165,19 @@ tre
 /help       # 查看交互命令
 ```
 
-日常使用只需要留在 `TREE>` 里输入这些 slash commands。每次 `/continue` 都会先检查 `raw_materials/`：
+日常使用只需要留在 `TREE>` 里输入这些 slash commands。每次 `/start` 都会先检查 `raw_materials/`：
 
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
 - 所有 source materials embedding 完成后，才进入考试-写作循环。
 - 没有新资料：直接从 `.tree/runtime/pipeline-state.json` 恢复循环。
+
+更多命令、手动摄入和排错用法见下方高级设置。
+
+<details>
+<summary>高级运行机制、RAG、PaddleOCR、embedding server 和项目结构</summary>
+
+#### 高级命令
 
 手动摄入某个文件或目录：
 
@@ -180,81 +187,24 @@ tre ingest --input raw_materials/课件 --collection 课件 --no-structure
 tre ingest --input raw_materials/课件 --collection 课件 --no-index
 ```
 
-### CLI 命令
-
-交互模式：
-
-```bash
-tre
-```
-
-进入 `TREE>` 后可以输入：
-
-```text
-/continue
-/status
-/progress
-/watch
-/stop
-/quit
-/logs --tail 20
-/materials
-/doctor
-/models
-/rag status
-/help
-/exit
-```
-
-一次性命令也仍然可用，主要适合脚本、自动化和排错；新用户日常使用优先进入 `TREE>`：
+常用一次性命令：
 
 ```bash
 tre --help
-tre continue
+tre start
+tre status
+tre watch
 tre stop
 tre quit
-tre run
-tre resume
-tre status
-tre status --verbose
-tre progress
-tre watch
 tre doctor
 tre materials
 tre logs --tail 20
-tre prompts writer
-tre prompts examiner --full
-tre setup
 tre models
-tre clean --dry-run
-tre clean --apply --pycache
 tre rag status
 tre rag search "化学平衡常数" --kind source --top-k 5
 ```
 
-| 命令 | 作用 |
-| --- | --- |
-| `run` | 前台启动完整流水线，适合调试 |
-| `continue` | 后台启动或继续 TREE，自动确保 embedding server 运行 |
-| `stop` | 停止 TREE，保留 embedding server |
-| `quit` | 停止 TREE 和 embedding server |
-| `resume` | 前台从现有状态继续，适合调试 |
-| `status` | 查看服务和章节进度 |
-| `progress` | 查看服务、资料入库、章节和最近 trace 的一屏进度 |
-| `watch` | 持续刷新当前进度，按 `Ctrl+C` 返回 |
-| `doctor` | 检查环境、服务和 Git 状态 |
-| `materials` | 查看 raw materials 摄入状态 |
-| `logs` | 查看 trace 日志 |
-| `prompts` | 查看内置 agent prompts |
-| `setup` | 交互式创建全局配置 |
-| `models` | 查看或修改模型、base URL、API key |
-| `clean` | 清理项目缓存和运行中间目录 |
-| `ingest` | 手动摄入文件或目录 |
-| `rag status` | 查看 RAG chunk 概况 |
-| `rag search` | 手动检索 RAG |
-
-<details>
-<summary>高级运行机制、RAG、PaddleOCR、embedding server 和项目结构</summary>
+其他命令可运行 `tre --help` 或在 `TREE>` 中输入 `/help` 查看。
 
 #### 高级配置
 
@@ -413,7 +363,7 @@ macOS / Linux：
 
 Windows PowerShell 用户通常不需要运行 `setup-embedding.sh`；它是 macOS / Linux shell 脚本。
 
-`tre continue` 和 `/continue` 会后台管理 embedding server。手动前台启动仅建议用于源码调试：
+`tre start` 和 `/start` 会后台管理 embedding server。手动前台启动仅建议用于源码调试：
 
 macOS / Linux：
 
@@ -427,7 +377,7 @@ Windows PowerShell：
 tree_engine\scripts\start-embed-server.bat
 ```
 
-前台启动会占用当前终端。运行 `tre setup`、`tre continue`、`tre ingest` 等命令时，请新开终端标签页，回到同一个 workspace。
+前台启动会占用当前终端。运行 `tre setup`、`tre start`、`tre ingest` 等命令时，请新开终端标签页，回到同一个 workspace。
 
 默认配置：
 
@@ -478,7 +428,10 @@ my-course/
 
 </details>
 
-### 故障排查
+<details>
+<summary>故障排查和开发验证</summary>
+
+#### 故障排查
 
 **`Source materials exist but RAG indexer is unavailable`**
 
@@ -486,7 +439,7 @@ my-course/
 
 ```bash
 tre doctor
-tre continue
+tre start
 ```
 
 如果安装时没有带 `[rag]`，请重新安装：
@@ -579,7 +532,7 @@ https://github.com/Waylon524/tree.git
 
 GitHub 页面显示的仓库名是 `tree`。
 
-### 开发验证
+#### 开发验证
 
 当前仓库不保留内置样例数据和单元测试目录。修改代码后建议至少执行：
 
@@ -591,9 +544,11 @@ python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 需要端到端验证时，将真实资料放入 `raw_materials/`，然后运行：
 
 ```bash
-tre continue
+tre start
 tre watch
 ```
+
+</details>
 
 ### License
 
@@ -650,7 +605,7 @@ cd /path/to/your/course-folder
 tre
 ```
 
-Inside `TREE>`, use slash commands such as `/continue`, `/watch`, `/status`, `/stop`, and `/quit`.
+Inside `TREE>`, use slash commands such as `/start`, `/watch`, `/status`, `/stop`, and `/quit`.
 
 #### Windows PowerShell
 
@@ -669,7 +624,7 @@ cd C:\path\to\your\course-folder
 tre
 ```
 
-Inside `TREE>`, use slash commands such as `/continue`, `/watch`, `/status`, `/stop`, and `/quit`.
+Inside `TREE>`, use slash commands such as `/start`, `/watch`, `/status`, `/stop`, and `/quit`.
 
 The first `tre` run in a folder creates:
 
@@ -691,7 +646,7 @@ tre doctor
 
 ### Configuration
 
-The first time you run a configuration-dependent command, such as `tre continue` or `tre ingest`, the CLI starts an interactive setup wizard if no global config exists. You can also run it manually:
+The first time you run a configuration-dependent command, such as `tre start` or `tre ingest`, the CLI starts an interactive setup wizard if no global config exists. You can also run it manually:
 
 ```bash
 tre setup
@@ -751,7 +706,7 @@ tre
 At the `TREE>` prompt:
 
 ```text
-/continue   # start or continue TREE in the background and ensure embedding is running
+/start   # start TREE in the background and ensure embedding is running
 /watch      # refresh current progress until Ctrl+C returns to TREE>
 /progress   # show one progress snapshot
 /status     # show service and chapter status
@@ -760,14 +715,21 @@ At the `TREE>` prompt:
 /help       # show interactive commands
 ```
 
-For daily use, stay inside `TREE>` and type these slash commands. Every `/continue` checks `raw_materials/` first:
+For daily use, stay inside `TREE>` and type these slash commands. Every `/start` checks `raw_materials/` first:
 
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
 - the exam-writing loop starts only after all source materials are embedded
 - if no new material exists, the loop resumes from `.tree/runtime/pipeline-state.json`
 
-Manual ingest:
+More commands, manual ingest, and troubleshooting usage are in the advanced section below.
+
+<details>
+<summary>Advanced runtime design, RAG, PaddleOCR, embedding server, and repository layout</summary>
+
+#### Advanced Commands
+
+Manually ingest a file or directory:
 
 ```bash
 tre ingest --input raw_materials/lectures --collection lectures
@@ -775,81 +737,24 @@ tre ingest --input raw_materials/lectures --collection lectures --no-structure
 tre ingest --input raw_materials/lectures --collection lectures --no-index
 ```
 
-### CLI Commands
-
-Interactive mode:
-
-```bash
-tre
-```
-
-At the `TREE>` prompt:
-
-```text
-/continue
-/status
-/progress
-/watch
-/stop
-/quit
-/logs --tail 20
-/materials
-/doctor
-/models
-/rag status
-/help
-/exit
-```
-
-One-shot commands are still available, mainly for scripts, automation, and troubleshooting. New users should prefer entering `TREE>`:
+Common one-shot commands:
 
 ```bash
 tre --help
-tre continue
+tre start
+tre status
+tre watch
 tre stop
 tre quit
-tre run
-tre resume
-tre status
-tre status --verbose
-tre progress
-tre watch
 tre doctor
 tre materials
 tre logs --tail 20
-tre prompts writer
-tre prompts examiner --full
-tre setup
 tre models
-tre clean --dry-run
-tre clean --apply --pycache
 tre rag status
 tre rag search "equilibrium constant" --kind source --top-k 5
 ```
 
-| Command | Purpose |
-| --- | --- |
-| `run` | Start the full pipeline in the foreground, useful for debugging |
-| `continue` | Start or continue TREE in the background and ensure embedding is running |
-| `stop` | Stop TREE while keeping the embedding server running |
-| `quit` | Stop TREE and the embedding server |
-| `resume` | Continue from existing state in the foreground, useful for debugging |
-| `status` | Show service and chapter progress |
-| `progress` | Show a dashboard snapshot of services, ingest, chapters, and recent trace |
-| `watch` | Refresh current progress until `Ctrl+C` returns to the prompt |
-| `doctor` | Check configuration, services, and Git status |
-| `materials` | Show raw material ingest status |
-| `logs` | Inspect trace logs |
-| `prompts` | Inspect built-in agent prompts |
-| `setup` | Create global config interactively |
-| `models` | Show or update models, base URL, and API keys |
-| `clean` | Clean project caches and runtime artifacts |
-| `ingest` | Manually ingest files or directories |
-| `rag status` | Show indexed RAG chunks |
-| `rag search` | Query the local RAG index |
-
-<details>
-<summary>Advanced runtime design, RAG, PaddleOCR, embedding server, and repository layout</summary>
+Run `tre --help`, or type `/help` inside `TREE>`, for the full command list.
 
 #### Advanced Configuration
 
@@ -1008,7 +913,7 @@ macOS / Linux:
 
 Windows PowerShell users usually do not need to run `setup-embedding.sh`; it is a macOS / Linux shell script.
 
-`tre continue` and `/continue` manage the embedding server in the background. Manual foreground startup is mainly for source-checkout debugging:
+`tre start` and `/start` manage the embedding server in the background. Manual foreground startup is mainly for source-checkout debugging:
 
 macOS / Linux:
 
@@ -1022,7 +927,7 @@ Windows PowerShell:
 tree_engine\scripts\start-embed-server.bat
 ```
 
-Foreground startup occupies the current terminal. To run `tre setup`, `tre continue`, or `tre ingest`, open another terminal tab and return to the same workspace.
+Foreground startup occupies the current terminal. To run `tre setup`, `tre start`, or `tre ingest`, open another terminal tab and return to the same workspace.
 
 Default settings:
 
@@ -1073,7 +978,10 @@ User-level directory:
 
 </details>
 
-### Troubleshooting
+<details>
+<summary>Troubleshooting and development verification</summary>
+
+#### Troubleshooting
 
 **`Source materials exist but RAG indexer is unavailable`**
 
@@ -1081,7 +989,7 @@ The embedding server is not running or RAG dependencies are missing.
 
 ```bash
 tre doctor
-tre continue
+tre start
 ```
 
 If tree was installed without `[rag]`, reinstall it:
@@ -1174,7 +1082,7 @@ https://github.com/Waylon524/tree.git
 
 The GitHub repository is displayed as `tree`.
 
-### Development Verification
+#### Development Verification
 
 This repository no longer ships built-in sample data or a unit test directory. For code changes, run at least:
 
@@ -1186,9 +1094,11 @@ python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 For end-to-end verification, place real materials in `raw_materials/`, then run:
 
 ```bash
-tre continue
+tre start
 tre watch
 ```
+
+</details>
 
 ### License
 
