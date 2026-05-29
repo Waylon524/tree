@@ -38,7 +38,39 @@ materials/
 
 安装完成后，在任意课程文件夹中输入 `tre` 即可启动交互界面；当前文件夹会成为一个独立 workspace。
 
-#### macOS / Linux
+#### macOS
+
+推荐使用 Homebrew 安装 `pipx`：
+
+```bash
+python3.12 --version
+git --version
+brew install pipx
+pipx ensurepath
+pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
+```
+
+如果 `brew` 命令不存在，可以先安装 [Homebrew](https://brew.sh/)，或者使用下面的无 Homebrew 方式：
+
+```bash
+python3.12 --version
+git --version
+python3.12 -m venv ~/.local/pipx-venv
+~/.local/pipx-venv/bin/python -m pip install -U pip pipx
+~/.local/pipx-venv/bin/python -m pipx ensurepath
+~/.local/bin/pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
+```
+
+如果 `pipx ensurepath` 修改了 PATH，请重新打开终端。然后进入已有课程文件夹并启动：
+
+```bash
+cd /path/to/your/course-folder
+tre
+```
+
+进入 `TREE>` 后使用 `/start`、`/watch`、`/status`、`/stop`、`/quit` 等 slash commands。
+
+#### Linux
 
 ```bash
 python3.12 --version
@@ -479,6 +511,14 @@ Get-Command tre
 
 如果仍找不到，通常是 pipx 的 bin 目录没有进入 PATH。重新执行：
 
+macOS：
+
+```bash
+pipx ensurepath
+```
+
+Linux：
+
 ```bash
 python3.12 -m pipx ensurepath
 ```
@@ -588,7 +628,39 @@ If Python or Git is missing, install [Python](https://www.python.org/downloads/)
 
 After installation, run `tre` from any course folder to open the interactive interface. The current folder becomes an independent workspace.
 
-#### macOS / Linux
+#### macOS
+
+Recommended: install `pipx` with Homebrew:
+
+```bash
+python3.12 --version
+git --version
+brew install pipx
+pipx ensurepath
+pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
+```
+
+If `brew` is not available, install [Homebrew](https://brew.sh/) first, or use this no-Homebrew path:
+
+```bash
+python3.12 --version
+git --version
+python3.12 -m venv ~/.local/pipx-venv
+~/.local/pipx-venv/bin/python -m pip install -U pip pipx
+~/.local/pipx-venv/bin/python -m pipx ensurepath
+~/.local/bin/pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
+```
+
+If `pipx ensurepath` changed PATH, reopen the terminal. Then enter an existing course folder and start TREE:
+
+```bash
+cd /path/to/your/course-folder
+tre
+```
+
+Inside `TREE>`, use slash commands such as `/start`, `/watch`, `/status`, `/stop`, and `/quit`.
+
+#### Linux
 
 ```bash
 python3.12 --version
@@ -1028,6 +1100,14 @@ Get-Command tre
 ```
 
 If `tre` is still missing, the pipx bin directory is probably not on PATH. Run:
+
+macOS:
+
+```bash
+pipx ensurepath
+```
+
+Linux:
 
 ```bash
 python3.12 -m pipx ensurepath
