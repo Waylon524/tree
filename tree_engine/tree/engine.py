@@ -38,6 +38,8 @@ RAW_MATERIAL_EXTENSIONS = {
     ".md",
     ".pdf",
     ".png",
+    ".ppt",
+    ".pptx",
     ".tif",
     ".tiff",
     ".txt",
@@ -121,29 +123,29 @@ class TreeEngine:
         root = self.settings.project_root
         self._raise_if_stop_requested()
         manifest = _load_source_manifest(root)
-        pending = _pending_raw_materials(root, manifest)
+        pending = _pending_materials(root, manifest)
 
         if pending:
-            print(f"Source ingest: {len(pending)} new or changed raw material(s) detected.")
+            print(f"Source ingest: {len(pending)} new or changed material(s) detected.")
         if pending:
             ingest_sem = asyncio.Semaphore(max(1, self.settings.source_ingest_concurrency))
             embedding_sem = asyncio.Semaphore(max(1, self.settings.source_embedding_concurrency))
             manifest_lock = asyncio.Lock()
             embedding_tasks: list[asyncio.Task[int]] = []
 
-            async def ingest_one(raw_path: Path, collection: str) -> tuple[Path, str, list[Path]]:
+            async def ingest_one(material_path: Path, collection: str) -> tuple[Path, str, list[Path]]:
                 async with ingest_sem:
                     output_dir = source_ops.source_root(root) / collection
                     outputs = await self.ingest(
-                        raw_path,
+                        material_path,
                         output_dir,
                         use_archivist=True,
                         collection=collection,
                         indexer=None,
                     )
-                    return raw_path, collection, outputs
+                    return material_path, collection, outputs
 
-            async def embed_outputs(raw_path: Path, collection: str, outputs: list[Path]) -> int:
+            async def embed_outputs(material_path: Path, collection: str, outputs: list[Path]) -> int:
                 indexed = 0
                 for output in outputs:
                     self._raise_if_stop_requested()
@@ -156,19 +158,19 @@ class TreeEngine:
                             getattr(self, "rag_indexer", None),
                         )
                 async with manifest_lock:
-                    _mark_raw_material_embedded(root, manifest, raw_path)
+                    _mark_material_embedded(root, manifest, material_path)
                     _save_source_manifest(root, manifest)
                 return indexed
 
-            tasks = [asyncio.create_task(ingest_one(raw_path, collection)) for raw_path, collection in pending]
+            tasks = [asyncio.create_task(ingest_one(material_path, collection)) for material_path, collection in pending]
             for task in asyncio.as_completed(tasks):
                 self._raise_if_stop_requested()
-                raw_path, collection, outputs = await task
+                material_path, collection, outputs = await task
                 async with manifest_lock:
-                    _mark_raw_material_ingested(root, manifest, raw_path, collection, outputs)
+                    _mark_material_ingested(root, manifest, material_path, collection, outputs)
                     _save_source_manifest(root, manifest)
                 if outputs:
-                    embedding_tasks.append(asyncio.create_task(embed_outputs(raw_path, collection, outputs)))
+                    embedding_tasks.append(asyncio.create_task(embed_outputs(material_path, collection, outputs)))
 
             embedded_count = sum(await asyncio.gather(*embedding_tasks)) if embedding_tasks else 0
             if embedded_count:
@@ -434,7 +436,7 @@ class TreeEngine:
     # --- Handlers ---
 
     async def _handle_pass(self, iter_state: IterationState, audit: AuditResult) -> None:
-        """Move draft to finished_outputs, update state."""
+        """Move draft to outputs, update state."""
         if iter_state.draft_path and iter_state.draft_path.exists():
             filename = iter_state.draft_path.name
             dst = file_ops.move_draft_to_finished(
@@ -582,16 +584,16 @@ class TreeEngine:
         return [doc["path"] for doc in payload.get(collection, [])]
 
 
-def _pending_raw_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[Path, str]]:
-    raw_root = root / "raw_materials"
-    if not raw_root.exists():
+def _pending_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[Path, str]]:
+    materials_root = paths.materials_root(root)
+    if not materials_root.exists():
         return []
 
     pending = []
-    for path in sorted(raw_root.rglob("*")):
-        if not _is_supported_raw_material(path):
+    for path in sorted(materials_root.rglob("*")):
+        if not _is_supported_material(path):
             continue
-        collection = _collection_for_raw_material(raw_root, path)
+        collection = _collection_for_material(materials_root, path)
         output = source_ops.source_root(root) / collection / f"{path.stem}.md"
         rel = _relative_to_root(root, path)
         entry = manifest.get(rel, {})
@@ -603,7 +605,7 @@ def _pending_raw_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[P
     return pending
 
 
-def _is_supported_raw_material(path: Path) -> bool:
+def _is_supported_material(path: Path) -> bool:
     return (
         path.is_file()
         and not path.name.startswith(".")
@@ -611,8 +613,8 @@ def _is_supported_raw_material(path: Path) -> bool:
     )
 
 
-def _collection_for_raw_material(raw_root: Path, path: Path) -> str:
-    rel = path.relative_to(raw_root)
+def _collection_for_material(materials_root: Path, path: Path) -> str:
+    rel = path.relative_to(materials_root)
     return rel.parts[0] if len(rel.parts) > 1 else path.stem
 
 
@@ -645,17 +647,17 @@ def _source_manifest_path(root: Path) -> Path:
     return paths.pipeline_temp_root(root) / "source-ingest-manifest.json"
 
 
-def _mark_raw_material_ingested(
+def _mark_material_ingested(
     root: Path,
     manifest: dict[str, Any],
-    raw_path: Path,
+    material_path: Path,
     collection: str,
     outputs: list[Path],
 ) -> None:
-    manifest[_relative_to_root(root, raw_path)] = {
+    manifest[_relative_to_root(root, material_path)] = {
         "collection": collection,
         "embedded": False,
-        "fingerprint": _file_fingerprint(raw_path),
+        "fingerprint": _file_fingerprint(material_path),
         "outputs": [_relative_to_root(root, output) for output in outputs],
     }
 
@@ -669,8 +671,8 @@ def _mark_manifest_outputs_embedded(manifest: dict[str, Any]) -> None:
             entry["embedded"] = True
 
 
-def _mark_raw_material_embedded(root: Path, manifest: dict[str, Any], raw_path: Path) -> None:
-    entry = manifest.get(_relative_to_root(root, raw_path))
+def _mark_material_embedded(root: Path, manifest: dict[str, Any], material_path: Path) -> None:
+    entry = manifest.get(_relative_to_root(root, material_path))
     if isinstance(entry, dict) and entry.get("outputs"):
         entry["embedded"] = True
 

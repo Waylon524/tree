@@ -133,7 +133,7 @@ if ((Test-Path (Join-Path $ParentRoot "pyproject.toml")) -and (Test-Path (Join-P
     throw "This looks like a nested tree checkout: $($ProjectRoot.Path) inside $ParentRoot. Run bootstrap from the outer checkout or clone into an empty directory."
 }
 
-New-Item -ItemType Directory -Force -Path "raw_materials", "finished_outputs", ".tree\runtime" | Out-Null
+New-Item -ItemType Directory -Force -Path "materials", "outputs", ".tree\runtime" | Out-Null
 
 $Python = Find-Python
 $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -178,7 +178,7 @@ Write-Host ""
 Write-Host "Bootstrap complete."
 Write-Host ""
 Write-Host "Next:"
-Write-Host "  1. Put course files into raw_materials\"
+Write-Host "  1. Put course files into materials\"
 Write-Host "  2. Open the TREE interactive CLI:"
 Write-Host "       .\.venv\Scripts\tre.exe"
 Write-Host "  3. Type slash commands inside TREE:"

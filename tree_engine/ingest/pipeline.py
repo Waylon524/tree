@@ -1,11 +1,11 @@
 """Main ingest pipeline orchestrator.
 
-Processes files from raw_materials/ → .tree/runtime/source_materials/<chapter>/
+Processes files from materials/ → .tree/runtime/source_materials/<chapter>/
 using remote PaddleOCR-VL 1.6 API service for all file types.
 
 Usage:
-    python -m ingest.pipeline --input raw_materials/ --output .tree/runtime/source_materials/01-化学/
-    python -m ingest.pipeline --input "raw_materials/课件/5. 化学平衡通论.pdf"
+    python -m ingest.pipeline --input materials/ --output .tree/runtime/source_materials/01-化学/
+    python -m ingest.pipeline --input "materials/课件/5. 化学平衡通论.pdf"
 """
 
 import argparse
@@ -14,7 +14,12 @@ import sys
 import time
 from pathlib import Path
 
-from ingest.extractors import docx_extractor, image_extractor, pdf_extractor
+from ingest.extractors import (
+    docx_extractor,
+    image_extractor,
+    pdf_extractor,
+    presentation_extractor,
+)
 from ingest.ocr_engine import get_engine
 from ingest.structurer import structure
 
@@ -23,6 +28,7 @@ logger = logging.getLogger(__name__)
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
 _PDF_EXTS = {".pdf"}
 _DOCX_EXTS = {".docx", ".doc"}
+_PRESENTATION_EXTS = {".ppt", ".pptx"}
 _TEXT_EXTS = {".txt", ".md"}
 
 
@@ -35,6 +41,8 @@ def detect_type(path: Path) -> str:
         return "image"
     if ext in _DOCX_EXTS:
         return "docx"
+    if ext in _PRESENTATION_EXTS:
+        return "presentation"
     if ext in _TEXT_EXTS:
         return "text"
     return "unknown"
@@ -55,6 +63,8 @@ def extract_text(path: Path) -> str:
         return image_extractor.extract(path)
     if ftype == "docx":
         return docx_extractor.extract(path)
+    if ftype == "presentation":
+        return presentation_extractor.extract(path)
     if ftype == "text":
         return path.read_text(encoding="utf-8", errors="replace")
 

@@ -13,7 +13,7 @@
 ## Implemented Direction
 
 ```text
-raw_materials or user-selected files
+materials or user-selected files
   ↓ tree-run ingest --input <file-or-dir> --collection <name>
 PaddleOCR
   ↓
@@ -29,7 +29,7 @@ Examiner audits
   ↓
 Writer writes drafts
   ↓
-PASS moves draft to finished_outputs/<chapter>/
+PASS moves draft to outputs/<chapter>/
 ```
 
 ## Current Required Code Surfaces

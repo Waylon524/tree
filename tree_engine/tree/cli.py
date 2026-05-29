@@ -48,7 +48,7 @@ _INTERACTIVE_COMMANDS = [
     ("/stop", "Stop TREE but keep embedding running"),
     ("/quit", "Stop TREE and embedding, then leave interactive mode"),
     ("/logs --tail 20", "Show recent pipeline trace entries"),
-    ("/materials", "Show raw material ingest and embedding status"),
+    ("/materials", "Show material ingest and embedding status"),
     ("/doctor", "Check installation, configuration, and services"),
     ("/models", "Show or update model/provider settings"),
     ("/setup", "Create or update workspace configuration"),
@@ -173,8 +173,8 @@ def init() -> None:
     root = Path.cwd()
     _ensure_workspace_dirs(root)
     rprint(f"[green]Workspace ready[/green] {root}")
-    rprint(f"[green]Ready[/green] {root / 'raw_materials'}")
-    rprint(f"[green]Ready[/green] {root / 'finished_outputs'}")
+    rprint(f"[green]Ready[/green] {paths.materials_root(root)}")
+    rprint(f"[green]Ready[/green] {paths.outputs_root(root)}")
     rprint(f"[green]Ready[/green] {paths.workspace_home(root)}")
 
 
@@ -320,8 +320,8 @@ def doctor() -> None:
         bool(settings.paddleocr_api_token),
         settings.paddleocr_model,
     )
-    _add_check(table, "raw_materials", (root / "raw_materials").exists(), "user uploads")
-    _add_check(table, "finished_outputs", (root / "finished_outputs").exists(), "final outputs")
+    _add_check(table, "materials", paths.materials_root(root).exists(), "user uploads")
+    _add_check(table, "outputs", paths.outputs_root(root).exists(), "final outputs")
     _add_check(table, "Runtime", paths.runtime_root(root).exists(), str(paths.runtime_root(root)))
     _add_check(table, "Global services", paths.global_services_root().exists(), str(paths.global_services_root()))
     _add_check(
@@ -343,27 +343,27 @@ def doctor() -> None:
 
 @app.command()
 def materials() -> None:
-    """Show raw material ingest and embedding status from the local manifest."""
+    """Show material ingest and embedding status from the local manifest."""
     from tree.engine import (
-        _collection_for_raw_material,
+        _collection_for_material,
         _file_fingerprint,
-        _is_supported_raw_material,
+        _is_supported_material,
         _load_source_manifest,
     )
 
     root = Path.cwd()
-    raw_root = root / "raw_materials"
+    materials_root = paths.materials_root(root)
     manifest = _load_source_manifest(root)
-    if not raw_root.exists():
-        rprint("[yellow]raw_materials/ does not exist yet.[/yellow]")
+    if not materials_root.exists():
+        rprint("[yellow]materials/ does not exist yet.[/yellow]")
         return
 
     rows = []
-    for path in sorted(raw_root.rglob("*")):
-        if not _is_supported_raw_material(path):
+    for path in sorted(materials_root.rglob("*")):
+        if not _is_supported_material(path):
             continue
         rel = _relative_to_root(root, path)
-        collection = _collection_for_raw_material(raw_root, path)
+        collection = _collection_for_material(materials_root, path)
         entry = manifest.get(rel, {})
         fingerprint = _file_fingerprint(path)
         if not entry:
@@ -379,10 +379,10 @@ def materials() -> None:
         rows.append((rel, collection, status_text, _format_bytes(path.stat().st_size)))
 
     if not rows:
-        rprint("[dim]No supported raw materials found.[/dim]")
+        rprint("[dim]No supported materials found.[/dim]")
         return
 
-    table = Table(title="Raw Materials")
+    table = Table(title="Materials")
     table.add_column("Path")
     table.add_column("Collection")
     table.add_column("Status")
@@ -766,7 +766,7 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
     materials = Table(title="Source Materials", expand=True)
     materials.add_column("Metric")
     materials.add_column("Count", justify="right")
-    materials.add_row("known raw materials", str(material_counts["total"]))
+    materials.add_row("known materials", str(material_counts["total"]))
     materials.add_row("embedded", str(material_counts["embedded"]))
     materials.add_row("structured, waiting embedding", str(material_counts["structured"]))
     materials.add_row("new or changed", str(material_counts["pending"]))
@@ -790,10 +790,10 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
 
 
 def _source_material_progress(root: Path) -> dict[str, int]:
-    from tree.engine import _load_source_manifest, _pending_raw_materials
+    from tree.engine import _load_source_manifest, _pending_materials
 
     manifest = _load_source_manifest(root)
-    pending = len(_pending_raw_materials(root, manifest))
+    pending = len(_pending_materials(root, manifest))
     return _progress_counts(manifest, pending=pending)
 
 
@@ -957,8 +957,8 @@ def _has_any_llm_key() -> bool:
 
 
 def _ensure_workspace_dirs(root: Path) -> None:
-    (root / "raw_materials").mkdir(exist_ok=True)
-    (root / "finished_outputs").mkdir(exist_ok=True)
+    paths.materials_root(root).mkdir(exist_ok=True)
+    paths.outputs_root(root).mkdir(exist_ok=True)
     paths.runtime_root(root).mkdir(parents=True, exist_ok=True)
 
 
@@ -1058,8 +1058,8 @@ def _run_setup_wizard(
     _load_env_into_process(values)
     action = "Updated" if existed else "Created"
     rprint(f"\n[green]{action}[/green] {env_path}")
-    rprint(f"[green]Ready[/green] {root / 'raw_materials'}")
-    rprint(f"[green]Ready[/green] {root / 'finished_outputs'}")
+    rprint(f"[green]Ready[/green] {paths.materials_root(root)}")
+    rprint(f"[green]Ready[/green] {paths.outputs_root(root)}")
     rprint(f"[green]Ready[/green] {paths.workspace_home(root)}")
     rprint("[dim]Use 'tre models' to view or update provider/model settings later.[/dim]")
 

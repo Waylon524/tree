@@ -8,12 +8,12 @@
 
 ## 中文
 
-tree（Textbook Refinement & Enhancement Engine）是一套资料驱动的自动化教材生成流水线。用户把课件、习题、讲义、图片或文本资料放入 `raw_materials/` 后，引擎会自动完成 OCR、结构化整理、本地向量化入库，并通过“以考促写”的循环持续生成教材内容。
+tree（Textbook Refinement & Enhancement Engine）是一套资料驱动的自动化教材生成流水线。用户把课件、习题、讲义、图片或文本资料放入 `materials/` 后，引擎会自动完成 OCR、结构化整理、本地向量化入库，并通过“以考促写”的循环持续生成教材内容。
 
 ### 工作流程
 
 ```text
-raw_materials/
+materials/
   -> PaddleOCR-VL-1.6
   -> Archivist 结构化清洗
   -> source RAG
@@ -21,7 +21,7 @@ raw_materials/
   -> Student 盲测
   -> Examiner 批改
   -> Writer 创建或优化教材
-  -> finished_outputs/
+  -> outputs/
 ```
 
 ### 安装
@@ -79,12 +79,12 @@ tre
 第一次在某个文件夹运行 `tre` 时，CLI 会自动创建：
 
 ```text
-raw_materials/
-finished_outputs/
+materials/
+outputs/
 .tree/
 ```
 
-`raw_materials/` 放用户资料，`finished_outputs/` 放最终教材，`.tree/` 保存当前 workspace 的状态、RAG、草稿和日志。全局 API 配置与 embedding 服务状态保存在用户目录 `~/.tree/`。
+`materials/` 放用户资料，`outputs/` 放最终教材，`.tree/` 保存当前 workspace 的状态、RAG、草稿和日志。全局 API 配置与 embedding 服务状态保存在用户目录 `~/.tree/`。
 
 安装后可以随时运行体检：
 
@@ -127,19 +127,19 @@ PADDLEOCR_MODEL=PaddleOCR-VL-1.6
 
 ### 使用教程
 
-把资料放入 `raw_materials/`。子目录名会作为 source collection：
+把资料放入 `materials/`。子目录名会作为 source collection：
 
 ```text
-raw_materials/
+materials/
 ├── 课件/
 │   ├── 5. 化学平衡通论.pdf
-│   └── 6. 化学动力学简介.pdf
+│   └── 6. 化学动力学简介.pptx
 └── 作业/
     ├── 普通化学A-作业2026-01.pdf
     └── 普通化学A-作业2026-02.pdf
 ```
 
-支持 PDF、图片、DOCX、Markdown、TXT 等格式，具体以后缀集合 `tree.engine.RAW_MATERIAL_EXTENSIONS` 为准。
+支持 PDF、PPT/PPTX、图片、DOCX、Markdown、TXT 等格式，具体以后缀集合 `tree.engine.RAW_MATERIAL_EXTENSIONS` 为准。超过 100 页的 PDF 会在上传 PaddleOCR 前自动切分成每组不超过 100 页的临时 PDF，OCR 返回后再按顺序拼接成完整 Markdown 交给 Archivist。PPTX 会通过 Python 提取文本、表格、备注和内嵌图片 OCR；旧版 PPT 使用纯文本兜底提取。为获得更好的版式、公式、图表和图片识别效果，建议用户手动将 PPT/PPTX 转成 PDF 后再放入 `materials/`。
 
 #### macOS / Linux
 
@@ -156,7 +156,7 @@ tre
 进入 `TREE>` 后常用：
 
 ```text
-/start   # 后台启动 TREE，自动确保 embedding server 运行
+/start      # 后台启动 TREE，自动确保 embedding server 运行
 /watch      # 持续刷新当前进度，按 Ctrl+C 回到 TREE>
 /progress   # 显示一屏进度快照
 /status     # 查看服务和章节状态
@@ -165,7 +165,7 @@ tre
 /help       # 查看交互命令
 ```
 
-日常使用只需要留在 `TREE>` 里输入这些 slash commands。每次 `/start` 都会先检查 `raw_materials/`：
+日常使用只需要留在 `TREE>` 里输入这些 slash commands。每次 `/start` 都会先检查 `materials/`：
 
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
@@ -182,9 +182,9 @@ tre
 手动摄入某个文件或目录：
 
 ```bash
-tre ingest --input raw_materials/课件 --collection 课件
-tre ingest --input raw_materials/课件 --collection 课件 --no-structure
-tre ingest --input raw_materials/课件 --collection 课件 --no-index
+tre ingest --input materials/课件 --collection 课件
+tre ingest --input materials/课件 --collection 课件 --no-structure
+tre ingest --input materials/课件 --collection 课件 --no-index
 ```
 
 常用一次性命令：
@@ -309,7 +309,7 @@ tre
 #### RAG 策略
 
 - source materials 写入 RAG 后删除 `.tree/runtime/source_materials/` 中的中间 Markdown。
-- finished outputs 保留在 `finished_outputs/`，同时写入 RAG。
+- finished outputs 保留在 `outputs/`，同时写入 RAG。
 - drafts 不写入 RAG，Student 直接读取当前 draft 全文。
 - Examiner 命题会参考 source RAG 和 finished output RAG。
 - Student 答题会使用已学习 finished outputs 的 RAG 检索，并直接阅读当前 draft。
@@ -338,9 +338,9 @@ OCR job 使用：
 
 ```python
 optionalPayload = {
-    "useDocOrientationClassify": False,
-    "useDocUnwarping": False,
-    "useChartRecognition": False,
+    "useDocOrientationClassify": True,
+    "useDocUnwarping": True,
+    "useChartRecognition": True,
 }
 ```
 
@@ -406,8 +406,8 @@ curl -X POST http://localhost:8788/v1/embeddings \
 
 ```text
 my-course/
-├── raw_materials/          # 用户上传原始资料
-├── finished_outputs/       # 通过考试的最终教材
+├── materials/             # 用户上传原始资料
+├── outputs/               # 通过考试的最终教材
 └── .tree/                  # 当前 workspace 的内部状态
     ├── config.env          # 可选：仅覆盖当前 workspace 的配置
     └── runtime/
@@ -541,7 +541,7 @@ ruff check tree_engine/tree tree_engine/rag tree_engine/ingest
 python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 ```
 
-需要端到端验证时，将真实资料放入 `raw_materials/`，然后运行：
+需要端到端验证时，将真实资料放入 `materials/`，然后运行：
 
 ```bash
 tre start
@@ -558,12 +558,12 @@ MIT. See [LICENSE](LICENSE).
 
 ## English
 
-tree (Textbook Refinement & Enhancement Engine) is a material-driven pipeline for generating textbook chapters through exam-driven writing. After users place lecture slides, exercises, handouts, images, or text files in `raw_materials/`, the engine performs OCR, lightweight structuring, local embedding, and an iterative teaching loop.
+tree (Textbook Refinement & Enhancement Engine) is a material-driven pipeline for generating textbook chapters through exam-driven writing. After users place lecture slides, exercises, handouts, images, or text files in `materials/`, the engine performs OCR, lightweight structuring, local embedding, and an iterative teaching loop.
 
 ### Workflow
 
 ```text
-raw_materials/
+materials/
   -> PaddleOCR-VL-1.6
   -> Archivist cleanup
   -> source RAG
@@ -571,7 +571,7 @@ raw_materials/
   -> Student blind test
   -> Examiner audit
   -> Writer create/optimize
-  -> finished_outputs/
+  -> outputs/
 ```
 
 ### Installation
@@ -629,12 +629,12 @@ Inside `TREE>`, use slash commands such as `/start`, `/watch`, `/status`, `/stop
 The first `tre` run in a folder creates:
 
 ```text
-raw_materials/
-finished_outputs/
+materials/
+outputs/
 .tree/
 ```
 
-Use `raw_materials/` for uploads, `finished_outputs/` for final outputs, and `.tree/` for workspace state, RAG, drafts, and logs. Global API config and embedding service state live under the user-level `~/.tree/` directory.
+Use `materials/` for uploads, `outputs/` for final outputs, and `.tree/` for workspace state, RAG, drafts, and logs. Global API config and embedding service state live under the user-level `~/.tree/` directory.
 
 Run a health check after installation:
 
@@ -677,19 +677,19 @@ To get a PaddleOCR API key:
 
 ### Usage
 
-Place source files in `raw_materials/`. Subdirectories become source collections:
+Place source files in `materials/`. Subdirectories become source collections:
 
 ```text
-raw_materials/
+materials/
 ├── lectures/
 │   ├── 05-equilibrium.pdf
-│   └── 06-kinetics.pdf
+│   └── 06-kinetics.pptx
 └── exercises/
     ├── homework-01.pdf
     └── homework-02.pdf
 ```
 
-Supported inputs include PDF, images, DOCX, Markdown, and TXT. The exact suffix set is defined by `tree.engine.RAW_MATERIAL_EXTENSIONS`.
+Supported inputs include PDF, PPT/PPTX, images, DOCX, Markdown, and TXT. The exact suffix set is defined by `tree.engine.RAW_MATERIAL_EXTENSIONS`. PDFs over 100 pages are automatically split into temporary PDFs of at most 100 pages before PaddleOCR upload; OCR Markdown is then stitched back together in order before Archivist processing. PPTX files are processed with Python by extracting text, tables, notes, and OCR for embedded images; legacy PPT uses a best-effort text fallback. For better layout, formula, chart, and image recognition, users should manually export PPT/PPTX to PDF before placing files in `materials/`.
 
 #### macOS / Linux
 
@@ -706,7 +706,7 @@ tre
 At the `TREE>` prompt:
 
 ```text
-/start   # start TREE in the background and ensure embedding is running
+/start      # start TREE in the background and ensure embedding is running
 /watch      # refresh current progress until Ctrl+C returns to TREE>
 /progress   # show one progress snapshot
 /status     # show service and chapter status
@@ -715,7 +715,7 @@ At the `TREE>` prompt:
 /help       # show interactive commands
 ```
 
-For daily use, stay inside `TREE>` and type these slash commands. Every `/start` checks `raw_materials/` first:
+For daily use, stay inside `TREE>` and type these slash commands. Every `/start` checks `materials/` first:
 
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
@@ -732,9 +732,9 @@ More commands, manual ingest, and troubleshooting usage are in the advanced sect
 Manually ingest a file or directory:
 
 ```bash
-tre ingest --input raw_materials/lectures --collection lectures
-tre ingest --input raw_materials/lectures --collection lectures --no-structure
-tre ingest --input raw_materials/lectures --collection lectures --no-index
+tre ingest --input materials/lectures --collection lectures
+tre ingest --input materials/lectures --collection lectures --no-structure
+tre ingest --input materials/lectures --collection lectures --no-index
 ```
 
 Common one-shot commands:
@@ -859,7 +859,7 @@ tre
 #### RAG Strategy
 
 - Source materials are deleted from `.tree/runtime/source_materials/` after indexing.
-- Finished outputs remain in `finished_outputs/` and are indexed.
+- Finished outputs remain in `outputs/` and are indexed.
 - Drafts are not indexed; the Student reads the current draft directly.
 - Examiner exam assembly uses source RAG and finished-output RAG.
 - Student answers use RAG retrieval over already learned finished outputs and direct reading of the current draft.
@@ -888,9 +888,9 @@ OCR jobs use:
 
 ```python
 optionalPayload = {
-    "useDocOrientationClassify": False,
-    "useDocUnwarping": False,
-    "useChartRecognition": False,
+    "useDocOrientationClassify": True,
+    "useDocUnwarping": True,
+    "useChartRecognition": True,
 }
 ```
 
@@ -956,8 +956,8 @@ curl -X POST http://localhost:8788/v1/embeddings \
 
 ```text
 my-course/
-├── raw_materials/          # User uploads
-├── finished_outputs/       # Final textbooks
+├── materials/             # User uploads
+├── outputs/               # Final textbooks
 └── .tree/                  # Internal state for this workspace
     ├── config.env          # Optional workspace-only overrides
     └── runtime/
@@ -1091,7 +1091,7 @@ ruff check tree_engine/tree tree_engine/rag tree_engine/ingest
 python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 ```
 
-For end-to-end verification, place real materials in `raw_materials/`, then run:
+For end-to-end verification, place real materials in `materials/`, then run:
 
 ```bash
 tre start

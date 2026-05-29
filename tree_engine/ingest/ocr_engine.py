@@ -18,6 +18,7 @@ Usage:
 import json
 import logging
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -29,11 +30,12 @@ _DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 _DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT = 600
+_PDF_MAX_PAGES_PER_JOB = 100
 
 _DEFAULT_OPTIONS = {
-    "useDocOrientationClassify": False,
-    "useDocUnwarping": False,
-    "useChartRecognition": False,
+    "useDocOrientationClassify": True,
+    "useDocUnwarping": True,
+    "useChartRecognition": True,
 }
 
 
@@ -66,11 +68,86 @@ class OCREngine:
         path = str(path)
         if path.startswith("http://") or path.startswith("https://"):
             job_id = self._submit_url(path)
-        else:
-            job_id = self._submit_local(path)
+            logger.info("Job submitted: %s", job_id)
+            jsonl_url = self._poll(job_id)
+            return self._download_result(jsonl_url)
+
+        local_path = Path(path)
+        if local_path.suffix.lower() == ".pdf":
+            return self._ocr_local_pdf(local_path)
+        return self._ocr_single_local(local_path)
+
+    def _ocr_local_pdf(self, pdf_path: Path) -> str:
+        """OCR a local PDF, splitting files over the API page limit."""
+        page_count = self._pdf_page_count(pdf_path)
+        if page_count <= _PDF_MAX_PAGES_PER_JOB:
+            return self._ocr_single_local(pdf_path)
+
+        logger.info(
+            "PDF has %d pages; splitting into chunks of <=%d pages before OCR: %s",
+            page_count,
+            _PDF_MAX_PAGES_PER_JOB,
+            pdf_path.name,
+        )
+        parts = []
+        with tempfile.TemporaryDirectory(prefix="tree-pdf-split-") as temp_dir:
+            chunk_paths = self._split_pdf(pdf_path, Path(temp_dir), _PDF_MAX_PAGES_PER_JOB)
+            for index, chunk_path in enumerate(chunk_paths, start=1):
+                logger.info(
+                    "OCR-ing PDF chunk %d/%d: %s",
+                    index,
+                    len(chunk_paths),
+                    chunk_path.name,
+                )
+                text = self._ocr_single_local(chunk_path)
+                if text.strip():
+                    parts.append(text)
+        return "\n\n".join(parts)
+
+    def _ocr_single_local(self, path: Path) -> str:
+        """OCR one local file without additional splitting."""
+        job_id = self._submit_local(str(path))
         logger.info("Job submitted: %s", job_id)
         jsonl_url = self._poll(job_id)
         return self._download_result(jsonl_url)
+
+    @staticmethod
+    def _pdf_page_count(pdf_path: Path) -> int:
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise RuntimeError(
+                "PDF page counting and splitting requires pypdf. "
+                "Reinstall tree with current dependencies."
+            ) from exc
+
+        reader = PdfReader(str(pdf_path))
+        return len(reader.pages)
+
+    @staticmethod
+    def _split_pdf(pdf_path: Path, output_dir: Path, max_pages: int) -> list[Path]:
+        try:
+            from pypdf import PdfReader, PdfWriter
+        except ImportError as exc:
+            raise RuntimeError(
+                "PDF page counting and splitting requires pypdf. "
+                "Reinstall tree with current dependencies."
+            ) from exc
+
+        reader = PdfReader(str(pdf_path))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        chunk_paths = []
+        total_pages = len(reader.pages)
+        for start in range(0, total_pages, max_pages):
+            writer = PdfWriter()
+            end = min(start + max_pages, total_pages)
+            for page_index in range(start, end):
+                writer.add_page(reader.pages[page_index])
+            chunk_path = output_dir / f"{pdf_path.stem}__pages-{start + 1:04d}-{end:04d}.pdf"
+            with chunk_path.open("wb") as file:
+                writer.write(file)
+            chunk_paths.append(chunk_path)
+        return chunk_paths
 
     def _submit_url(self, file_url: str) -> str:
         """Submit job with a file URL (JSON body)."""

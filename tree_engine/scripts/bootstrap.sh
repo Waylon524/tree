@@ -72,7 +72,7 @@ require_project_root() {
   if [ -f "$parent_root/pyproject.toml" ] && [ -d "$parent_root/tree_engine" ]; then
     fail "This looks like a nested tree checkout: $PROJECT_ROOT inside $parent_root. Run bootstrap from the outer checkout or clone into an empty directory."
   fi
-  mkdir -p raw_materials finished_outputs .tree/runtime
+  mkdir -p materials outputs .tree/runtime
 }
 
 python_ok() {
@@ -217,7 +217,7 @@ cat <<'NEXT'
 Bootstrap complete.
 
 Next:
-  1. Put course files into raw_materials/
+  1. Put course files into materials/
   2. Open the TREE interactive CLI:
        .venv/bin/tre
   3. Type slash commands inside TREE:

@@ -40,6 +40,14 @@ def runtime_root(root: Path) -> Path:
     return workspace_home(root) / "runtime"
 
 
+def materials_root(root: Path) -> Path:
+    return root / "materials"
+
+
+def outputs_root(root: Path) -> Path:
+    return root / "outputs"
+
+
 def source_root(root: Path) -> Path:
     return runtime_root(root) / "source_materials"
 

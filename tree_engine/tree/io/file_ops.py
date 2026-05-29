@@ -1,4 +1,4 @@
-"""File operations: read/write drafts, move to finished_outputs."""
+"""File operations: read/write drafts, move to outputs."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from tree.io import paths
 
 
 def read_prior_files(root: Path, chapter: str) -> list[str]:
-    """Read all .md files from finished_outputs/{chapter}/ sorted by name."""
-    chapter_dir = root / "finished_outputs" / chapter
+    """Read all .md files from outputs/{chapter}/ sorted by name."""
+    chapter_dir = paths.outputs_root(root) / chapter
     if not chapter_dir.exists():
         return []
     contents = []
@@ -21,7 +21,7 @@ def read_prior_files(root: Path, chapter: str) -> list[str]:
 
 def list_prior_paths(root: Path, chapter: str) -> list[Path]:
     """List paths of all prior completed files."""
-    chapter_dir = root / "finished_outputs" / chapter
+    chapter_dir = paths.outputs_root(root) / chapter
     if not chapter_dir.exists():
         return []
     return sorted(chapter_dir.glob("*.md"))
@@ -45,9 +45,9 @@ def write_draft(root: Path, chapter: str, filename: str, content: str) -> Path:
 
 
 def move_draft_to_finished(root: Path, chapter: str, filename: str) -> Path:
-    """Move draft from drafts/ to finished_outputs/."""
+    """Move draft from drafts/ to outputs/."""
     src = paths.drafts_root(root) / chapter / filename
-    dst_dir = root / "finished_outputs" / chapter
+    dst_dir = paths.outputs_root(root) / chapter
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / filename
     shutil.move(str(src), str(dst))
