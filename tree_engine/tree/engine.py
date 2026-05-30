@@ -21,25 +21,32 @@ from tree.curriculum.chapter_naming import (
     next_tree_id,
 )
 from tree.curriculum.inventory import (
-    build_inventory_context,
     load_inventory,
     rebuild_source_inventory_with_ai,
 )
 from tree.curriculum.candidate_nodes import (
-    build_candidate_nodes_context,
     load_candidate_nodes,
     rebuild_candidate_nodes_with_ai,
 )
+from tree.curriculum.branches import (
+    build_branch_prior_scope,
+    branch_context_for_run,
+    load_knowledge_dag,
+    load_knowledge_branches,
+    rebuild_branch_plan,
+    start_ready_branch_runs,
+    validate_branch_covered_node_ids,
+)
 from tree.curriculum.graph import (
-    build_knowledge_graph_context,
     build_selected_node_context,
     load_knowledge_graph,
     rebuild_knowledge_graph,
+    rebuild_knowledge_graph_with_ai,
 )
 from tree.curriculum.ledger import (
     duplicate_brief,
     format_duplicate_brief,
-    format_ledger_context,
+    format_scoped_ledger_context,
     reconcile_finished_outputs,
     update_finished_record,
 )
@@ -52,7 +59,6 @@ from tree.services import stop_requested
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditResult,
-    ChapterScanResult,
     ExamSections,
     IterationState,
     PipelineState,
@@ -101,6 +107,7 @@ class TreeEngine:
         self.tracer = TraceLogger(paths.pipeline_temp_root(root) / "trace.jsonl")
         self.progress = ProgressTracker(root)
         self.limiter = IterationLimiter(settings.max_iterations)
+        self.coverage_update_lock = asyncio.Lock()
         self.rag_client = None
         self.rag_indexer = None
         self._init_rag()
@@ -116,59 +123,47 @@ class TreeEngine:
         while True:
             self._raise_if_stop_requested()
             state = self.state_mgr.load()
-            chapter = self.state_mgr.find_in_progress(state)
-            if chapter is None:
-                # No in_progress chapter — scan for next
+            state = self._activate_ready_branch_runs(state)
+            in_progress = self.state_mgr.find_in_progress_all(state)
+            if not in_progress:
+                # No active BranchRun execution; refresh planner artifacts and schedule ready branches.
                 self.progress.learning_stage(
-                    stage="scan_next_chapter",
-                    stage_label="Scanning next chapter",
+                    stage="refresh_branch_plan",
+                    stage_label="Refreshing branch plan",
                     stage_index=1,
                     stage_total=6,
-                    message="Examiner is scanning source materials for the next chapter",
+                    message="Planner is rebuilding KnowledgeNodes, DAG, and ready branches",
                 )
-                scan_result = await self._scan_next_chapter(state)
-                if scan_result is None:
-                    state = await self._name_completed_chapters(state)
-                    self.state_mgr.save(state)
-                    self.tracer.log_pipeline_complete()
-                    self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
-                    print("WOODS_COMPLETE — all source nodes covered.")
+                await self._refresh_planner_artifacts(state)
+                state = self._activate_ready_branch_runs(self.state_mgr.load())
+                in_progress = self.state_mgr.find_in_progress_all(state)
+                if in_progress:
+                    await asyncio.gather(
+                        *[
+                            self.process_chapter(item.chapter_name)
+                            for item in in_progress[: self.settings.max_active_branch_runs]
+                        ]
+                    )
+                    continue
+                blockage = _branch_plan_blockage(load_knowledge_branches(self.settings.project_root))
+                if blockage:
+                    message = f"TREE_BLOCKED — {blockage}"
+                    self.progress.update({"phase": "blocked", "message": message})
+                    print(message)
                     return
-                if scan_result.selection_mode == "branch":
-                    continued = self._continue_existing_tree(state, scan_result)
-                    if continued is not None:
-                        state = continued
-                        self.state_mgr.save(state)
-                        chapter = self.state_mgr.find_in_progress(state)
-                        print(f"Continuing chapter tree: {chapter.chapter_name}")
-                        await self.process_chapter(chapter.chapter_name)
-                        continue
-
-                if scan_result.selection_mode == "new_root":
-                    state = await self._name_completed_chapters(state)
-
-                provisional_title = scan_result.chapter_name
-                new_name = next_tree_id(state)
-                state = self.state_mgr.add_chapter(
-                    state,
-                    new_name,
-                    source_collection=scan_result.source_collection,
-                    source_collections=scan_result.source_collections,
-                    graph_node_id=scan_result.graph_node_id,
-                    required_nodes=scan_result.required_nodes,
-                    provisional_chapter_title=provisional_title,
-                )
+                state = await self._name_completed_chapters(state)
                 self.state_mgr.save(state)
-                chapter = self.state_mgr.find_in_progress(state)
-                collection_suffix = (
-                    f" (source collection: {scan_result.source_collection})"
-                    if scan_result.source_collection
-                    else ""
-                )
-                title_suffix = f" (provisional title: {provisional_title})" if provisional_title else ""
-                print(f"New chapter tree discovered: {new_name}{collection_suffix}{title_suffix}")
+                self.tracer.log_pipeline_complete()
+                self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
+                print("WOODS_COMPLETE — all source nodes covered.")
+                return
 
-            await self.process_chapter(chapter.chapter_name)
+            await asyncio.gather(
+                *[
+                    self.process_chapter(item.chapter_name)
+                    for item in in_progress[: self.settings.max_active_branch_runs]
+                ]
+            )
 
     async def ingest(
         self,
@@ -308,7 +303,7 @@ class TreeEngine:
             print(f"Source ingest: embedded {indexed} source material file(s).")
 
     async def process_chapter(self, chapter_name: str) -> None:
-        """Run Step 0→1→2→3→4 loop for one planner-selected node."""
+        """Run the BranchRun exam-writing loop for one declared branch span."""
         while True:
             self._raise_if_stop_requested()
             state = self.state_mgr.load()
@@ -345,6 +340,7 @@ class TreeEngine:
                 chapter=chapter_name,
                 file_seq=next_seq,
                 knowledge_point=exam_sections.knowledge_point,
+                covered_node_ids=list(exam_sections.covered_node_ids),
                 exam_sections=exam_sections,
             )
             self.progress.learning_stage(
@@ -478,12 +474,14 @@ class TreeEngine:
             source_collections = [source_collection] if source_collection else []
         if not source_collections and ch_name:
             source_collections = self._source_collections_for_chapter(ch_name)
-        prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, ch_name)]
+        prior_paths, prior_contents, allowed_paths = self._prior_finished_context(ch_name)
         query_text = f"{ch_name}\n{next_seq}\n下一知识点命题"
         duplicate_context = (
-            format_ledger_context(self.settings.project_root)
+            format_scoped_ledger_context(self.settings.project_root, allowed_paths)
             + "\n\n"
-            + format_duplicate_brief(duplicate_brief(self.settings.project_root, query_text))
+            + format_duplicate_brief(
+                duplicate_brief(self.settings.project_root, query_text, allowed_paths=allowed_paths)
+            )
         )
         source_filters = {"content_kind": "source"}
         if source_collections:
@@ -495,7 +493,11 @@ class TreeEngine:
                 top_k=5,
                 include_drafts=False,
             )
-            + self._finished_rag_query(query_text, top_k=8)
+            + self._finished_rag_query(
+                query_text,
+                top_k=8,
+                allowed_paths=allowed_paths,
+            )
         )
         if duplicate_context:
             retrieved_context.append(
@@ -508,19 +510,25 @@ class TreeEngine:
                     },
                 }
             )
-        return await self.examiner.compose_exam(
+        exam_sections, is_complete = await self.examiner.compose_exam(
             next_seq,
-            [],
+            prior_contents,
             prior_paths,
             source_material_contents=[],
             source_material_paths=self._source_paths_from_rag(source_collections),
             retrieved_context=retrieved_context,
             graph_context=self._active_chapter_graph_context(ch),
         )
+        if ch is not None and exam_sections is not None:
+            exam_sections = self._validate_exam_covered_nodes(ch, exam_sections)
+        return exam_sections, is_complete
 
     async def _step2_blind_test(self, iter_state: IterationState) -> str:
-        prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
+        prior_paths, prior_contents, allowed_paths = _prior_finished_context_for_engine(
+            self,
+            iter_state.chapter,
+            iter_state.covered_node_ids,
+        )
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -529,7 +537,11 @@ class TreeEngine:
             f"{iter_state.knowledge_point}\n"
             f"{iter_state.exam_sections.blind_exam}"
         )
-        retrieved_context = self._finished_rag_query(query_text, top_k=6)
+        retrieved_context = self._finished_rag_query(
+            query_text,
+            top_k=6,
+            allowed_paths=allowed_paths,
+        )
         return await self.student.blind_test(
             iter_state.exam_sections.blind_exam,
             prior_contents,
@@ -539,8 +551,11 @@ class TreeEngine:
         )
 
     async def _step3_audit(self, iter_state: IterationState, answer: str) -> AuditResult:
-        prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
+        prior_paths, prior_contents, allowed_paths = _prior_finished_context_for_engine(
+            self,
+            iter_state.chapter,
+            iter_state.covered_node_ids,
+        )
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -551,7 +566,11 @@ class TreeEngine:
         if source_collections:
             source_filters["source_collection"] = source_collections
         retrieved_context = (
-            self._finished_rag_query(query_text, top_k=6)
+            self._finished_rag_query(
+                query_text,
+                top_k=6,
+                allowed_paths=allowed_paths,
+            )
             + self._rag_query(
                 query_text,
                 filters=source_filters,
@@ -559,6 +578,13 @@ class TreeEngine:
                 include_drafts=False,
             )
         )
+        state_mgr = getattr(self, "state_mgr", None)
+        chapter = None
+        if state_mgr is not None:
+            state = state_mgr.load()
+            chapter = next((ch for ch in state.chapters if ch.chapter_name == iter_state.chapter), None)
+        graph_context_method = getattr(self, "_active_chapter_graph_context", None)
+        graph_context = graph_context_method(chapter) if graph_context_method else None
         return await self.examiner.audit(
             iter_state.exam_sections.blind_exam,
             iter_state.exam_sections.answer_key,
@@ -568,11 +594,15 @@ class TreeEngine:
             prior_paths,
             iter_state.previous_bottleneck,
             retrieved_context=retrieved_context,
+            graph_context=graph_context,
         )
 
     async def _step4_writer(self, iter_state: IterationState, audit: AuditResult) -> WriterResult:
-        prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
-        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
+        prior_paths, prior_contents, allowed_paths = _prior_finished_context_for_engine(
+            self,
+            iter_state.chapter,
+            iter_state.covered_node_ids,
+        )
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -583,7 +613,7 @@ class TreeEngine:
         writer_bottleneck = sanitize_writer_context(audit.bottleneck_report)
         query_text = f"{iter_state.knowledge_point}\n{writer_bottleneck}"
         delta_brief = format_duplicate_brief(
-            duplicate_brief(self.settings.project_root, iter_state.knowledge_point)
+            duplicate_brief(self.settings.project_root, iter_state.knowledge_point, allowed_paths=allowed_paths)
         )
         source_filters = {"content_kind": "source"}
         if source_collections:
@@ -595,7 +625,11 @@ class TreeEngine:
                 top_k=5,
                 include_drafts=False,
             )
-            + self._finished_rag_query(query_text, top_k=8)
+            + self._finished_rag_query(
+                query_text,
+                top_k=8,
+                allowed_paths=allowed_paths,
+            )
         )
         retrieved_context.append(
             {
@@ -624,6 +658,14 @@ class TreeEngine:
 
     async def _handle_pass(self, iter_state: IterationState, audit: AuditResult | None) -> Path:
         """Move draft to outputs, update state."""
+        lock = getattr(self, "coverage_update_lock", None)
+        if lock is None:
+            return TreeEngine._handle_pass_locked(self, iter_state, audit)
+        async with lock:
+            return TreeEngine._handle_pass_locked(self, iter_state, audit)
+
+    def _handle_pass_locked(self, iter_state: IterationState, audit: AuditResult | None) -> Path:
+        """Move draft to outputs and commit coverage state under the global lock."""
         if not iter_state.draft_path or not iter_state.draft_path.exists():
             raise RuntimeError(
                 "Cannot PASS without a persisted draft. "
@@ -645,27 +687,148 @@ class TreeEngine:
             self.settings.project_root,
             iter_state.chapter,
             dst,
-            graph_node_id=getattr(chapter, "graph_node_id", None),
+            graph_node_id=(iter_state.covered_node_ids or [getattr(chapter, "graph_node_id", None)])[0],
+            covered_node_ids=iter_state.covered_node_ids,
             required_nodes=getattr(chapter, "required_nodes", None) or [],
             source_collections=_chapter_source_collections(chapter),
-            hit_chunks=_chapter_graph_hit_chunks(self.settings.project_root, chapter),
+            hit_chunks=_chapter_graph_hit_chunks(
+                self.settings.project_root,
+                chapter,
+                node_ids=iter_state.covered_node_ids,
+            ),
         )
         state = self.state_mgr.add_file_completed(state, iter_state.chapter, filename)
+        if chapter and chapter.branch_run_id:
+            state = self.state_mgr.add_branch_run_file_completed(
+                state,
+                chapter.branch_run_id,
+                filename,
+            )
         self.state_mgr.save(state)
         self._refresh_knowledge_graph_from_ledger()
         return dst
 
     def _mark_active_node_complete(self, chapter_name: str) -> None:
-        """Close the active selected node so the planner chooses the next branch/root."""
+        """Close the active branch execution so the scheduler can unlock downstream branches."""
         state = self.state_mgr.load()
+        chapter = next((ch for ch in state.chapters if ch.chapter_name == chapter_name), None)
+        if chapter and chapter.branch_run_id and chapter.branch_id:
+            branches_doc = load_knowledge_branches(self.settings.project_root)
+            branch = next(
+                (
+                    item
+                    for item in branches_doc.get("branches", [])
+                    if isinstance(item, dict) and item.get("branch_id") == chapter.branch_id
+                ),
+                {},
+            )
+            missing = _string_list((branch.get("coverage") or {}).get("missing_node_ids"))
+            if missing:
+                state = self.state_mgr.reopen_chapter(
+                    state,
+                    chapter_name,
+                    source_collection=chapter.source_collection,
+                    source_collections=chapter.source_collections,
+                    graph_node_id=missing[0],
+                    required_nodes=missing,
+                    branch_id=chapter.branch_id,
+                    branch_run_id=chapter.branch_run_id,
+                )
+                run = next(
+                    (item for item in state.branch_runs if item.run_id == chapter.branch_run_id),
+                    None,
+                )
+                if run is not None:
+                    state = self.state_mgr.update_branch_run(
+                        state,
+                        chapter.branch_run_id,
+                        current_iteration=run.current_iteration + 1,
+                    )
+                self.state_mgr.save(state)
+                return
         state = self.state_mgr.complete_chapter(state, chapter_name)
+        if chapter and chapter.branch_run_id:
+            state = self.state_mgr.update_branch_run(
+                state,
+                chapter.branch_run_id,
+                status="complete",
+            )
         self.state_mgr.save(state)
 
     def _refresh_knowledge_graph_from_ledger(self) -> dict[str, Any]:
         """Refresh the persisted graph without re-running AI candidate extraction."""
         ledger = reconcile_finished_outputs(self.settings.project_root)
         candidate_nodes = load_candidate_nodes(self.settings.project_root)
-        return rebuild_knowledge_graph(self.settings.project_root, candidate_nodes, ledger)
+        graph = rebuild_knowledge_graph(self.settings.project_root, candidate_nodes, ledger)
+        running = {
+            run.branch_id
+            for run in self.state_mgr.load().branch_runs
+            if run.status == "running"
+        }
+        rebuild_branch_plan(
+            self.settings.project_root,
+            graph,
+            ledger,
+            running_branch_ids=running,
+        )
+        return graph
+
+    def _activate_ready_branch_runs(self, state: PipelineState) -> PipelineState:
+        """Create BranchRun-backed chapters for every ready executable branch."""
+        graph = load_knowledge_graph(self.settings.project_root)
+        if not graph.get("nodes"):
+            return state
+        ledger = reconcile_finished_outputs(self.settings.project_root)
+        running = {run.branch_id for run in state.branch_runs if run.status == "running"}
+        plan = rebuild_branch_plan(
+            self.settings.project_root,
+            graph,
+            ledger,
+            running_branch_ids=running,
+        )
+        before = {run.run_id for run in state.branch_runs}
+        updated = start_ready_branch_runs(
+            state,
+            plan["branches"],
+            ledger,
+            max_active_branch_runs=self.settings.max_active_branch_runs,
+            now=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        )
+        if len(updated.branch_runs) == len(state.branch_runs):
+            return updated
+        branches_by_id = {
+            branch.get("branch_id"): branch
+            for branch in plan["branches"].get("branches", [])
+            if isinstance(branch, dict)
+        }
+        with_chapters = updated
+        for run in updated.branch_runs:
+            if run.run_id in before or run.execution_path:
+                continue
+            branch = branches_by_id.get(run.branch_id, {})
+            tree_id = _tree_id_for_branch_execution(branch, with_chapters, ledger)
+            chapter_name = f"{tree_id}/{_branch_chapter_slug(run.branch_id)}"
+            coverage_nodes = list(branch.get("coverage_node_ids") or [])
+            source_collections = _string_list(branch.get("source_collections"))
+            with_chapters = self.state_mgr.add_chapter(
+                with_chapters,
+                chapter_name,
+                source_collection=source_collections[0] if source_collections else None,
+                source_collections=source_collections,
+                graph_node_id=coverage_nodes[0] if coverage_nodes else branch.get("start_node_id"),
+                required_nodes=coverage_nodes,
+                provisional_chapter_title=f"Branch {run.branch_id}",
+                branch_id=run.branch_id,
+                branch_run_id=run.run_id,
+            )
+            with_chapters = self.state_mgr.update_branch_run(
+                with_chapters,
+                run.run_id,
+                execution_path=chapter_name,
+                tree_id=tree_id,
+            )
+        self.state_mgr.save(with_chapters)
+        return with_chapters
 
     def _reconcile_finished_outputs(self, state: PipelineState, chapter_name: str) -> PipelineState:
         """Record finished output files that were saved before a previous crash."""
@@ -684,6 +847,12 @@ class TreeEngine:
                 continue
             self._index_finished_output_or_raise(chapter_name, path)
             reconciled = self.state_mgr.add_file_completed(reconciled, chapter_name, path.name)
+            if chapter.branch_run_id:
+                reconciled = self.state_mgr.add_branch_run_file_completed(
+                    reconciled,
+                    chapter.branch_run_id,
+                    path.name,
+                )
             update_finished_record(
                 self.settings.project_root,
                 chapter_name,
@@ -731,42 +900,11 @@ class TreeEngine:
             print(f"TREE_COMPLETE: {chapter.chapter_name} -> {result['chapter_title']}")
         return updated
 
-    def _continue_existing_tree(
-        self,
-        state: PipelineState,
-        scan_result: ChapterScanResult,
-    ) -> PipelineState | None:
-        """Reopen the tree that owns the selected branch's finished parent."""
-        chapter_name = _chapter_name_from_required_nodes(
-            [scan_result.parent_output] if scan_result.parent_output else scan_result.required_nodes
-        )
-        if not chapter_name:
-            return None
-        chapter = next(
-            (
-                item
-                for item in state.chapters
-                if item.chapter_name == chapter_name and item.status == "completed" and not item.chapter_title
-            ),
-            None,
-        )
-        if chapter is None:
-            return None
-        return self.state_mgr.reopen_chapter(
-            state,
-            chapter.chapter_name,
-            source_collection=scan_result.source_collection,
-            source_collections=scan_result.source_collections,
-            graph_node_id=scan_result.graph_node_id,
-            required_nodes=scan_result.required_nodes,
-        )
-
-    async def _scan_next_chapter(self, state: object) -> ChapterScanResult | None:
-        """Scan source materials for next chapter. Returns chapter name or None."""
+    async def _refresh_planner_artifacts(self, state: object) -> None:
+        """Refresh inventory, KnowledgeNodes, graph, and executable branch artifacts."""
         from tree.state.models import PipelineState
 
         s = state if isinstance(state, PipelineState) else None
-        state_text = s.model_dump_json(indent=2) if s else "{}"
         ledger = reconcile_finished_outputs(self.settings.project_root)
         inventory = await self._rebuild_source_inventory_from_rag()
         candidate_nodes = await rebuild_candidate_nodes_with_ai(
@@ -775,36 +913,23 @@ class TreeEngine:
             self.archivist,
             completed_collections=_completed_source_collections(s),
         )
-        knowledge_graph = rebuild_knowledge_graph(
+        knowledge_graph = await rebuild_knowledge_graph_with_ai(
             self.settings.project_root,
             candidate_nodes,
             ledger,
+            self.archivist,
         )
-        if not (knowledge_graph.get("planner") or {}).get("selected_node"):
-            return None
-        source_payload = self._source_payload_from_rag()
-        finished_payload = self._finished_payload_from_rag()
-        source_inventory_context = build_inventory_context(
+        running = {
+            run.branch_id
+            for run in (s.branch_runs if s is not None else [])
+            if run.status == "running"
+        }
+        rebuild_branch_plan(
             self.settings.project_root,
-            inventory,
-            completed_collections=_completed_source_collections(s),
+            knowledge_graph,
+            ledger,
+            running_branch_ids=running,
         )
-        candidate_nodes_context = build_candidate_nodes_context(candidate_nodes)
-        selected_node_context = build_selected_node_context(knowledge_graph)
-        knowledge_graph_context = build_knowledge_graph_context(knowledge_graph)
-        source_inventory_context = (
-            f"{selected_node_context}\n\n"
-            f"{source_inventory_context}\n\n"
-            f"{candidate_nodes_context}\n\n"
-            f"{knowledge_graph_context}"
-        )
-        scan_result, is_complete = await self.examiner.scan_next_chapter(
-            state_text, source_payload, finished_payload, source_inventory_context
-        )
-        if is_complete:
-            return None
-        scan_result = _attach_graph_selection(scan_result, knowledge_graph)
-        return scan_result
 
     async def close(self) -> None:
         rag_client = getattr(self, "rag_client", None)
@@ -856,13 +981,103 @@ class TreeEngine:
         except Exception:
             return []
 
-    def _finished_rag_query(self, query_text: str, top_k: int = 8) -> list[dict]:
-        return self._rag_query(
+    def _finished_rag_query(
+        self,
+        query_text: str,
+        top_k: int = 8,
+        allowed_paths: set[str] | None = None,
+    ) -> list[dict]:
+        hits = self._rag_query(
             query_text,
             filters={"content_kind": "finished"},
             top_k=top_k,
             include_drafts=False,
         )
+        if allowed_paths is None:
+            return hits
+        return [
+            hit
+            for hit in hits
+            if _hit_path(hit) in allowed_paths or f"finished:{_hit_path(hit)}" in allowed_paths
+        ]
+
+    def _allowed_finished_paths_for_chapter(self, chapter_name: str) -> set[str] | None:
+        return self._allowed_finished_paths_for_chapter_span(chapter_name, None)
+
+    def _allowed_finished_paths_for_chapter_span(
+        self,
+        chapter_name: str,
+        covered_node_ids: list[str] | None,
+    ) -> set[str] | None:
+        scope = self._branch_prior_scope(chapter_name, covered_node_ids)
+        if scope is None:
+            return None
+        return set(scope.allowed_paths)
+
+    def _prior_finished_context(
+        self,
+        chapter_name: str,
+        covered_node_ids: list[str] | None = None,
+    ) -> tuple[list[str], list[str], set[str] | None]:
+        allowed_paths = self._allowed_finished_paths_for_chapter_span(chapter_name, covered_node_ids)
+        if allowed_paths is None:
+            paths_list = file_ops.list_prior_paths(self.settings.project_root, chapter_name)
+            return [str(path) for path in paths_list], file_ops.read_prior_files(self.settings.project_root, chapter_name), None
+        path_objects = [
+            self.settings.project_root / rel
+            for rel in sorted(allowed_paths)
+            if rel.startswith("outputs/")
+        ]
+        existing = [path for path in path_objects if path.exists()]
+        return (
+            [str(path) for path in existing],
+            [path.read_text(encoding="utf-8") for path in existing],
+            allowed_paths,
+        )
+
+    def _branch_prior_scope(
+        self,
+        chapter_name: str,
+        covered_node_ids: list[str] | None = None,
+    ):
+        try:
+            state = self.state_mgr.load()
+        except Exception:
+            return None
+        chapter = next((item for item in state.chapters if item.chapter_name == chapter_name), None)
+        if chapter is None or not chapter.branch_run_id:
+            return None
+        run = next((item for item in state.branch_runs if item.run_id == chapter.branch_run_id), None)
+        if run is None:
+            return None
+        return build_branch_prior_scope(
+            run,
+            load_knowledge_dag(self.settings.project_root),
+            load_knowledge_branches(self.settings.project_root),
+            reconcile_finished_outputs(self.settings.project_root),
+            covered_node_ids=covered_node_ids,
+        )
+
+    def _validate_exam_covered_nodes(
+        self,
+        chapter,
+        exam_sections: ExamSections,
+    ) -> ExamSections:
+        if not chapter.branch_id:
+            return exam_sections
+        branches_doc = load_knowledge_branches(self.settings.project_root)
+        branch = next(
+            (
+                item
+                for item in branches_doc.get("branches", [])
+                if isinstance(item, dict) and item.get("branch_id") == chapter.branch_id
+            ),
+            None,
+        )
+        if branch is None:
+            return exam_sections
+        covered = validate_branch_covered_node_ids(exam_sections.covered_node_ids, branch)
+        return exam_sections.model_copy(update={"covered_node_ids": covered})
 
     def _source_collection_for_chapter(self, chapter_name: str) -> str | None:
         collections = self._source_collections_for_chapter(chapter_name)
@@ -873,20 +1088,38 @@ class TreeEngine:
 
         if not isinstance(chapter, ChapterRecord):
             return None
-        if not chapter.graph_node_id and not chapter.required_nodes:
+        if not chapter.graph_node_id and not chapter.required_nodes and not chapter.branch_run_id:
             return None
+        sections = []
+        if chapter.branch_run_id:
+            state = self.state_mgr.load()
+            run = next(
+                (item for item in state.branch_runs if item.run_id == chapter.branch_run_id),
+                None,
+            )
+            if run is not None:
+                sections.append(
+                    branch_context_for_run(
+                        run,
+                        load_knowledge_branches(self.settings.project_root),
+                        reconcile_finished_outputs(self.settings.project_root),
+                    )
+                )
         lines = [
-            "## Active Chapter Graph Binding",
-            f"Chapter tree id: {chapter.chapter_name}",
-            f"Graph node id: {chapter.graph_node_id or 'none'}",
-            f"Required nodes: {', '.join(chapter.required_nodes) or 'none'}",
+            "## Active BranchRun Graph Binding",
+            f"Execution path: {chapter.execution_path}",
+            f"Tree id: {chapter.tree_id or 'none'}",
+            f"Branch id: {chapter.branch_id or 'none'}",
+            f"Current start KnowledgeNode: {chapter.graph_node_id or 'none'}",
+            f"Coverage node ids: {', '.join(chapter.required_nodes) or 'none'}",
             f"Source collections: {', '.join(_chapter_source_collections(chapter)) or 'none'}",
             "",
         ]
         if chapter.graph_node_id:
             graph = self._load_knowledge_graph()
             lines.append(build_selected_node_context(graph, node_id=chapter.graph_node_id))
-        return "\n".join(lines).strip()
+        sections.append("\n".join(lines).strip())
+        return "\n\n".join(section for section in sections if section).strip()
 
     def _source_collections_for_chapter(self, chapter_name: str) -> list[str]:
         state_mgr = getattr(self, "state_mgr", None)
@@ -1126,6 +1359,38 @@ def _trim_payload_text(text: str, limit: int = 4000) -> str:
     return text[:limit].rstrip() + "\n\n[TRUNCATED]"
 
 
+def _hit_path(hit: dict[str, Any]) -> str:
+    metadata = hit.get("metadata") or {}
+    return str(metadata.get("path") or metadata.get("filename") or metadata.get("doc_id") or "")
+
+
+def _allowed_finished_paths_for_engine(
+    engine: object,
+    chapter_name: str,
+    covered_node_ids: list[str] | None = None,
+) -> set[str] | None:
+    method = getattr(engine, "_allowed_finished_paths_for_chapter_span", None)
+    if method is not None:
+        return method(chapter_name, covered_node_ids)
+    method = getattr(engine, "_allowed_finished_paths_for_chapter", None)
+    if method is None:
+        return None
+    return method(chapter_name)
+
+
+def _prior_finished_context_for_engine(
+    engine: object,
+    chapter_name: str,
+    covered_node_ids: list[str] | None = None,
+) -> tuple[list[str], list[str], set[str] | None]:
+    method = getattr(engine, "_prior_finished_context", None)
+    if method is not None:
+        return method(chapter_name, covered_node_ids)
+    root = engine.settings.project_root
+    paths_list = file_ops.list_prior_paths(root, chapter_name)
+    return [str(path) for path in paths_list], file_ops.read_prior_files(root, chapter_name), None
+
+
 def _completed_source_collections(state: PipelineState | None) -> set[str]:
     if state is None:
         return set()
@@ -1147,21 +1412,31 @@ def _chapter_source_collections(chapter: object | None) -> list[str]:
     return collections
 
 
-def _chapter_graph_hit_chunks(root: Path, chapter: object | None) -> list[str]:
-    graph_node_id = getattr(chapter, "graph_node_id", None)
-    if not graph_node_id:
+def _chapter_graph_hit_chunks(
+    root: Path,
+    chapter: object | None,
+    node_ids: list[str] | None = None,
+) -> list[str]:
+    target_node_ids = _unique(
+        [
+            *(node_ids or []),
+            *([getattr(chapter, "graph_node_id", None)] if getattr(chapter, "graph_node_id", None) else []),
+        ]
+    )
+    if not target_node_ids:
         return []
     graph = load_knowledge_graph(root)
+    chunks = []
     for node in graph.get("nodes", []):
-        if isinstance(node, dict) and node.get("node_id") == graph_node_id:
-            chunks = _string_list(node.get("hit_chunks"))
-            if chunks:
-                return chunks
+        if isinstance(node, dict) and node.get("node_id") in target_node_ids:
+            chunks.extend(_string_list(node.get("hit_chunks")))
+    if chunks:
+        return _unique(chunks)
     candidate_nodes = load_candidate_nodes(root)
     for candidate in candidate_nodes.get("chapter_candidates", []):
-        if isinstance(candidate, dict) and candidate.get("candidate_id") == graph_node_id:
-            return _candidate_hit_chunks(candidate)
-    return []
+        if isinstance(candidate, dict) and candidate.get("candidate_id") in target_node_ids:
+            chunks.extend(_candidate_hit_chunks(candidate))
+    return _unique(chunks)
 
 
 def _candidate_hit_chunks(candidate: dict[str, Any]) -> list[str]:
@@ -1196,68 +1471,6 @@ def _unique(values: Any) -> list[str]:
     return result
 
 
-def _attach_graph_selection(
-    scan_result: ChapterScanResult | None,
-    knowledge_graph: dict[str, Any],
-) -> ChapterScanResult | None:
-    if scan_result is None:
-        return scan_result
-    planner_selected = _planner_selected_node(knowledge_graph)
-    selected = planner_selected or _match_graph_node(scan_result, knowledge_graph)
-    if selected is None:
-        return scan_result
-    required_nodes = list(selected.get("required_nodes", []))
-    source_collections = list(selected.get("source_collections", [])) or scan_result.source_collections
-    source_collection = selected.get("primary_source_collection") or scan_result.source_collection
-    planner = knowledge_graph.get("planner") or {}
-    return scan_result.model_copy(
-        update={
-            "graph_node_id": selected.get("node_id"),
-            "required_nodes": required_nodes,
-            "parent_output": selected.get("parent_output"),
-            "is_new_root": bool(selected.get("is_new_root")),
-            "selection_mode": str(planner.get("selection_mode") or ""),
-            "source_collection": source_collection,
-            "source_collections": source_collections,
-        }
-    )
-
-
-def _planner_selected_node(knowledge_graph: dict[str, Any]) -> dict[str, Any] | None:
-    selected_id = (knowledge_graph.get("planner") or {}).get("selected_node")
-    if not selected_id:
-        return None
-    for node in knowledge_graph.get("nodes", []):
-        if isinstance(node, dict) and node.get("node_id") == selected_id:
-            return node
-    return None
-
-
-def _match_graph_node(scan_result: ChapterScanResult, knowledge_graph: dict[str, Any]) -> dict[str, Any] | None:
-    nodes = [
-        node
-        for node in knowledge_graph.get("nodes", [])
-        if isinstance(node, dict) and node.get("status") == "planned"
-    ]
-    if not nodes:
-        return None
-    primary = scan_result.source_collection
-    if primary:
-        for node in nodes:
-            if node.get("primary_source_collection") == primary:
-                return node
-    selected_collections = set(scan_result.source_collections or [])
-    if selected_collections:
-        ranked = sorted(
-            nodes,
-            key=lambda node: len(selected_collections & set(node.get("source_collections", []))),
-            reverse=True,
-        )
-        if selected_collections & set(ranked[0].get("source_collections", [])):
-            return ranked[0]
-    return None
-
-
 def _chapter_name_from_required_nodes(required_nodes: list[str]) -> str | None:
     for node_id in required_nodes:
         if not node_id.startswith("finished:"):
@@ -1265,8 +1478,60 @@ def _chapter_name_from_required_nodes(required_nodes: list[str]) -> str | None:
         rel = node_id.removeprefix("finished:")
         parts = Path(rel).parts
         if len(parts) >= 3 and parts[0] == "outputs":
-            return parts[1]
+            return "/".join(parts[1:-1])
     return None
+
+
+def _tree_id_for_branch_execution(
+    branch: dict[str, Any],
+    state: PipelineState,
+    ledger: dict[str, Any],
+) -> str:
+    upstream_ids = set(_string_list(branch.get("upstream_branch_ids")))
+    if upstream_ids:
+        for execution in state.chapters:
+            if execution.branch_id in upstream_ids and execution.tree_id:
+                return execution.tree_id
+        start_node = str(branch.get("start_node_id") or "")
+        for record in ledger.get("records", []):
+            if not isinstance(record, dict):
+                continue
+            covered = set(_string_list(record.get("covered_node_ids")))
+            graph_node_id = str(record.get("graph_node_id") or "")
+            if start_node and (start_node in covered or start_node == graph_node_id):
+                tree_id = str(record.get("tree_id") or "").strip()
+                if tree_id:
+                    return tree_id
+                execution_path = str(record.get("execution_path") or record.get("chapter") or "")
+                parts = [part for part in execution_path.split("/") if part]
+                if parts:
+                    return parts[0]
+    return next_tree_id(state)
+
+
+def _branch_plan_blockage(branches_doc: dict[str, Any]) -> str:
+    branches = [item for item in branches_doc.get("branches", []) if isinstance(item, dict)]
+    if not branches:
+        return ""
+    if any(branch.get("status") in {"ready", "running"} for branch in branches):
+        return ""
+    if all(branch.get("status") == "complete" for branch in branches):
+        return ""
+    diagnostics = [item for item in branches_doc.get("diagnostics", []) if isinstance(item, dict)]
+    if diagnostics:
+        kinds = _unique(str(item.get("kind") or "diagnostic") for item in diagnostics)
+        return ", ".join(kinds)
+    blocked = [branch for branch in branches if branch.get("status") == "blocked"]
+    if blocked:
+        reasons = _unique(str(branch.get("blocked_reason") or "blocked") for branch in blocked)
+        return ", ".join(reasons)
+    return ""
+
+
+def _branch_chapter_slug(branch_id: str) -> str:
+    slug = branch_id.replace(":", "-")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", slug).strip("-")
+    return slug or "branch"
 
 
 def persist_writer_result(

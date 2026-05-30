@@ -12,8 +12,11 @@ from tree.state.models import PipelineState
 
 def next_tree_id(state: PipelineState) -> str:
     """Return the next stable internal tree id."""
-    used = {chapter.chapter_name for chapter in state.chapters}
-    index = len(state.chapters) + 1
+    used = {
+        chapter.tree_id or _tree_id_from_chapter_name(chapter.chapter_name)
+        for chapter in state.chapters
+    }
+    index = len([item for item in used if item]) + 1
     while True:
         candidate = f"tree-{index:03d}"
         if candidate not in used:
@@ -117,3 +120,9 @@ def _unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _tree_id_from_chapter_name(chapter_name: str) -> str:
+    """Return the stable tree segment from branch-isolated chapter paths."""
+    parts = [part for part in str(chapter_name).split("/") if part]
+    return parts[0] if parts else str(chapter_name)

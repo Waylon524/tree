@@ -31,4 +31,6 @@ __pycache__/
 /1.pdf
 /tests/*
 !/tests/test_pipeline_resilience.py
+!/tests/test_semantic_planner_rebuild.py
+!/tests/test_branch_planner.py
 /tree_engine/docs/*refactor*.md

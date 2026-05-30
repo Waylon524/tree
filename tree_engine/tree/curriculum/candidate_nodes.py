@@ -1,4 +1,4 @@
-"""Candidate knowledge nodes built from source inventory."""
+"""Legacy KnowledgeNode compatibility schema backed by candidate-nodes.json."""
 
 from __future__ import annotations
 
@@ -88,6 +88,12 @@ def rebuild_candidate_nodes(
 ) -> dict[str, Any]:
     """Build deterministic candidate knowledge nodes from inventory chunks."""
     completed_collections = completed_collections or set()
+    groups = _inventory_groups(inventory)
+    if groups:
+        candidate_nodes = _rebuild_inventory_group_nodes(groups, completed_collections)
+        save_candidate_nodes(root, candidate_nodes)
+        return candidate_nodes
+
     chunks = _inventory_chunks(inventory)
     if chunks:
         candidate_nodes = _rebuild_chunk_cluster_nodes(inventory, chunks, completed_collections)
@@ -235,20 +241,20 @@ async def rebuild_candidate_nodes_with_ai(
 
 
 def build_candidate_nodes_context(candidate_nodes: dict[str, Any], limit: int = 10) -> str:
-    """Format candidate knowledge nodes for examiner Phase C."""
+    """Format the legacy KnowledgeNode compatibility schema for debug contexts."""
     candidates = [
         item
         for item in candidate_nodes.get("chapter_candidates", [])
         if isinstance(item, dict)
     ]
     lines = [
-        "## Candidate Knowledge Nodes",
-        "These are possible knowledge-point nodes generated from source inventory.",
+        "## KnowledgeNodes",
+        "These are canonical teaching nodes generated from KnowledgeGroup inventory.",
         "They are not the curriculum order; the deterministic graph planner selects direction.",
         "",
     ]
     if not candidates:
-        lines.append("(no candidate knowledge nodes available)")
+        lines.append("(no KnowledgeNodes available)")
         return "\n".join(lines)
 
     for candidate in candidates[:limit]:
@@ -316,11 +322,208 @@ def _inventory_chunks(inventory: dict[str, Any]) -> list[dict[str, Any]]:
             "methods": _string_list(raw.get("methods")),
             "formulas": _string_list(raw.get("formulas")),
             "summary": str(raw.get("summary") or ""),
+            "source_type": str(raw.get("source_type") or ""),
+            "teaching_role": str(raw.get("teaching_role") or ""),
+            "low_confidence_section_terms": _string_list(raw.get("low_confidence_section_terms")),
         }
         chunk["signature_terms"] = _knowledge_signature_terms(chunk)
         chunks.append(chunk)
     chunks.sort(key=_chunk_sort_key)
     return chunks
+
+
+def _inventory_groups(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = []
+    for index, raw in enumerate(inventory.get("knowledge_groups", []), start=1):
+        if not isinstance(raw, dict):
+            continue
+        group_id = str(raw.get("group_id") or f"kg:{index:04d}")
+        source_chunks = _string_list(raw.get("source_chunks"))
+        raw_collections = raw.get("source_collections")
+        fallback_collection = raw_collections[0] if isinstance(raw_collections, list) and raw_collections else ""
+        source_collection = str(raw.get("source_collection") or fallback_collection)
+        if not source_chunks or not source_collection:
+            continue
+        group = {
+            **raw,
+            "_cluster_id": group_id,
+            "group_id": group_id,
+            "source_collection": source_collection,
+            "source_collections": _string_list(raw.get("source_collections")) or [source_collection],
+            "source_chunks": source_chunks,
+            "source_paths": _string_list(raw.get("source_paths")),
+            "section_ids": _string_list(raw.get("section_ids")),
+            "heading_path": _string_list(raw.get("heading_path")),
+            "core_concepts": _string_list(raw.get("core_concepts")),
+            "weak_concepts": _string_list(raw.get("weak_concepts")),
+            "prerequisites": _string_list(raw.get("prerequisites")),
+            "methods": _string_list(raw.get("methods")),
+            "raw_formulas": _string_list(raw.get("raw_formulas") or raw.get("formulas")),
+            "formula_signatures": _string_list(raw.get("formula_signatures")),
+            "formula_roles": raw.get("formula_roles", []) if isinstance(raw.get("formula_roles"), list) else [],
+            "low_confidence_section_terms": _string_list(raw.get("low_confidence_section_terms")),
+            "title_hint": str(raw.get("title_hint") or ""),
+            "summary": str(raw.get("summary") or ""),
+            "teaching_role": str(raw.get("teaching_role") or ""),
+            "source_type": str(raw.get("source_type") or ""),
+            "completeness": str(raw.get("completeness") or ""),
+            "representative_chunks": _group_representative_chunks(raw),
+            "length_stats": raw.get("length_stats") if isinstance(raw.get("length_stats"), dict) else {},
+        }
+        group["signature_terms"] = _knowledge_signature_terms(group)
+        groups.append(group)
+    groups.sort(key=_group_sort_key)
+    return groups
+
+
+def _rebuild_inventory_group_nodes(
+    groups: list[dict[str, Any]],
+    completed_collections: set[str],
+) -> dict[str, Any]:
+    candidates = [_candidate_from_group(group, completed_collections) for group in groups]
+    candidates.sort(
+        key=lambda item: (
+            item.get("status") != "pending",
+            len(item.get("prerequisite_candidates", []) or []),
+            len(item.get("prerequisite_concepts", []) or []),
+            -float(item.get("selection_priority", 0)),
+            _natural_key(str(item.get("primary_source_collection", ""))),
+            str(item.get("candidate_id", "")),
+        )
+    )
+    return {
+        "version": 1,
+        "kind": "candidate_nodes",
+        "generator": "inventory_group_v1",
+        "group_pair_metrics": _ranked_group_pair_metrics(groups),
+        "chapter_candidates": candidates,
+    }
+
+
+def _candidate_from_group(group: dict[str, Any], completed_collections: set[str]) -> dict[str, Any]:
+    primary = str(group.get("source_collection") or "unknown")
+    source_collections = _string_list(group.get("source_collections")) or [primary]
+    status = "completed" if source_collections and set(source_collections).issubset(completed_collections) else "pending"
+    concepts = _string_list(group.get("core_concepts"))
+    weak_concepts = _string_list(group.get("weak_concepts"))
+    methods = _string_list(group.get("methods"))
+    formulas = _string_list(group.get("raw_formulas") or group.get("formulas"))
+    length_stats = group.get("length_stats") if isinstance(group.get("length_stats"), dict) else {}
+    estimated_lines = _int(length_stats.get("estimated_output_lines"), 0) or _estimated_output_lines(
+        [{"core_concepts": concepts, "methods": methods, "formulas": formulas}],
+        concepts,
+        methods,
+        formulas,
+    )
+    title = str(group.get("title_hint") or "") or _title_hint(concepts or weak_concepts, primary)
+    low_confidence_terms = _string_list(group.get("low_confidence_section_terms"))
+    title = _clean_title_hint(title, low_confidence_terms, primary)
+    return {
+        "candidate_id": f"candidate:{primary}:{_stable_group_suffix(group)}",
+        "status": status,
+        "title_hint": title,
+        "canonical_title": title,
+        "primary_source_collection": primary,
+        "source_collections": source_collections,
+        "merged_group_ids": [group.get("group_id")],
+        "core_concepts": concepts,
+        "weak_concepts": weak_concepts,
+        "prerequisite_concepts": _string_list(group.get("prerequisites")),
+        "prerequisite_candidates": [],
+        "methods": methods,
+        "formulas": formulas,
+        "formula_signatures": _string_list(group.get("formula_signatures")),
+        "formula_roles": group.get("formula_roles", [])[:12],
+        "section_ids": _string_list(group.get("section_ids"))[:16],
+        "low_confidence_terms": low_confidence_terms[:16],
+        "source_types": _string_list(group.get("source_type")),
+        "teaching_roles": _string_list(group.get("teaching_role")),
+        "representative_chunks": group.get("representative_chunks", [])[:8],
+        "chunk_count": len(group.get("source_chunks", [])),
+        "estimated_output_lines": estimated_lines,
+        "size_band": _size_band(estimated_lines),
+        "cluster_cohesion": 1.0,
+        "selection_priority": _group_selection_priority(group, concepts, status),
+        "coverage_evidence": _string_list(group.get("evidence_spans")),
+        "root_features": {},
+        "reason": _group_reason(group, concepts, status),
+    }
+
+
+def _ranked_group_pair_metrics(groups: list[dict[str, Any]], limit: int = 60) -> list[dict[str, Any]]:
+    metrics = []
+    for index, left in enumerate(groups):
+        for right in groups[index + 1 :]:
+            item = _group_pair_metrics(left, right)
+            if item["overall_similarity"] <= 0:
+                continue
+            metrics.append(item)
+    metrics.sort(
+        key=lambda item: (
+            -float(item.get("overall_similarity") or 0),
+            item.get("left_group_id", ""),
+            item.get("right_group_id", ""),
+        )
+    )
+    return metrics[:limit]
+
+
+def _group_pair_metrics(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    heading_section = max(
+        _overlap_score(
+            set(left.get("section_ids", [])),
+            set(right.get("section_ids", [])),
+        ),
+        _overlap_score(
+            _term_set(left.get("heading_path", [])),
+            _term_set(right.get("heading_path", [])),
+        ),
+    )
+    concept = max(
+        _overlap_score(_term_set(left.get("core_concepts", [])), _term_set(right.get("core_concepts", []))),
+        _overlap_score(_term_set(left.get("weak_concepts", [])), _term_set(right.get("weak_concepts", []))) * 0.55,
+    )
+    formula = _overlap_score(set(left.get("formula_signatures", [])), set(right.get("formula_signatures", [])))
+    source = _overlap_score(set(left.get("source_paths", [])), set(right.get("source_paths", [])))
+    if set(left.get("source_collections", [])) & set(right.get("source_collections", [])):
+        source = max(source, 0.5)
+    left_tokens = max(1, _int(left.get("length_stats", {}).get("token_estimate"), 1))
+    right_tokens = max(1, _int(right.get("length_stats", {}).get("token_estimate"), 1))
+    token_ratio = min(left_tokens, right_tokens) / max(left_tokens, right_tokens)
+    chunk_distance = _group_chunk_distance(left, right)
+    adjacency = 1.0 if chunk_distance is not None and chunk_distance <= 1 else 0.0
+    overall = (
+        heading_section * 0.16
+        + concept * 0.32
+        + formula * 0.24
+        + source * 0.10
+        + token_ratio * 0.06
+        + adjacency * 0.12
+    )
+    return {
+        "left_group_id": left.get("group_id"),
+        "right_group_id": right.get("group_id"),
+        "heading_section_continuity": round(heading_section, 4),
+        "embedding_similarity": None,
+        "concept_overlap": round(concept, 4),
+        "formula_overlap": round(formula, 4),
+        "source_path_continuity": round(source, 4),
+        "token_length_ratio": round(token_ratio, 4),
+        "chunk_index_distance": chunk_distance,
+        "overall_similarity": round(min(1.0, overall), 4),
+    }
+
+
+def _group_chunk_distance(left: dict[str, Any], right: dict[str, Any]) -> int | None:
+    if not (set(left.get("source_paths", [])) & set(right.get("source_paths", []))):
+        return None
+    left_range = left.get("chunk_range", {}) if isinstance(left.get("chunk_range"), dict) else {}
+    right_range = right.get("chunk_range", {}) if isinstance(right.get("chunk_range"), dict) else {}
+    return max(
+        0,
+        max(_int(left_range.get("start")), _int(right_range.get("start")))
+        - min(_int(left_range.get("end")), _int(right_range.get("end"))),
+    )
 
 
 def _chunk_cluster_node(chunk: dict[str, Any]) -> dict[str, Any]:
@@ -454,6 +657,10 @@ def _candidate_from_cluster(
     methods = _ranked_terms((chunk.get("methods", []) for chunk in cluster), limit=16)
     formulas = _ranked_terms((chunk.get("formulas", []) for chunk in cluster), limit=12)
     section_ids = _unique(chunk.get("section_id", "") for chunk in cluster)[:16]
+    low_confidence_terms = _ranked_terms(
+        (chunk.get("low_confidence_section_terms", []) for chunk in cluster),
+        limit=16,
+    )
     representative_chunks = [_representative_chunk(chunk) for chunk in cluster[:8]]
     related_collections = _cluster_related_collections(
         source_collections,
@@ -472,6 +679,9 @@ def _candidate_from_cluster(
         "formulas": formulas,
         "prerequisite_candidates": [],
         "section_ids": section_ids,
+        "low_confidence_terms": low_confidence_terms,
+        "source_types": _unique(chunk.get("source_type", "") for chunk in cluster)[:8],
+        "teaching_roles": _unique(chunk.get("teaching_role", "") for chunk in cluster)[:8],
         "representative_chunks": representative_chunks,
         "chunk_count": len(cluster),
         "estimated_output_lines": _estimated_output_lines(cluster, concepts, methods, formulas),
@@ -487,8 +697,75 @@ def _representative_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
     return {
         "chunk_ref": chunk.get("chunk_ref", ""),
         "core_concepts": chunk.get("core_concepts", [])[:8],
+        "prerequisites": chunk.get("prerequisites", [])[:8],
+        "section_id": chunk.get("section_id", ""),
+        "source_type": chunk.get("source_type", ""),
+        "teaching_role": chunk.get("teaching_role", ""),
+        "low_confidence_section_terms": chunk.get("low_confidence_section_terms", [])[:8],
         "summary": chunk.get("summary", ""),
     }
+
+
+def _group_representative_chunks(group: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = group.get("representative_chunks")
+    if isinstance(existing, list) and existing:
+        return [
+            item
+            for item in existing
+            if isinstance(item, dict) and str(item.get("chunk_ref") or "").strip()
+        ][:8]
+    source_chunks = _string_list(group.get("source_chunks"))
+    concepts = _string_list(group.get("core_concepts"))
+    prereqs = _string_list(group.get("prerequisites"))
+    formulas = _string_list(group.get("formula_signatures"))
+    sections = _string_list(group.get("section_ids"))
+    return [
+        {
+            "chunk_ref": chunk_ref,
+            "core_concepts": concepts[:8],
+            "weak_concepts": _string_list(group.get("weak_concepts"))[:8],
+            "prerequisites": prereqs[:8],
+            "formula_signatures": formulas[:8],
+            "section_id": sections[0] if sections else "",
+            "source_type": str(group.get("source_type") or ""),
+            "teaching_role": str(group.get("teaching_role") or ""),
+            "summary": str(group.get("summary") or ""),
+        }
+        for chunk_ref in source_chunks[:8]
+    ]
+
+
+def _stable_group_suffix(group: dict[str, Any]) -> str:
+    basis = str(group.get("group_id") or "") or "\n".join(_string_list(group.get("source_chunks")))
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:10]
+
+
+def _group_selection_priority(group: dict[str, Any], concepts: list[str], status: str) -> float:
+    if status != "pending":
+        return 0.0
+    chunk_count = len(group.get("source_chunks", []) or [])
+    completeness_bonus = 0.12 if str(group.get("completeness") or "").lower() in {"complete", "完整"} else 0.0
+    return min(1.0, len(concepts) / 18 * 0.50 + chunk_count / 8 * 0.38 + completeness_bonus)
+
+
+def _group_reason(group: dict[str, Any], concepts: list[str], status: str) -> str:
+    prefix = "Already completed inventory knowledge group." if status == "completed" else "Pending inventory knowledge group."
+    return (
+        f"{prefix} Group: {group.get('group_id')}. "
+        f"Chunks: {', '.join(group.get('source_chunks', [])[:6]) or 'n/a'}. "
+        f"Core concepts: {', '.join(concepts[:8]) or 'n/a'}."
+    )
+
+
+def _group_sort_key(group: dict[str, Any]) -> tuple[Any, ...]:
+    source_paths = group.get("source_paths", []) or [""]
+    chunk_range = group.get("chunk_range", {}) if isinstance(group.get("chunk_range"), dict) else {}
+    return (
+        _natural_key(str(group.get("source_collection", ""))),
+        str(source_paths[0]),
+        _int(chunk_range.get("start")),
+        str(group.get("group_id", "")),
+    )
 
 
 def _stable_cluster_suffix(cluster: list[dict[str, Any]], concepts: list[str]) -> str:
@@ -667,18 +944,44 @@ def _selection_priority(collection: dict[str, Any], status: str) -> float:
 
 def _inventory_summary_for_ai(inventory: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
     return {
+        "knowledge_groups": [
+            {
+                "group_id": item.get("group_id"),
+                "title_hint": item.get("title_hint"),
+                "source_chunks": item.get("source_chunks", [])[:12],
+                "source_paths": item.get("source_paths", [])[:6],
+                "source_collection": item.get("source_collection"),
+                "chunk_range": item.get("chunk_range", {}),
+                "core_concepts": item.get("core_concepts", [])[:18],
+                "weak_concepts": item.get("weak_concepts", [])[:12],
+                "prerequisites": item.get("prerequisites", [])[:12],
+                "formula_roles": item.get("formula_roles", [])[:8],
+                "formula_signatures": item.get("formula_signatures", [])[:8],
+                "teaching_role": item.get("teaching_role"),
+                "completeness": item.get("completeness"),
+                "length_stats": item.get("length_stats", {}),
+            }
+            for item in inventory.get("knowledge_groups", [])
+            if isinstance(item, dict)
+        ],
+        "group_pair_metrics": fallback.get("group_pair_metrics", [])[:60],
         "candidate_nodes": [
             {
                 "candidate_id": item.get("candidate_id"),
+                "merged_group_ids": item.get("merged_group_ids", []),
                 "title_hint": item.get("title_hint"),
                 "primary_source_collection": item.get("primary_source_collection"),
                 "source_collections": item.get("source_collections", []),
                 "core_concepts": item.get("core_concepts", [])[:18],
                 "prerequisite_concepts": item.get("prerequisite_concepts", [])[:12],
+                "formula_roles": item.get("formula_roles", [])[:8],
+                "estimated_output_lines": item.get("estimated_output_lines"),
                 "representative_chunks": [
                     {
                         "chunk_ref": chunk.get("chunk_ref"),
                         "core_concepts": chunk.get("core_concepts", [])[:8],
+                        "prerequisites": chunk.get("prerequisites", [])[:8],
+                        "formula_signatures": chunk.get("formula_signatures", [])[:8],
                         "summary": chunk.get("summary", ""),
                     }
                     for chunk in item.get("representative_chunks", [])[:6]
@@ -736,16 +1039,18 @@ def _normalize_ai_map(
     for index, raw in enumerate(ai_map.get("chapter_candidates", []), start=1):
         if not isinstance(raw, dict):
             continue
-        raw_id = str(raw.get("candidate_id") or "")
         primary = str(raw.get("primary_source_collection") or "")
-        fallback_item = fallback_by_id.get(raw_id)
-        if fallback_item is None:
-            fallback_item = _next_unused_fallback_for_collection(
-                fallback_by_collection.get(primary, []),
-                used_ids,
-            )
-        if fallback_item is None:
+        fallback_items_for_raw = _fallback_items_for_ai_raw(
+            raw,
+            fallback_items,
+            fallback_by_id,
+            fallback_by_collection,
+            used_ids,
+            primary,
+        )
+        if not fallback_items_for_raw:
             continue
+        fallback_item = _combine_fallback_items(fallback_items_for_raw)
         primary = str(fallback_item.get("primary_source_collection") or primary)
         collections = [
             item
@@ -757,26 +1062,50 @@ def _normalize_ai_map(
         candidate_id = str(raw.get("candidate_id") or fallback_item.get("candidate_id") or f"candidate:{primary}:{index:02d}")
         if not candidate_id.startswith("candidate:"):
             candidate_id = f"candidate:{index:02d}:{primary}"
+        representative_chunks = _normalize_representative_chunks(
+            raw.get("representative_chunks"),
+            fallback_item.get("representative_chunks", []),
+        )
+        low_confidence_terms = _combined_low_confidence_terms(fallback_item, representative_chunks)
+        core_concepts = _filter_low_confidence_terms(
+            _string_list(raw.get("core_concepts")) or fallback_item.get("core_concepts", []),
+            low_confidence_terms,
+        )
+        prerequisite_concepts = _combined_prerequisite_concepts(raw, fallback_item, representative_chunks)
+        title_hint = _clean_title_hint(
+            str(raw.get("canonical_title") or raw.get("title_hint") or fallback_item.get("title_hint") or primary),
+            low_confidence_terms,
+            fallback_item.get("title_hint") or primary,
+        )
         candidates.append(
             {
                 **fallback_item,
                 "candidate_id": candidate_id,
                 "status": "completed" if set(collections).issubset(completed_collections) else "pending",
-                "title_hint": str(raw.get("title_hint") or fallback_item.get("title_hint") or primary),
+                "title_hint": title_hint,
+                "canonical_title": title_hint,
                 "primary_source_collection": primary,
                 "source_collections": collections,
-                "core_concepts": _string_list(raw.get("core_concepts")) or fallback_item.get("core_concepts", []),
-                "prerequisite_concepts": _string_list(raw.get("prerequisite_concepts")),
+                "merged_group_ids": _string_list(raw.get("merged_group_ids")) or fallback_item.get("merged_group_ids", []),
+                "core_concepts": core_concepts,
+                "prerequisite_concepts": prerequisite_concepts,
                 "prerequisite_candidates": _string_list(raw.get("prerequisite_candidates")),
-                "representative_chunks": _normalize_representative_chunks(
-                    raw.get("representative_chunks"),
-                    fallback_item.get("representative_chunks", []),
-                ),
+                "representative_chunks": representative_chunks,
+                "low_confidence_terms": low_confidence_terms,
+                "formula_roles": raw.get("formula_roles", fallback_item.get("formula_roles", []))
+                if isinstance(raw.get("formula_roles", fallback_item.get("formula_roles", [])), list)
+                else fallback_item.get("formula_roles", []),
+                "coverage_evidence": _string_list(raw.get("coverage_evidence")) or fallback_item.get("coverage_evidence", []),
+                "teaching_roles": _string_list(raw.get("teaching_role")) or fallback_item.get("teaching_roles", []),
+                "completeness": str(raw.get("completeness") or fallback_item.get("completeness") or ""),
+                "root_features": raw.get("root_features", fallback_item.get("root_features", {}))
+                if isinstance(raw.get("root_features", fallback_item.get("root_features", {})), dict)
+                else {},
                 "reason": str(raw.get("reason") or fallback_item.get("reason") or ""),
                 "candidate_node_mode": "ai",
             }
         )
-        used_ids.add(fallback_item.get("candidate_id"))
+        used_ids.update(item.get("candidate_id") for item in fallback_items_for_raw)
     if not candidates:
         return fallback
     for item in fallback_items:
@@ -807,6 +1136,94 @@ def _next_unused_fallback_for_collection(
         if candidate_id not in used_ids:
             return item
     return None
+
+
+def _fallback_items_for_ai_raw(
+    raw: dict[str, Any],
+    fallback_items: list[dict[str, Any]],
+    fallback_by_id: dict[Any, dict[str, Any]],
+    fallback_by_collection: dict[str, list[dict[str, Any]]],
+    used_ids: set[str],
+    primary: str,
+) -> list[dict[str, Any]]:
+    result = []
+    raw_id = str(raw.get("candidate_id") or "")
+    if raw_id in fallback_by_id:
+        result.append(fallback_by_id[raw_id])
+    merged_group_ids = set(_string_list(raw.get("merged_group_ids")))
+    if merged_group_ids:
+        for item in fallback_items:
+            if merged_group_ids & set(_string_list(item.get("merged_group_ids"))):
+                result.append(item)
+    refs = set(_string_list(raw.get("representative_chunks")))
+    if refs:
+        for item in fallback_items:
+            item_refs = {chunk.get("chunk_ref") for chunk in item.get("representative_chunks", []) if isinstance(chunk, dict)}
+            if refs & item_refs:
+                result.append(item)
+    if not result:
+        fallback = _next_unused_fallback_for_collection(fallback_by_collection.get(primary, []), used_ids)
+        if fallback is not None:
+            result.append(fallback)
+    unique = []
+    seen = set()
+    for item in result:
+        candidate_id = str(item.get("candidate_id") or "")
+        if not candidate_id or candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        unique.append(item)
+    return unique
+
+
+def _combine_fallback_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(items) == 1:
+        return dict(items[0])
+    first = items[0]
+    representative_chunks = [
+        chunk
+        for item in items
+        for chunk in item.get("representative_chunks", []) or []
+        if isinstance(chunk, dict)
+    ]
+    concepts = _ranked_terms((item.get("core_concepts", []) for item in items), 24)
+    methods = _ranked_terms((item.get("methods", []) for item in items), 16)
+    formulas = _ranked_terms((item.get("formulas", []) for item in items), 16)
+    estimated_lines = sum(_int(item.get("estimated_output_lines"), 0) for item in items)
+    return {
+        **first,
+        "candidate_id": str(first.get("candidate_id") or ""),
+        "title_hint": _title_hint(concepts, str(first.get("title_hint") or "")),
+        "source_collections": _unique(
+            collection
+            for item in items
+            for collection in _string_list(item.get("source_collections"))
+        ),
+        "merged_group_ids": _unique(
+            group_id
+            for item in items
+            for group_id in _string_list(item.get("merged_group_ids"))
+        ),
+        "core_concepts": concepts,
+        "prerequisite_concepts": _ranked_terms((item.get("prerequisite_concepts", []) for item in items), 16),
+        "methods": methods,
+        "formulas": formulas,
+        "formula_signatures": _ranked_terms((item.get("formula_signatures", []) for item in items), 16),
+        "formula_roles": [
+            role
+            for item in items
+            for role in item.get("formula_roles", []) or []
+            if isinstance(role, dict)
+        ][:16],
+        "representative_chunks": representative_chunks[:12],
+        "chunk_count": sum(int(item.get("chunk_count") or 0) for item in items),
+        "estimated_output_lines": estimated_lines,
+        "size_band": _size_band(estimated_lines),
+        "cluster_cohesion": round(
+            sum(float(item.get("cluster_cohesion") or 0) for item in items) / max(1, len(items)),
+            4,
+        ),
+    }
 
 
 def _sort_candidates_by_prerequisites(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -842,6 +1259,58 @@ def _normalize_representative_chunks(value: Any, fallback: list[dict[str, Any]])
         return fallback
     matched = [chunk for chunk in fallback if chunk.get("chunk_ref") in refs]
     return matched or fallback
+
+
+def _combined_prerequisite_concepts(
+    raw: dict[str, Any],
+    fallback: dict[str, Any],
+    representative_chunks: list[dict[str, Any]],
+) -> list[str]:
+    return _unique(
+        [
+            *_string_list(raw.get("prerequisite_concepts")),
+            *_string_list(fallback.get("prerequisite_concepts")),
+            *[
+                prereq
+                for chunk in representative_chunks
+                for prereq in _string_list(chunk.get("prerequisites"))
+            ],
+        ]
+    )[:16]
+
+
+def _combined_low_confidence_terms(
+    fallback: dict[str, Any],
+    representative_chunks: list[dict[str, Any]],
+) -> list[str]:
+    return _unique(
+        [
+            *_string_list(fallback.get("low_confidence_terms")),
+            *[
+                term
+                for chunk in representative_chunks
+                for term in _string_list(chunk.get("low_confidence_section_terms"))
+            ],
+        ]
+    )[:16]
+
+
+def _filter_low_confidence_terms(terms: list[str], low_confidence_terms: list[str]) -> list[str]:
+    low_confidence = set(low_confidence_terms)
+    return [term for term in terms if term not in low_confidence]
+
+
+def _clean_title_hint(title: str, low_confidence_terms: list[str], fallback: Any) -> str:
+    cleaned = title
+    for term in low_confidence_terms:
+        cleaned = cleaned.replace(term, "")
+    parts = [part for part in _SPLIT_RE.split(cleaned) if part and part not in _TITLE_STOPWORDS]
+    if parts:
+        return _title_hint(parts, str(fallback or title))
+    fallback_text = str(fallback or "").strip()
+    if fallback_text and fallback_text != title:
+        return _clean_title_hint(fallback_text, low_confidence_terms, "")
+    return title
 
 
 def _string_list(value: Any) -> list[str]:

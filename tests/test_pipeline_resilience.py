@@ -5,15 +5,67 @@ from types import SimpleNamespace
 import pytest
 
 import tree.engine as engine_module
-from tree.curriculum.candidate_nodes import rebuild_candidate_nodes, save_candidate_nodes
+from tree.agents.parsers import ParseError, parse_exam_output
+from tree.agents.prompts import EXAMINER_PROMPT, STUDENT_PROMPT, WRITER_PROMPT
+from tree.curriculum.candidate_nodes import rebuild_candidate_nodes, rebuild_candidate_nodes_with_ai, save_candidate_nodes
 from tree.curriculum.graph import build_selected_node_context, load_knowledge_graph, rebuild_knowledge_graph
+from tree.curriculum.inventory import rebuild_source_inventory, rebuild_source_inventory_with_ai
 from tree.curriculum.ledger import load_ledger
-from tree.engine import TreeEngine, _attach_graph_selection, _pending_materials, persist_writer_result
+from tree.engine import TreeEngine, _pending_materials, persist_writer_result
 from tree.io import paths
 from tree.rag.client import RAGClient
 from tree.state.manager import StateManager
-from tree.state.models import ChapterRecord, ChapterScanResult, ExamSections, IterationState, PipelineState, Route, WriterResult
+from tree.state.models import ChapterRecord, ExamSections, IterationState, PipelineState, Route, WriterResult
 from tree.agents.writer import WriterAgent
+
+
+def test_parse_exam_output_requires_covered_node_ids() -> None:
+    raw = """## [Next_Knowledge_Point]
+01. 变量
+
+## [Blind_Exam]
+Q1
+
+## [Answer_Key]
+A1
+
+## [Writer_Instructions]
+teach
+"""
+
+    with pytest.raises(ParseError, match="Covered_Node_IDs"):
+        parse_exam_output(raw)
+
+
+def test_parse_exam_output_reads_multiple_covered_node_ids() -> None:
+    raw = """## [Next_Knowledge_Point]
+01. 变量与表达式
+
+## [Covered_Node_IDs]
+candidate:variables, candidate:expressions
+
+## [Blind_Exam]
+Q1
+
+## [Answer_Key]
+A1
+
+## [Writer_Instructions]
+teach
+"""
+
+    sections = parse_exam_output(raw)
+
+    assert sections.covered_node_ids == ["candidate:variables", "candidate:expressions"]
+
+
+def test_branchrun_prompt_contract_removes_phase_c_and_adds_span_scope() -> None:
+    assert "Chapter Continuation Scan" not in EXAMINER_PROMPT
+    assert "Phase C" not in EXAMINER_PROMPT
+    assert "Covered_Node_IDs" in EXAMINER_PROMPT
+    assert "branch span" in WRITER_PROMPT
+    assert "exactly one knowledge point" not in WRITER_PROMPT
+    assert "BranchRun snapshot" in STUDENT_PROMPT
 
 
 class _Point:
@@ -31,9 +83,12 @@ def _planning_chunk(
     collection: str,
     concepts: list[str],
     *,
+    prerequisites: list[str] | None = None,
     methods: list[str] | None = None,
     formulas: list[str] | None = None,
     section_id: str = "",
+    source_type: str = "lecture",
+    teaching_role: str = "concept",
 ) -> dict:
     return {
         "chunk_ref": chunk_ref,
@@ -43,10 +98,12 @@ def _planning_chunk(
         "path": f"{collection}.md",
         "section_id": section_id,
         "core_concepts": concepts,
-        "prerequisites": [],
+        "prerequisites": prerequisites or [],
         "methods": methods or [],
         "formulas": formulas or [],
         "summary": " ".join(concepts),
+        "source_type": source_type,
+        "teaching_role": teaching_role,
     }
 
 
@@ -176,6 +233,33 @@ def test_writeable_chunk_cluster_merges_thin_same_section_chunks(tmp_path: Path)
     assert merged["size_band"] == "fit"
 
 
+def test_isolated_section_id_noise_does_not_become_core_concept_or_title(tmp_path: Path) -> None:
+    inventory = rebuild_source_inventory(
+        tmp_path,
+        [
+            {
+                "chunk_id": "noise-001",
+                "text": "这段正文介绍材料在外界条件干预下产生的现象，但没有出现这个误识别标题。",
+                "metadata": {
+                    "source_collection": "lesson",
+                    "filename": "lesson.md",
+                    "chunk_index": 1,
+                    "section_id": "划重奖",
+                    "chunk_type": "narrative",
+                },
+            }
+        ],
+    )
+
+    chunk = inventory["chunks"][0]
+    nodes = rebuild_candidate_nodes(tmp_path, inventory)
+    candidate = nodes["chapter_candidates"][0]
+
+    assert "划重奖" not in chunk["core_concepts"]
+    assert "划重奖" not in candidate["core_concepts"]
+    assert "划重奖" not in candidate["title_hint"]
+
+
 def test_candidate_node_ids_are_stable_when_unrelated_earlier_cluster_is_added(tmp_path: Path) -> None:
     base_inventory = {
         "version": 1,
@@ -218,6 +302,206 @@ def test_candidate_node_ids_are_stable_when_unrelated_earlier_cluster_is_added(t
     )
 
     assert expanded_loop["candidate_id"] == base_loop["candidate_id"]
+
+
+def test_inventory_ai_empty_prerequisites_can_clear_rule_prerequisites(tmp_path: Path) -> None:
+    class EmptyPrerequisiteAnalyzer:
+        async def analyze_source_chunk(self, chunk: dict) -> dict:
+            return {
+                "core_concepts": ["应用案例"],
+                "methods": [],
+                "misconceptions": [],
+                "prerequisites": [],
+                "source_type": "application",
+                "teaching_role": "application",
+                "summary": "应用案例",
+            }
+
+    inventory = asyncio.run(
+        rebuild_source_inventory_with_ai(
+            tmp_path,
+            [
+                {
+                    "chunk_id": "app-001",
+                    "text": "先修：基础概念。随后讲解一个应用案例。",
+                    "metadata": {
+                        "source_collection": "lesson",
+                        "filename": "lesson.md",
+                        "chunk_index": 1,
+                        "section_id": "应用案例",
+                    },
+                }
+            ],
+            EmptyPrerequisiteAnalyzer(),
+        )
+    )
+
+    assert inventory["chunks"][0]["prerequisites"] == []
+    assert inventory["chunks"][0]["core_concepts"] == ["应用案例"]
+
+
+def test_ai_candidate_keeps_fallback_and_representative_prerequisites(tmp_path: Path) -> None:
+    inventory = {
+        "version": 1,
+        "chunks": [
+            _planning_chunk(
+                "lesson#001",
+                "lesson",
+                ["应用案例"],
+                prerequisites=["基础概念"],
+                section_id="应用案例",
+                source_type="application",
+                teaching_role="application",
+            )
+        ],
+        "collections": [{"source_collection": "lesson", "core_concepts": ["应用案例"], "related_collections": []}],
+    }
+    fallback = rebuild_candidate_nodes(tmp_path, inventory)
+    fallback_candidate = fallback["chapter_candidates"][0]
+
+    class EmptyPrerequisiteBuilder:
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            return {
+                "chapter_candidates": [
+                    {
+                        "candidate_id": fallback_candidate["candidate_id"],
+                        "title_hint": "应用案例",
+                        "primary_source_collection": "lesson",
+                        "source_collections": ["lesson"],
+                        "core_concepts": ["应用案例"],
+                        "prerequisite_concepts": [],
+                        "prerequisite_candidates": [],
+                        "representative_chunks": ["lesson#001"],
+                        "reason": "application node",
+                    }
+                ]
+            }
+
+    nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, EmptyPrerequisiteBuilder()))
+    candidate = nodes["chapter_candidates"][0]
+
+    assert "基础概念" in candidate["prerequisite_concepts"]
+
+
+def test_candidate_ai_canonical_title_does_not_reintroduce_low_confidence_section_noise(tmp_path: Path) -> None:
+    inventory = {
+        "version": 2,
+        "knowledge_groups": [
+            {
+                "group_id": "kg:noise",
+                "source_collection": "lesson",
+                "source_chunks": ["lesson#001"],
+                "source_paths": ["lesson.md"],
+                "section_ids": ["划重奖"],
+                "low_confidence_section_terms": ["划重奖"],
+                "title_hint": "应用案例",
+                "core_concepts": ["应用案例"],
+                "prerequisites": [],
+                "representative_chunks": [
+                    {
+                        "chunk_ref": "lesson#001",
+                        "section_id": "划重奖",
+                        "low_confidence_section_terms": ["划重奖"],
+                        "core_concepts": ["应用案例"],
+                    }
+                ],
+                "length_stats": {"estimated_output_lines": 320},
+            }
+        ],
+    }
+
+    class NoisyTitleBuilder:
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            return {
+                "chapter_candidates": [
+                    {
+                        "candidate_id": "candidate:lesson:noisy",
+                        "merged_group_ids": ["kg:noise"],
+                        "canonical_title": "划重奖、应用案例",
+                        "title_hint": "划重奖、应用案例",
+                        "primary_source_collection": "lesson",
+                        "source_collections": ["lesson"],
+                        "core_concepts": ["划重奖", "应用案例"],
+                        "prerequisite_concepts": [],
+                        "representative_chunks": ["lesson#001"],
+                    }
+                ]
+            }
+
+    nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, NoisyTitleBuilder()))
+    candidate = nodes["chapter_candidates"][0]
+
+    assert "划重奖" not in candidate["title_hint"]
+    assert "划重奖" not in candidate["canonical_title"]
+    assert "划重奖" not in candidate["core_concepts"]
+
+
+def test_root_selector_penalizes_noisy_post_foundation_node_with_missing_prerequisites(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _planning_candidate_nodes(
+            {
+                "candidate_id": "candidate:noisy-application",
+                "status": "pending",
+                "title_hint": "划重奖、应用案例",
+                "primary_source_collection": "lesson",
+                "source_collections": ["lesson"],
+                "core_concepts": ["划重奖", "应用案例", "操作结果", "检查方法"],
+                "prerequisite_concepts": [],
+                "prerequisite_candidates": [],
+                "representative_chunks": [
+                    {
+                        "chunk_ref": "lesson#002",
+                        "section_id": "划重奖",
+                        "core_concepts": ["划重奖", "应用案例"],
+                        "prerequisites": ["基础概念"],
+                        "source_type": "mixed",
+                        "teaching_role": "application",
+                    }
+                ],
+                "selection_priority": 0.95,
+                "estimated_output_lines": 360,
+            },
+            _planning_candidate(
+                "candidate:foundation",
+                ["基础概念", "基本定义"],
+                chunks=["lesson#001"],
+                sources=["lesson"],
+                priority=0.10,
+                estimated_output_lines=320,
+            ),
+        ),
+        {"version": 1, "records": []},
+    )
+
+    selected = next(node for node in graph["nodes"] if node["planner_selected"])
+    noisy = next(node for node in graph["nodes"] if node["node_id"] == "candidate:noisy-application")
+
+    assert selected["node_id"] == "candidate:foundation"
+    assert noisy["warnings"]
+    assert noisy["root_score"] < 0.5
+
+
+def test_clean_foundation_node_with_no_prerequisites_can_remain_root(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _planning_candidate_nodes(
+            _planning_candidate(
+                "candidate:foundation",
+                ["基础概念", "基本定义"],
+                chunks=["lesson#001"],
+                sources=["lesson"],
+                priority=0.10,
+                estimated_output_lines=320,
+            )
+        ),
+        {"version": 1, "records": []},
+    )
+
+    selected = next(node for node in graph["nodes"] if node["planner_selected"])
+
+    assert selected["node_id"] == "candidate:foundation"
+    assert selected["root_score"] > 0.45
 
 
 def test_finished_trunk_absorbs_candidate_covered_by_multiple_outputs(tmp_path: Path) -> None:
@@ -380,52 +664,33 @@ def test_manifest_embedded_flag_is_cleared_when_source_vectors_are_missing(tmp_p
     assert _pending_materials(tmp_path, manifest) == [(source, "lesson")]
 
 
-def test_attach_graph_selection_uses_planner_required_nodes_over_examiner_output() -> None:
-    scan_result = ChapterScanResult(
-        chapter_name="tree-999",
-        source_collection="examiner-source",
-        source_collections=["examiner-source"],
-        graph_node_id="candidate:wrong",
-        required_nodes=["finished:outputs/tree-999/99.examiner.md"],
-        parent_output="finished:outputs/tree-999/99.examiner.md",
-        exam_sections=ExamSections(
-            knowledge_point="变量",
-            blind_exam="Q",
-            answer_key="A",
-            writer_instructions="W",
-        ),
+def test_refresh_planner_artifacts_does_not_call_examiner_chapter_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_candidate_nodes(*args, **kwargs):
+        return {"version": 1, "chapter_candidates": []}
+
+    class ExaminerShouldNotRun:
+        async def compose_exam(self, *args, **kwargs):
+            raise AssertionError("examiner should not choose branch scheduling")
+
+    fake_engine = SimpleNamespace(
+        settings=SimpleNamespace(project_root=tmp_path),
+        archivist=SimpleNamespace(),
+        examiner=ExaminerShouldNotRun(),
+        _rebuild_source_inventory_from_rag=lambda: {},
     )
-    knowledge_graph = {
-        "planner": {"selected_node": "candidate:loops", "selection_mode": "branch"},
-        "nodes": [
-            {
-                "node_id": "candidate:loops",
-                "kind": "candidate",
-                "status": "planned",
-                "primary_source_collection": "planner-source",
-                "source_collections": ["planner-source"],
-                "required_nodes": [
-                    "finished:outputs/tree-001/01.variables.md",
-                    "finished:outputs/tree-001/02.conditionals.md",
-                ],
-                "parent_output": "finished:outputs/tree-001/02.conditionals.md",
-                "is_new_root": False,
-            }
-        ],
-    }
 
-    attached = _attach_graph_selection(scan_result, knowledge_graph)
+    async def rebuild_inventory():
+        return {}
 
-    assert attached is not None
-    assert attached.graph_node_id == "candidate:loops"
-    assert attached.required_nodes == [
-        "finished:outputs/tree-001/01.variables.md",
-        "finished:outputs/tree-001/02.conditionals.md",
-    ]
-    assert attached.parent_output == "finished:outputs/tree-001/02.conditionals.md"
-    assert attached.source_collection == "planner-source"
-    assert attached.source_collections == ["planner-source"]
-    assert attached.selection_mode == "branch"
+    fake_engine._rebuild_source_inventory_from_rag = rebuild_inventory
+    monkeypatch.setattr("tree.engine.rebuild_candidate_nodes_with_ai", no_candidate_nodes)
+
+    result = asyncio.run(TreeEngine._refresh_planner_artifacts(fake_engine, PipelineState()))
+
+    assert result is None
 
 
 def test_handle_pass_raises_when_finished_output_indexing_fails(
@@ -720,7 +985,7 @@ def test_process_chapter_closes_active_node_after_one_pass(tmp_path: Path) -> No
     assert state.chapters[0].status == "completed"
 
 
-def test_scan_next_chapter_returns_none_when_planner_has_no_selected_node(
+def test_refresh_planner_artifacts_returns_none_when_planner_has_no_selected_node(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -728,8 +993,8 @@ def test_scan_next_chapter_returns_none_when_planner_has_no_selected_node(
         return {"version": 1, "chapter_candidates": []}
 
     class ExaminerShouldNotRun:
-        async def scan_next_chapter(self, *args, **kwargs):
-            raise AssertionError("examiner should not decide woods completion")
+        async def compose_exam(self, *args, **kwargs):
+            raise AssertionError("examiner should not decide branch scheduling")
 
     fake_engine = SimpleNamespace(
         settings=SimpleNamespace(project_root=tmp_path),
@@ -744,6 +1009,6 @@ def test_scan_next_chapter_returns_none_when_planner_has_no_selected_node(
     fake_engine._rebuild_source_inventory_from_rag = rebuild_inventory
     monkeypatch.setattr("tree.engine.rebuild_candidate_nodes_with_ai", no_candidate_nodes)
 
-    result = asyncio.run(TreeEngine._scan_next_chapter(fake_engine, PipelineState()))
+    result = asyncio.run(TreeEngine._refresh_planner_artifacts(fake_engine, PipelineState()))
 
     assert result is None

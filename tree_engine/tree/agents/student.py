@@ -31,9 +31,9 @@ class StudentAgent:
             for i, content in enumerate(prior_file_contents):
                 parts.append(f"--- File {i + 1} ---\n{content}\n")
         if draft_text:
-            parts.append(f"Current knowledge point draft:\n{draft_text}\n")
+            parts.append(f"current branch-span draft:\n{draft_text}\n")
         else:
-            parts.append("Current knowledge point draft: 尚未创建\n")
+            parts.append("current branch-span draft: 尚未创建\n")
         if retrieved_context:
             parts.append(_format_retrieved_context(retrieved_context))
 

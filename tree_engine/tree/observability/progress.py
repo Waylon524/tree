@@ -121,11 +121,17 @@ class ProgressTracker:
         stage_index: int,
         stage_total: int,
         chapter: str = "",
+        execution_path: str = "",
+        tree_id: str = "",
+        branch_id: str = "",
         file_seq: str = "",
         knowledge_point: str = "",
+        span_title: str = "",
         iteration: int = 0,
         message: str = "",
     ) -> None:
+        execution_path = execution_path or chapter
+        span_title = span_title or knowledge_point
         self.update(
             {
                 "phase": "learning_loop",
@@ -135,9 +141,13 @@ class ProgressTracker:
                     "stage_label": stage_label,
                     "stage_index": stage_index,
                     "stage_total": stage_total,
-                    "chapter": chapter,
+                    "execution_path": execution_path,
+                    "tree_id": tree_id,
+                    "branch_id": branch_id,
+                    "chapter": execution_path,
                     "file_seq": file_seq,
-                    "knowledge_point": knowledge_point,
+                    "span_title": span_title,
+                    "knowledge_point": span_title,
                     "iteration": iteration,
                     "updated_at": _now(),
                 },

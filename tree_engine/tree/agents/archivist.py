@@ -54,6 +54,41 @@ class ArchivistAgent:
         raw = await self._client.call("archivist", system, user)
         return _extract_json_object(raw)
 
+    async def analyze_inventory_chunk(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Analyze one chunk in file order and decide whether it joins the active group."""
+        system = self._loader.load("archivist")
+        user = (
+            "## Task: Sequential Inventory Knowledge Grouping\n\n"
+            "Return strict JSON only. Do not wrap it in Markdown.\n\n"
+            "You are processing chunks from one source file in forward order. Decide whether the "
+            "current chunk belongs to the previous active KnowledgeGroup. Do not reason about future chunks.\n\n"
+            "Schema:\n"
+            "{\n"
+            '  "merge_with_previous": false,\n'
+            '  "is_complete_knowledge_point": true,\n'
+            '  "title_hint": "KnowledgeGroup title hint",\n'
+            '  "core_concepts": ["AI-extracted concepts"],\n'
+            '  "methods": ["methods or skills"],\n'
+            '  "misconceptions": ["mistakes or contrastive warnings"],\n'
+            '  "prerequisites": ["conceptual prerequisites"],\n'
+            '  "formula_roles": [{"formula": "raw formula", "role": "definition|law|derivation|example|application"}],\n'
+            '  "source_type": "lecture|exercise|reference|mixed|unknown",\n'
+            '  "teaching_role": "foundation|concept|method|example|application|review|assessment",\n'
+            '  "completeness": "fragment|partial|complete",\n'
+            '  "evidence_spans": ["short source evidence"],\n'
+            '  "summary": "one concise sentence"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- The program-provided section_id, weak_concepts, and formula signatures are weak signals only.\n"
+            "- Use the chunk text as the semantic source of truth.\n"
+            "- merge_with_previous may be true only when the current chunk extends the active KnowledgeGroup.\n"
+            "- Prefer teaching groups that would become a coherent 300-1000 line output, but this is guidance, not a hard cap.\n"
+            "- Preserve prerequisite signals from the text; never clear a prerequisite merely because the current chunk is short.\n\n"
+            f"Payload:\n{json.dumps(payload, ensure_ascii=False)[:18000]}"
+        )
+        raw = await self._client.call("archivist", system, user)
+        return _extract_json_object(raw)
+
     async def build_candidate_nodes(
         self,
         inventory_summary: dict[str, Any],
@@ -62,23 +97,33 @@ class ArchivistAgent:
         """Build candidate knowledge nodes from source inventory JSON."""
         system = self._loader.load("archivist")
         user = (
-            "## Task: Build Candidate Knowledge Nodes\n\n"
+            "## Task: Build KnowledgeNodes\n\n"
             "Return strict JSON only. Do not wrap it in Markdown.\n\n"
-            "Input is a source inventory summary. Create candidate knowledge nodes by semantic "
-            "teaching units, not upload order. This step does not choose curriculum order; "
-            "the deterministic graph planner will choose roots, branches, and frontier nodes.\n\n"
+            "Input is a source inventory summary. Create canonical KnowledgeNodes by semantic "
+            "teaching units, not upload order. Input may include Inventory KnowledgeGroups and "
+            "program-computed group-pair metrics. Merge cross-file groups only when they are the "
+            "same teachable KnowledgeNode. Keep the compatibility JSON keys "
+            "`chapter_candidates` and `candidate_id`, but semantically each item is a final KnowledgeNode. "
+            "This step does not choose curriculum order; "
+            "the graph planner and root selector will choose roots, branches, and frontier nodes.\n\n"
             "Schema:\n"
             "{\n"
             '  "chapter_candidates": [\n'
             "    {\n"
             '      "candidate_id": "candidate:<stable-id>",\n'
+            '      "merged_group_ids": ["kg ids if available"],\n'
+            '      "canonical_title": "canonical knowledge title",\n'
             '      "title_hint": "knowledge node title hint",\n'
             '      "primary_source_collection": "collection id",\n'
             '      "source_collections": ["primary", "related"],\n'
-            '      "core_concepts": ["main chapter concepts"],\n'
-            '      "prerequisite_concepts": ["concepts that should precede this chapter"],\n'
+            '      "core_concepts": ["main KnowledgeNode concepts"],\n'
+            '      "prerequisite_concepts": ["concepts that should precede this KnowledgeNode"],\n'
             '      "prerequisite_candidates": ["candidate ids if obvious"],\n'
+            '      "formula_roles": [{"formula": "formula", "role": "role in teaching"}],\n'
             '      "representative_chunks": ["chunk refs"],\n'
+            '      "coverage_evidence": ["why these groups are one node"],\n'
+            '      "teaching_role": "foundation|concept|method|example|application|review|assessment",\n'
+            '      "completeness": "fragment|partial|complete",\n'
             '      "reason": "brief rationale"\n'
             "    }\n"
             "  ]\n"
@@ -86,11 +131,38 @@ class ArchivistAgent:
             "Rules:\n"
             "- Do not encode domain-specific fixed ranks. Infer prerequisites from concepts.\n"
             "- If a source collection is mostly application/review, place its prerequisite concepts clearly.\n"
-            "- Do not choose roots, sequence, or next chapter. Only generate candidate nodes.\n"
-            "- Do not mark a candidate completed; the engine will do that.\n"
+            "- AI may supplement and order prerequisites, but must not clear existing group prerequisites.\n"
+            "- Candidate cross-file merge has no output-length cap; use estimated length only as a risk signal.\n"
+            "- Do not choose roots, sequence, or next branch. Only generate canonical KnowledgeNodes.\n"
+            "- Do not mark a KnowledgeNode completed; the engine will do that.\n"
             "- Use only collection ids and chunk refs that appear in the input.\n\n"
             f"Completed collections:\n{json.dumps(completed_collections, ensure_ascii=False)}\n\n"
             f"Inventory summary:\n{json.dumps(inventory_summary, ensure_ascii=False)[:18000]}"
+        )
+        raw = await self._client.call("archivist", system, user)
+        return _extract_json_object(raw)
+
+    async def select_root_candidate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Choose the final root from the program-ranked root candidates."""
+        system = self._loader.load("archivist")
+        user = (
+            "## Task: Select TREE Root Candidate\n\n"
+            "Return strict JSON only. Do not wrap it in Markdown.\n\n"
+            "The program has ranked possible root KnowledgeNodes. Choose the true tree root "
+            "from the provided root_candidates only. Prefer foundational concepts with clean evidence "
+            "and low prerequisite burden. Penalize application/review/example nodes and noisy section evidence.\n\n"
+            "Schema:\n"
+            "{\n"
+            '  "selected_root_group_id": "candidate id or ROOT_UNCERTAIN",\n'
+            '  "reason": "why this root is better than the others",\n'
+            '  "uncertainty": "low|medium|high",\n'
+            '  "teaching_order_suggestion": ["candidate ids in suggested order"]\n'
+            "}\n\n"
+            "Rules:\n"
+            "- Choose only from root_candidates unless all are unsuitable.\n"
+            "- Return ROOT_UNCERTAIN only if none of the provided candidates can reasonably start the tree.\n"
+            "- Do not invent candidate ids.\n\n"
+            f"Root selection payload:\n{json.dumps(payload, ensure_ascii=False)[:16000]}"
         )
         raw = await self._client.call("archivist", system, user)
         return _extract_json_object(raw)
@@ -104,23 +176,23 @@ class ArchivistAgent:
         return await self.build_candidate_nodes(inventory_summary, completed_collections)
 
     async def name_chapter(self, naming_context: dict[str, Any]) -> dict[str, str]:
-        """Name a closed chapter/tree from its finished output concepts."""
+        """Name a closed tree from its finished output concepts."""
         system = self._loader.load("archivist")
         user = (
-            "## Task: Name Closed TREE Chapter\n\n"
+            "## Task: Name Closed TREE\n\n"
             "Return strict JSON only. Do not wrap it in Markdown.\n\n"
-            "The input is a finished knowledge tree. Name the chapter after seeing "
+            "The input is a finished knowledge tree. Name the tree after seeing "
             "all generated outputs, not before the tree grows.\n\n"
             "Schema:\n"
             "{\n"
-            '  "chapter_title": "broad textbook-style chapter title",\n'
+            '  "chapter_title": "broad textbook-style tree title",\n'
             '  "short_slug": "short display slug",\n'
             '  "reason": "brief reason based on the concepts"\n'
             "}\n\n"
             "Rules:\n"
-            "- Use the actual knowledge points and concepts, not source collection ids.\n"
-            "- Prefer a broad title that can contain all listed knowledge points.\n"
-            "- Do not mention TREE, files, outputs, candidate nodes, or implementation details.\n"
+            "- Use the actual branch-span outputs and concepts, not source collection ids.\n"
+            "- Prefer a broad title that can contain all listed branch-span outputs.\n"
+            "- Do not mention TREE, files, outputs, KnowledgeNode compatibility fields, or implementation details.\n"
             "- Keep chapter_title concise, usually 6-16 Chinese characters when the input is Chinese.\n\n"
             f"Closed tree context:\n{json.dumps(naming_context, ensure_ascii=False)[:12000]}"
         )

@@ -68,7 +68,7 @@ def rebuild_knowledge_graph(
     ]
     planned_nodes = [
         _candidate_node(candidate)
-        for candidate in candidate_nodes.get("chapter_candidates", [])
+        for candidate in _candidate_items(candidate_nodes)
         if isinstance(candidate, dict)
     ]
     nodes = finished_nodes + planned_nodes
@@ -87,6 +87,78 @@ def rebuild_knowledge_graph(
     return graph
 
 
+async def rebuild_knowledge_graph_with_ai(
+    root: Path,
+    candidate_nodes: dict[str, Any],
+    ledger: dict[str, Any],
+    selector: Any | None = None,
+) -> dict[str, Any]:
+    """Build the graph, then let AI choose the final root from the program Top5."""
+    graph = rebuild_knowledge_graph(root, candidate_nodes, ledger)
+    if selector is None or not hasattr(selector, "select_root_candidate"):
+        return graph
+    planner = graph.get("planner", {})
+    if planner.get("selection_mode") not in {"initial_root", "new_root"}:
+        return graph
+    nodes = [item for item in graph.get("nodes", []) if isinstance(item, dict)]
+    planned = [node for node in nodes if node.get("kind") == "candidate" and node.get("status") == "planned"]
+    if not planned:
+        return graph
+    top = _top_root_candidates(planned, graph.get("edges", []), limit=5)
+    if not top:
+        return graph
+    payload = _root_selection_payload(graph, top)
+    try:
+        ai = await selector.select_root_candidate(payload)
+    except Exception:
+        return graph
+    selected_id = str(
+        ai.get("selected_root_group_id")
+        or ai.get("selected_root_candidate_id")
+        or ai.get("selected_node_id")
+        or ""
+    )
+    if selected_id == "ROOT_UNCERTAIN":
+        expanded = _top_root_candidates(planned, graph.get("edges", []), limit=10)
+        if len(expanded) <= len(top):
+            return graph
+        try:
+            ai = await selector.select_root_candidate(_root_selection_payload(graph, expanded))
+        except Exception:
+            return graph
+        selected_id = str(
+            ai.get("selected_root_group_id")
+            or ai.get("selected_root_candidate_id")
+            or ai.get("selected_node_id")
+            or ""
+        )
+    allowed = {node.get("node_id") for node in top}
+    if selected_id not in allowed:
+        return graph
+    selected = _node_by_id(nodes, selected_id)
+    if not selected:
+        return graph
+    for node in planned:
+        node["planner_selected"] = False
+        node["is_root"] = False
+        node["is_new_root"] = False
+    _mark_selected_root(selected, planner, graph.get("edges", []), str(planner.get("selection_mode") or "initial_root"))
+    selected["why_selected"] = str(ai.get("reason") or selected.get("why_selected") or "AI selected from root Top5.")
+    selected["selection_evidence"] = _selection_evidence(selected, graph.get("edges", []))
+    planner["selection_evidence"] = selected["selection_evidence"]
+    planner["root_selection_mode"] = "ai_top5"
+    planner["root_ai_selection"] = {
+        "selected_root_group_id": selected_id,
+        "reason": str(ai.get("reason") or ""),
+        "uncertainty": str(ai.get("uncertainty") or ""),
+        "teaching_order_suggestion": _string_list(ai.get("teaching_order_suggestion"))[:10],
+        "top_candidates": [node.get("node_id") for node in top],
+    }
+    planner["trace"] = _planner_trace(planner, planned)
+    save_knowledge_graph(root, graph)
+    return graph
+
+
 def relation_pair_scores(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float]:
     """Return the shared relation-classification similarity scores for two nodes."""
     return _pair_scores(left, right)
@@ -97,20 +169,34 @@ def relation_affinity(scores: dict[str, float]) -> float:
     return _affinity(scores)
 
 
+def _candidate_items(candidate_nodes: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = candidate_nodes.get("chapter_candidates")
+    if isinstance(candidates, list) and candidates:
+        return [item for item in candidates if isinstance(item, dict)]
+    nodes = candidate_nodes.get("knowledge_nodes")
+    if isinstance(nodes, list):
+        return [item for item in nodes if isinstance(item, dict)]
+    return []
+
+
 def build_selected_node_context(graph: dict[str, Any], node_id: str | None = None) -> str:
-    """Format a planner-selected or chapter-bound node as the examiner's primary scope."""
+    """Format a planner-selected KnowledgeNode as the BranchRun's primary scope.
+
+    The function name and graph planner field names are kept as compatibility
+    aliases for older runtime JSON.
+    """
     nodes = [item for item in graph.get("nodes", []) if isinstance(item, dict)]
     edges = [item for item in graph.get("edges", []) if isinstance(item, dict)]
     selected_node_id = node_id or graph.get("planner", {}).get("selected_node")
     selected = _node_by_id(nodes, selected_node_id)
     lines = [
-        "## Selected Node Context",
-        "This is the fixed next growth node selected by the deterministic planner or already bound to the active chapter.",
-        "Examiner must compose the next exam inside this node's scope.",
+        "## Active KnowledgeNode Scope",
+        "This is the fixed KnowledgeNode scope attached to the active BranchRun.",
+        "Examiner must compose the next exam inside the declared branch span.",
         "",
     ]
     if not selected:
-        lines.append("Selected node: none")
+        lines.append("Active KnowledgeNode: none")
         return "\n".join(lines)
 
     warning_edges = [
@@ -126,7 +212,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
     ]
     lines.extend(
         [
-            f"Selected node: {selected.get('node_id')}",
+            f"Active KnowledgeNode: {selected.get('node_id')}",
             f"Title: {selected.get('title')}",
             f"Primary source collection: {selected.get('primary_source_collection') or 'n/a'}",
             f"Source collections: {', '.join(selected.get('source_collections', [])) or 'n/a'}",
@@ -141,7 +227,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
             f"Expected output size: {int(selected.get('estimated_output_lines') or 0)} lines",
             f"Size fit: {float(selected.get('size_fit') or 0):.2f}",
             f"Chunk cluster size: {int(selected.get('chunk_count') or len(selected.get('hit_chunks', [])))} chunks",
-            f"Why selected: {selected.get('why_selected') or 'n/a'}",
+            f"Planning reason: {selected.get('why_selected') or 'n/a'}",
             "",
             "Allowed scope:",
             f"- Core concepts: {', '.join(selected.get('core_concepts', [])[:14]) or 'n/a'}",
@@ -151,7 +237,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
             "Out of scope:",
             "- Do not reteach required nodes; cite them as prerequisites.",
             "- Do not expand into sibling or child nodes unless needed for a tiny prerequisite bridge.",
-            "- If warnings below show duplicate/merge risk, keep the selected node scope and avoid duplicating finished material.",
+            "- If warnings below show duplicate/merge risk, keep the active KnowledgeNode scope and avoid duplicating finished material.",
             "",
             "Prerequisite evidence:",
         ]
@@ -163,7 +249,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
         hits = ", ".join(evidence.get("prerequisite_hits", [])[:8]) or "n/a"
         lines.append(f"- {edge.get('from')} -> {edge.get('to')}: {hits}")
     lines.append("")
-    lines.append("Warnings for selected node:")
+    lines.append("Warnings for active KnowledgeNode:")
     if not warning_edges:
         lines.append("- none")
     for edge in warning_edges[:8]:
@@ -177,7 +263,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
 
 
 def build_knowledge_graph_context(graph: dict[str, Any], limit_nodes: int = 12, limit_edges: int = 18) -> str:
-    """Format graph state for examiner selection."""
+    """Format graph state for BranchRun planning diagnostics."""
     nodes = [item for item in graph.get("nodes", []) if isinstance(item, dict)]
     edges = [item for item in graph.get("edges", []) if isinstance(item, dict)]
     eligible = [node for node in nodes if node.get("status") == "planned" and node.get("eligible")]
@@ -190,17 +276,17 @@ def build_knowledge_graph_context(graph: dict[str, Any], limit_nodes: int = 12, 
 
     lines = [
         "## Knowledge Graph",
-        "Use this graph as the primary structure: finished outputs are real tree nodes, and candidate nodes are possible next growth points.",
-        "The incremental forest planner selects the root or branch. Examiner should compose for the selected node.",
+        "Use this graph as the primary structure: finished outputs are real tree nodes, and KnowledgeNodes are possible branch coverage units.",
+        "The planner schedules BranchRuns; examiner should compose only inside the active branch span.",
         "",
         f"- finished_nodes: {graph.get('stats', {}).get('finished_count', 0)}",
         f"- planned_nodes: {graph.get('stats', {}).get('planned_count', 0)}",
         f"- eligible_planned_nodes: {graph.get('stats', {}).get('eligible_count', 0)}",
         f"- blocked_planned_nodes: {graph.get('stats', {}).get('blocked_count', 0)}",
-        f"- planner_selected: {graph.get('planner', {}).get('selected_node') or 'none'}",
+        f"- active_planner_node: {graph.get('planner', {}).get('selected_node') or 'none'}",
         f"- root_nodes: {', '.join(graph.get('planner', {}).get('root_nodes', [])) or 'none'}",
         "",
-        "### Planner Selected Node",
+        "### Active Planner KnowledgeNode",
     ]
     selected = _node_by_id(nodes, graph.get("planner", {}).get("selected_node"))
     if selected:
@@ -272,7 +358,7 @@ def _finished_node(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _candidate_node(candidate: dict[str, Any]) -> dict[str, Any]:
-    node_id = str(candidate.get("candidate_id") or "")
+    node_id = str(candidate.get("candidate_id") or candidate.get("node_id") or candidate.get("compat_candidate_id") or "")
     if not node_id.startswith("candidate:"):
         node_id = f"candidate:{candidate.get('primary_source_collection') or candidate.get('title_hint') or 'unknown'}"
     return {
@@ -286,6 +372,10 @@ def _candidate_node(candidate: dict[str, Any]) -> dict[str, Any]:
         "core_concepts": _string_list(candidate.get("core_concepts")),
         "prerequisites": _string_list(candidate.get("prerequisite_concepts")),
         "hit_chunks": _chunk_refs(candidate.get("representative_chunks")),
+        "representative_prerequisites": _representative_prerequisites(candidate.get("representative_chunks")),
+        "source_types": _candidate_source_types(candidate),
+        "teaching_roles": _candidate_teaching_roles(candidate),
+        "low_confidence_terms": _candidate_low_confidence_terms(candidate),
         "methods": _string_list(candidate.get("methods")),
         "formulas": _string_list(candidate.get("formulas")),
         "required_nodes": _string_list(candidate.get("prerequisite_candidates")),
@@ -297,6 +387,53 @@ def _candidate_node(candidate: dict[str, Any]) -> dict[str, Any]:
         "size_band": str(candidate.get("size_band") or _size_band(_candidate_estimated_output_lines(candidate))),
         "cluster_cohesion": float(candidate.get("cluster_cohesion") or 0.0),
     }
+
+
+def _representative_prerequisites(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return _unique(
+        prereq
+        for item in value
+        if isinstance(item, dict)
+        for prereq in _string_list(item.get("prerequisites"))
+    )
+
+
+def _candidate_source_types(candidate: dict[str, Any]) -> list[str]:
+    explicit = _string_list(candidate.get("source_types"))
+    if explicit:
+        return explicit
+    return _representative_metadata_values(candidate.get("representative_chunks"), "source_type")
+
+
+def _candidate_teaching_roles(candidate: dict[str, Any]) -> list[str]:
+    explicit = _string_list(candidate.get("teaching_roles"))
+    if explicit:
+        return explicit
+    return _representative_metadata_values(candidate.get("representative_chunks"), "teaching_role")
+
+
+def _candidate_low_confidence_terms(candidate: dict[str, Any]) -> list[str]:
+    explicit = _string_list(candidate.get("low_confidence_terms"))
+    if explicit:
+        return explicit
+    return _unique(
+        term
+        for item in candidate.get("representative_chunks", []) or []
+        if isinstance(item, dict)
+        for term in _string_list(item.get("low_confidence_section_terms"))
+    )
+
+
+def _representative_metadata_values(value: Any, key: str) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return _unique(
+        str(item.get(key)).strip()
+        for item in value
+        if isinstance(item, dict) and str(item.get(key) or "").strip()
+    )
 
 
 def _relation_edges(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -491,6 +628,7 @@ def _apply_incremental_forest_planner(nodes: list[dict[str, Any]], edges: list[d
         node["is_root"] = False
         node["is_new_root"] = False
         node["root_score"] = round(_root_score(node, candidates, edges), 4)
+        node["warnings"] = _node_quality_warnings(node)
         node["backbone_parent"] = None
         node["backbone_children"] = []
         node["parent_output"] = None
@@ -577,6 +715,53 @@ def _select_root_candidate(
             str(node.get("node_id", "")),
         ),
     )[0]
+
+
+def _top_root_candidates(
+    planned: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    return sorted(
+        planned,
+        key=lambda node: (
+            _node_warning_penalty(node, edges),
+            -float(node.get("root_score", 0)),
+            -float(node.get("evidence_strength", 0)),
+            -float(node.get("selection_priority", 0)),
+            str(node.get("node_id", "")),
+        ),
+    )[:limit]
+
+
+def _root_selection_payload(graph: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "task": "select_final_root_from_program_top_candidates",
+        "rule": "Choose exactly one root from root_candidates, or ROOT_UNCERTAIN if none is acceptable.",
+        "planner": graph.get("planner", {}),
+        "root_candidates": [_root_candidate_payload(node) for node in candidates],
+    }
+
+
+def _root_candidate_payload(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "node_id": node.get("node_id"),
+        "title": node.get("title"),
+        "root_score": round(float(node.get("root_score") or 0), 4),
+        "evidence_strength": round(float(node.get("evidence_strength") or 0), 4),
+        "selection_priority": round(float(node.get("selection_priority") or 0), 4),
+        "prerequisites": node.get("prerequisites", [])[:12],
+        "representative_prerequisites": node.get("representative_prerequisites", [])[:12],
+        "source_types": node.get("source_types", [])[:8],
+        "teaching_roles": node.get("teaching_roles", [])[:8],
+        "core_concepts": node.get("core_concepts", [])[:18],
+        "hit_chunks": node.get("hit_chunks", [])[:12],
+        "source_collections": node.get("source_collections", [])[:8],
+        "estimated_output_lines": node.get("estimated_output_lines"),
+        "size_fit": round(float(node.get("size_fit") or 0), 4),
+        "warnings": node.get("warnings", [])[:8],
+        "reason": node.get("reason", ""),
+    }
 
 
 def _mark_selected_root(node: dict[str, Any], planner: dict[str, Any], edges: list[dict[str, Any]], mode: str) -> None:
@@ -1013,17 +1198,21 @@ def _root_score(node: dict[str, Any], candidates: list[dict[str, Any]], edges: l
     low_prerequisite = 1 / (1 + prerequisite_count)
     outgoing_support = _outgoing_prerequisite_support(node, candidates)
     duplicate_penalty = 0.35 if _has_duplicate_with_finished(node, edges) else 0.0
+    missing_prerequisite_penalty = _missing_prerequisite_penalty(node)
+    low_confidence_penalty = _low_confidence_penalty(node)
+    score = (
+        low_prerequisite * 0.35
+        + outgoing_support * 0.30
+        + _evidence_strength(node) * 0.20
+        + _size_fit(node) * 0.15
+        + float(node.get("selection_priority") or 0) * 0.10
+        - duplicate_penalty
+        - missing_prerequisite_penalty
+        - low_confidence_penalty
+    )
     return max(
         0.0,
-        min(
-            1.0,
-            low_prerequisite * 0.35
-            + outgoing_support * 0.30
-            + _evidence_strength(node) * 0.20
-            + _size_fit(node) * 0.15
-            + float(node.get("selection_priority") or 0) * 0.10
-            - duplicate_penalty,
-        ),
+        min(1.0, score),
     )
 
 
@@ -1041,12 +1230,63 @@ def _outgoing_prerequisite_support(node: dict[str, Any], candidates: list[dict[s
 
 
 def _evidence_strength(node: dict[str, Any]) -> float:
-    return min(
+    strength = min(
         1.0,
         len(node.get("core_concepts", [])) / 12 * 0.45
         + len(node.get("hit_chunks", [])) / 6 * 0.35
         + len(node.get("source_collections", [])) / 3 * 0.20,
     )
+    if node.get("low_confidence_terms"):
+        strength *= 0.75
+    return strength
+
+
+def _missing_prerequisite_penalty(node: dict[str, Any]) -> float:
+    if node.get("prerequisites") or node.get("required_nodes"):
+        return 0.0
+    penalty = 0.0
+    if node.get("representative_prerequisites"):
+        penalty += 0.18
+    if set(node.get("source_types", [])) & {"application", "review", "exercise", "mixed", "assessment"}:
+        penalty += 0.06
+    if set(node.get("teaching_roles", [])) & {"application", "review", "example", "assessment"}:
+        penalty += 0.06
+    return min(0.26, penalty)
+
+
+def _low_confidence_penalty(node: dict[str, Any]) -> float:
+    low_confidence = set(node.get("low_confidence_terms", []))
+    if not low_confidence:
+        return 0.0
+    concepts = set(node.get("core_concepts", []))
+    title = str(node.get("title") or "")
+    penalty = 0.06
+    if low_confidence & concepts:
+        penalty += 0.06
+    if any(term in title for term in low_confidence):
+        penalty += 0.06
+    return min(0.18, penalty)
+
+
+def _node_quality_warnings(node: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings = []
+    if _missing_prerequisite_penalty(node) > 0:
+        warnings.append(
+            {
+                "kind": "missing_prerequisite_signal",
+                "representative_prerequisites": node.get("representative_prerequisites", [])[:8],
+                "source_types": node.get("source_types", [])[:6],
+                "teaching_roles": node.get("teaching_roles", [])[:6],
+            }
+        )
+    if _low_confidence_penalty(node) > 0:
+        warnings.append(
+            {
+                "kind": "low_confidence_section_terms",
+                "terms": node.get("low_confidence_terms", [])[:8],
+            }
+        )
+    return warnings
 
 
 def _size_fit(node: dict[str, Any]) -> float:

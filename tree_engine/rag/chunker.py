@@ -43,7 +43,11 @@ def _detect_chunk_type(text: str) -> str:
 
 
 def _extract_concepts(text: str) -> list[str]:
-    """Extract key concept names from text (bold markers, LaTeX symbols)."""
+    """Extract weak concept hints from text.
+
+    These are not authoritative curriculum concepts. They are cheap metadata
+    used for similarity pre-screening before AI semantic judgment.
+    """
     concepts = []
     # Bold markers: **概念名**
     for m in re.finditer(r"\*\*([^*]+)\*\*", text):
@@ -75,6 +79,35 @@ def _extract_formulas(text: str) -> list[str]:
     return formulas[:10]
 
 
+def _formula_signatures(formulas: list[str]) -> list[str]:
+    """Return stable weak signatures for formula-overlap scoring."""
+    signatures = []
+    for formula in formulas:
+        normalized = formula.strip()
+        normalized = re.sub(r"\\(?:mathrm|operatorname|text)\{([^{}]+)\}", r"\1", normalized)
+        normalized = re.sub(r"\\(?:left|right)\b", "", normalized)
+        normalized = re.sub(r"\\(?:,|;|:|!|quad|qquad)", "", normalized)
+        normalized = re.sub(r"\s+", "", normalized)
+        normalized = normalized.replace("{", "").replace("}", "")
+        normalized = normalized.replace("\\", "")
+        normalized = normalized.lower()
+        if len(normalized) < 3:
+            continue
+        signatures.append(normalized[:160])
+    return _unique(signatures)[:10]
+
+
+def _heading_path(section: str, section_id: str) -> list[str]:
+    headings = [
+        match.group(1).strip()
+        for match in re.finditer(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", section, flags=re.MULTILINE)
+        if match.group(1).strip()
+    ]
+    if not headings and section_id:
+        headings = [section_id]
+    return _unique(_clean_heading(item) for item in headings if _clean_heading(item))[:6]
+
+
 def chunk_markdown(
     file_seq: str,
     text: str,
@@ -84,8 +117,9 @@ def chunk_markdown(
     """Chunk a Markdown file into semantic pieces.
 
     Returns list of chunk dicts with keys:
-        chunk_id, text, chapter, file_seq, section_id,
-        concepts, formulas, chunk_type, is_draft, token_estimate
+        chunk_id, text, chapter, file_seq, section_id, heading_path,
+        weak_concepts, raw_formulas, formula_signatures, chunk_type, is_draft,
+        token_estimate
     """
     text = _prepare_markdown_text(text)
 
@@ -105,6 +139,7 @@ def chunk_markdown(
         section_id = heading_match.group(1).strip() if heading_match else "intro"
         # Clean section_id for use as anchor
         section_id = re.sub(r"[^\w一-鿿-]", "-", section_id)[:50]
+        heading_path = _heading_path(section, section_id)
 
         # Check for foldable blocks (> [!details])
         foldable_parts = re.split(r"(?=> \[!details\])", section)
@@ -128,7 +163,7 @@ def chunk_markdown(
             tok_est = _estimate_tokens(part)
             if tok_est <= max_tok:
                 chunks.append(_make_chunk(
-                    file_seq, chapter, section_id, chunk_type,
+                    file_seq, chapter, section_id, heading_path, chunk_type,
                     part, chunk_idx, is_draft, tok_est,
                 ))
                 chunk_idx += 1
@@ -147,7 +182,7 @@ def chunk_markdown(
 
                         if buffer_tokens + segment_tokens > max_tok and buffer:
                             chunks.append(_make_chunk(
-                                file_seq, chapter, section_id, chunk_type,
+                                file_seq, chapter, section_id, heading_path, chunk_type,
                                 buffer, chunk_idx, is_draft, buffer_tokens,
                             ))
                             chunk_idx += 1
@@ -159,7 +194,7 @@ def chunk_markdown(
 
                 if buffer:
                     chunks.append(_make_chunk(
-                        file_seq, chapter, section_id, chunk_type,
+                        file_seq, chapter, section_id, heading_path, chunk_type,
                         buffer, chunk_idx, is_draft, buffer_tokens,
                     ))
                     chunk_idx += 1
@@ -317,10 +352,13 @@ def _split_oversized_text(text: str, max_tokens: int) -> list[str]:
 
 
 def _make_chunk(
-    file_seq: str, chapter: str, section_id: str,
+    file_seq: str, chapter: str, section_id: str, heading_path: list[str],
     chunk_type: str, text: str, idx: int,
     is_draft: bool, token_estimate: int,
 ) -> dict:
+    weak_concepts = _extract_concepts(text)
+    raw_formulas = _extract_formulas(text)
+    formula_signatures = _formula_signatures(raw_formulas)
     return {
         "chunk_id": f"{file_seq}-{idx:03d}",
         "chunk_index": idx,
@@ -328,12 +366,36 @@ def _make_chunk(
         "chapter": chapter,
         "file_seq": file_seq,
         "section_id": section_id,
-        "concepts": _extract_concepts(text),
-        "formulas": _extract_formulas(text),
+        "heading_path": heading_path,
+        "weak_concepts": weak_concepts,
+        "raw_formulas": raw_formulas,
+        "formula_signatures": formula_signatures,
+        "concepts": weak_concepts,
+        "formulas": raw_formulas,
         "chunk_type": chunk_type,
         "is_draft": is_draft,
         "token_estimate": token_estimate,
     }
+
+
+def _clean_heading(value: str) -> str:
+    value = re.sub(r"^\s*#+\s*", "", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip(" -—:：。；;，,")
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
 
 
 if __name__ == "__main__":

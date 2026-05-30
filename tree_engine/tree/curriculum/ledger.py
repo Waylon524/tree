@@ -69,6 +69,7 @@ def update_finished_record(
     chapter: str,
     path: Path,
     graph_node_id: str | None = None,
+    covered_node_ids: list[str] | None = None,
     required_nodes: list[str] | None = None,
     source_collections: list[str] | None = None,
     hit_chunks: list[str] | None = None,
@@ -80,6 +81,7 @@ def update_finished_record(
         path,
         text,
         graph_node_id=graph_node_id,
+        covered_node_ids=covered_node_ids,
         required_nodes=required_nodes,
         source_collections=source_collections,
         hit_chunks=hit_chunks,
@@ -100,7 +102,7 @@ def reconcile_finished_outputs(root: Path) -> dict[str, Any]:
     ledger = load_ledger(root)
     finished_paths = {
         _relative_path(root, path)
-        for path in sorted(paths.outputs_root(root).glob("*/*.md"))
+        for path in sorted(paths.outputs_root(root).glob("**/*.md"))
     }
     known_paths = {
         item.get("path")
@@ -113,12 +115,12 @@ def reconcile_finished_outputs(root: Path) -> dict[str, Any]:
         if isinstance(item, dict) and item.get("path") in finished_paths
     ]
     changed = len(records) != len([item for item in ledger.get("records", []) if isinstance(item, dict)])
-    for path in sorted(paths.outputs_root(root).glob("*/*.md")):
+    for path in sorted(paths.outputs_root(root).glob("**/*.md")):
         rel = _relative_path(root, path)
         if rel in known_paths:
             continue
-        chapter = path.parent.name
-        records.append(build_finished_record(root, chapter, path, path.read_text(encoding="utf-8")))
+        execution_path = _execution_path_from_output_path(root, path)
+        records.append(build_finished_record(root, execution_path, path, path.read_text(encoding="utf-8")))
         known_paths.add(rel)
         changed = True
     if changed:
@@ -133,6 +135,7 @@ def build_finished_record(
     path: Path,
     text: str,
     graph_node_id: str | None = None,
+    covered_node_ids: list[str] | None = None,
     required_nodes: list[str] | None = None,
     source_collections: list[str] | None = None,
     hit_chunks: list[str] | None = None,
@@ -140,6 +143,8 @@ def build_finished_record(
     metadata = _front_matter(text)
     headings = _headings(text)
     title = _title_from_text(path, headings)
+    execution_path = str(chapter or _execution_path_from_output_path(root, path))
+    tree_id, branch_id = _split_execution_path(execution_path)
     terms = _unique(
         _clean_term(term)
         for term in (
@@ -151,8 +156,19 @@ def build_finished_record(
     misconceptions = _extract_misconceptions(text, metadata)[:12]
     prerequisites = _extract_prerequisites(text)[:8]
     file_seq = path.stem.split(".", 1)[0]
+    covered_nodes = _unique(
+        str(item)
+        for item in [
+            *(covered_node_ids or []),
+            *([graph_node_id] if graph_node_id else []),
+        ]
+        if str(item).strip()
+    )
     return {
-        "chapter": chapter,
+        "chapter": execution_path,
+        "execution_path": execution_path,
+        "tree_id": tree_id,
+        "branch_id": branch_id,
         "file_seq": file_seq,
         "filename": path.name,
         "path": _relative_path(root, path),
@@ -162,6 +178,7 @@ def build_finished_record(
         "covered_misconceptions": misconceptions,
         "prerequisites": prerequisites,
         "graph_node_id": graph_node_id,
+        "covered_node_ids": covered_nodes,
         "required_nodes": list(required_nodes or []),
         "source_collections": list(source_collections or []),
         "hit_chunks": _unique(str(item) for item in hit_chunks or [] if str(item).strip()),
@@ -175,9 +192,12 @@ def duplicate_brief(
     *,
     top_n: int = 5,
     threshold: float = 0.34,
+    allowed_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     ledger = reconcile_finished_outputs(root)
     records = [item for item in ledger.get("records", []) if isinstance(item, dict)]
+    if allowed_paths is not None:
+        records = [record for record in records if _record_path_allowed(record, allowed_paths)]
     scored = []
     query_terms = _term_set(query)
     for record in records:
@@ -221,7 +241,7 @@ def format_duplicate_brief(brief: dict[str, Any]) -> str:
             "Rules:",
             "- Treat the matched finished outputs as already taught.",
             "- New work must state the incremental delta beyond these matches.",
-            "- If there is no clear delta, keep duplicate material brief and focus the draft on the remaining planner-selected delta.",
+            "- If there is no clear delta, keep duplicate material brief and focus the draft on the remaining declared branch-span delta.",
             "- Cite matched concepts briefly as prerequisites; do not reteach them.",
         ]
     )
@@ -242,6 +262,27 @@ def format_ledger_context(root: Path, limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def format_scoped_ledger_context(root: Path, allowed_paths: set[str] | None, limit: int = 30) -> str:
+    """Format finished ledger records visible to one BranchRun prior scope."""
+    if allowed_paths is None:
+        return format_ledger_context(root, limit=limit)
+    ledger = reconcile_finished_outputs(root)
+    records = [
+        item
+        for item in ledger.get("records", [])
+        if isinstance(item, dict) and _record_path_allowed(item, allowed_paths)
+    ]
+    if not records:
+        return "Knowledge Ledger: no prior finished outputs are visible in this BranchRun scope."
+    lines = ["Knowledge Ledger: prior finished outputs visible in this BranchRun scope:"]
+    for record in records[:limit]:
+        concepts = ", ".join(record.get("covered_concepts", [])[:8])
+        lines.append(f"- {record.get('path')}: {record.get('knowledge_point')} | concepts: {concepts}")
+    if len(records) > limit:
+        lines.append(f"- ... {len(records) - limit} more records omitted")
+    return "\n".join(lines)
+
+
 def _front_matter(text: str) -> dict[str, Any]:
     match = _FRONT_MATTER_RE.search(text)
     if not match:
@@ -253,6 +294,31 @@ def _front_matter(text: str) -> dict[str, Any]:
         key, value = line.split(":", 1)
         result[key.strip()] = _parse_metadata_value(value.strip())
     return result
+
+
+def _record_path_allowed(record: dict[str, Any], allowed_paths: set[str]) -> bool:
+    path = str(record.get("path") or "")
+    return path in allowed_paths or f"finished:{path}" in allowed_paths
+
+
+def _execution_path_from_output_path(root: Path, path: Path) -> str:
+    try:
+        rel = path.relative_to(paths.outputs_root(root))
+    except ValueError:
+        return path.parent.name
+    parts = rel.parts
+    if len(parts) >= 3:
+        return "/".join(parts[:2])
+    if len(parts) >= 2:
+        return parts[0]
+    return path.parent.name
+
+
+def _split_execution_path(execution_path: str) -> tuple[str, str]:
+    parts = [part for part in str(execution_path).split("/") if part]
+    tree_id = parts[0] if parts else ""
+    branch_id = parts[1] if len(parts) > 1 else ""
+    return tree_id, branch_id
 
 
 def _parse_metadata_value(value: str) -> Any:

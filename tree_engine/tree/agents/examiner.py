@@ -1,4 +1,4 @@
-"""Examiner agent: compose exam (Phase A), audit (Phase B), scan chapters (Phase C)."""
+"""Examiner agent: branch-span exam assembly and audit."""
 
 from __future__ import annotations
 
@@ -10,13 +10,12 @@ from tree.agents.parsers import (
     ParseError,
     extract_bottleneck_report,
     parse_exam_id,
-    parse_chapter_scan_output,
     parse_exam_output,
     parse_route,
 )
 from tree.io import paths
 from tree.model.client import LLMClient
-from tree.state.models import AuditResult, ChapterScanResult, ExamSections
+from tree.state.models import AuditResult, ExamSections
 
 
 class ExaminerAgent:
@@ -62,7 +61,7 @@ class ExaminerAgent:
                 parts.append(f"--- Source {i + 1} ---\n{content}\n")
         if graph_context:
             parts.append(
-                "Planner-bound graph context for this active chapter. Treat this as the "
+                "Planner-bound graph context for this active BranchRun / branch span. Treat this as the "
                 "highest-priority scope constraint for Phase A:\n"
                 f"{graph_context}\n"
             )
@@ -96,6 +95,7 @@ class ExaminerAgent:
         prior_file_paths: list[str],
         previous_bottleneck: str | None = None,
         retrieved_context: list[dict] | None = None,
+        graph_context: str | None = None,
     ) -> AuditResult:
         system = self._loader.load("examiner")
         parts = [
@@ -107,6 +107,12 @@ class ExaminerAgent:
         ]
         if previous_bottleneck:
             parts.append(f"[Previous Bottleneck Report]:\n{previous_bottleneck}\n")
+        if graph_context:
+            parts.append(
+                "Planner-bound graph context for this audit. PASS requires the draft to cover "
+                "the declared Covered_Node_IDs and stay inside this ActiveBranch boundary:\n"
+                f"{graph_context}\n"
+            )
         parts.append(
             "Prior completed file paths:\n"
             + "\n".join(f"  - {p}" for p in prior_file_paths)
@@ -121,7 +127,7 @@ class ExaminerAgent:
         parts.append(
             "You must end the response with exactly these two machine-readable lines:\n"
             "ROUTE: PASS or ROUTE: FAIL_KNOWLEDGE_GAP\n"
-            "EXAM_ID: <knowledge point name>\n"
+            "EXAM_ID: <branch span or output title>\n"
         )
 
         user = "\n".join(parts)
@@ -132,54 +138,6 @@ class ExaminerAgent:
         exam_id = parse_exam_id(raw)
         report = extract_bottleneck_report(raw)
         return AuditResult(route=route, exam_id=exam_id, bottleneck_report=report)
-
-    async def scan_next_chapter(
-        self,
-        pipeline_state_text: str,
-        source_payload: dict[str, list[dict[str, str]]],
-        finished_payload: dict[str, list[dict[str, str]]] | None = None,
-        source_inventory_context: str | None = None,
-    ) -> tuple[ChapterScanResult | None, bool]:
-        system = self._loader.load("examiner")
-        user = (
-            "## Task: Chapter Continuation Scan (Phase C)\n\n"
-            f"pipeline-state.json:\n{pipeline_state_text}\n\n"
-            "Finished-output coverage already taught by TREE. Treat this as covered curriculum; "
-            "do not open duplicate chapters or duplicate knowledge points:\n"
-        )
-        if finished_payload:
-            for chapter, docs in finished_payload.items():
-                user += f"\n# Finished Chapter: {chapter}\n"
-                for doc in docs:
-                    user += f"\n--- {doc['path']} ---\n{doc['content']}\n"
-        else:
-            user += "(none)\n"
-
-        if source_inventory_context:
-            user += (
-                "\nPlanner-controlled context. The Selected Node Context is the primary "
-                "scope for this exam. Compose for that node only. Use the full graph and "
-                "warnings only to narrow, skip, or flag duplicate/merge-needed/over-broad "
-                "selections; do not choose a different global direction:\n"
-                f"\n{source_inventory_context}\n"
-            )
-
-        user += "\nStructured source material collections:\n"
-        for collection, docs in source_payload.items():
-            user += f"\n# Collection: {collection}\n"
-            for doc in docs:
-                user += f"\n--- {doc['path']} ---\n{doc['content']}\n"
-        raw = await self._client.call("examiner", system, user)
-
-        raw = await self._repair_chapter_scan_format_if_needed(
-            system,
-            user,
-            raw,
-            source_payload,
-            task_name="chapter continuation scan",
-            repair_title="Repair the examiner chapter scan format",
-        )
-        return _parse_chapter_scan_output(raw, source_payload), False
 
     async def _repair_audit_format_if_needed(
         self,
@@ -198,10 +156,10 @@ class ExaminerAgent:
                     "Do not change the audit judgment or invent new analysis. Preserve the Bottleneck "
                     "Report meaning, but return a complete parseable response that ends with exactly:\n"
                     "ROUTE: PASS\n"
-                    "EXAM_ID: <knowledge point name>\n"
+                    "EXAM_ID: <branch span or output title>\n"
                     "or:\n"
                     "ROUTE: FAIL_KNOWLEDGE_GAP\n"
-                    "EXAM_ID: <knowledge point name>\n\n"
+                    "EXAM_ID: <branch span or output title>\n\n"
                     "Original audit task:\n"
                     f"{original_user_prompt}\n\n"
                     "Previous unparseable examiner output:\n"
@@ -228,8 +186,9 @@ class ExaminerAgent:
                     "Do not change the examiner's substantive decision, scope, questions, "
                     "answers, or instructions unless needed to place existing content under "
                     "the required headers. Return a complete parseable response with exactly "
-                    "these four sections:\n"
+                    "these five sections:\n"
                     "## [Next_Knowledge_Point]\n"
+                    "## [Covered_Node_IDs]\n"
                     "## [Blind_Exam]\n"
                     "## [Answer_Key]\n"
                     "## [Writer_Instructions]\n\n"
@@ -242,55 +201,6 @@ class ExaminerAgent:
 
         try:
             parse_exam_output(raw_output)
-            return raw_output
-        except ParseError as exc:
-            self._write_format_failure(task_name, original_user_prompt, raw_output, str(exc))
-            raise
-
-    async def _repair_chapter_scan_format_if_needed(
-        self,
-        system_prompt: str,
-        original_user_prompt: str,
-        raw_output: str,
-        source_payload: dict[str, list[dict[str, str]]],
-        task_name: str,
-        repair_title: str,
-    ) -> str:
-        for _ in range(self._max_format_retries):
-            try:
-                _parse_chapter_scan_output(raw_output, source_payload)
-                return raw_output
-            except ParseError as exc:
-                repair_prompt = (
-                    f"{repair_title}.\n\n"
-                    "Do not change the examiner's substantive decision, scope, questions, "
-                    "answers, or instructions unless needed to place existing content under "
-                    "the required headers. Return a complete parseable response with exactly "
-                    "these ten sections:\n"
-                    "## [Next_Chapter]\n"
-                    "## [Source_Collection]\n"
-                    "## [Source_Collections]\n"
-                    "## [Graph_Node]\n"
-                    "## [Required_Nodes]\n"
-                    "## [Selection_Rationale]\n"
-                    "## [Next_Knowledge_Point]\n"
-                    "## [Blind_Exam]\n"
-                    "## [Answer_Key]\n"
-                    "## [Writer_Instructions]\n\n"
-                    "Next_Chapter is only a provisional label; the engine assigns stable "
-                    "tree ids and names closed chapters later. Source_Collection must be one primary collection id from "
-                    "the source collection headings, or none. Source_Collections must be a "
-                    "comma-separated list of all related source collections, primary first. "
-                    "Graph_Node and Required_Nodes may be none when no graph node fits.\n\n"
-                    f"Parser error: {exc}\n\n"
-                    f"Original {task_name} task:\n{original_user_prompt}\n\n"
-                    "Previous unparseable examiner output:\n"
-                    f"{raw_output}\n"
-                )
-                raw_output = await self._client.call("examiner", system_prompt, repair_prompt)
-
-        try:
-            _parse_chapter_scan_output(raw_output, source_payload)
             return raw_output
         except ParseError as exc:
             self._write_format_failure(task_name, original_user_prompt, raw_output, str(exc))
@@ -338,24 +248,3 @@ def _format_retrieved_context(retrieved_context: list[dict]) -> str:
         score_text = f", score={score:.4f}" if isinstance(score, float) else ""
         parts.append(f"--- RAG Hit {i}: kind={kind}, {source}{score_text} ---\n{hit.get('text', '')}\n")
     return "\n".join(parts)
-
-
-def _parse_chapter_scan_output(
-    raw_output: str,
-    source_payload: dict[str, list[dict[str, str]]],
-) -> ChapterScanResult:
-    result = parse_chapter_scan_output(raw_output)
-    if source_payload and result.source_collection not in source_payload:
-        available = ", ".join(sorted(source_payload))
-        raise ParseError(
-            "Source_Collection must exactly match one provided collection id. "
-            f"Got {result.source_collection!r}; available: {available}"
-        )
-    invalid = [item for item in result.source_collections if item not in source_payload]
-    if source_payload and invalid:
-        available = ", ".join(sorted(source_payload))
-        raise ParseError(
-            "Source_Collections must contain only provided collection ids. "
-            f"Got invalid {invalid!r}; available: {available}"
-        )
-    return result

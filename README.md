@@ -18,12 +18,14 @@ materials/
   -> Archivist 结构化清洗
   -> source RAG
   -> Source Inventory
-  -> Candidate Nodes
-  -> Knowledge Graph Planner 选择树上下一节点
-  -> Examiner 在选中节点内命题
+  -> KnowledgeGroups
+  -> KnowledgeNodes
+  -> KnowledgeDAG / KnowledgeBranches
+  -> BranchRun 调度
+  -> Examiner 在 active branch span 内命题
   -> Student 盲测
   -> Examiner 批改
-  -> Writer 写当前节点的增量教材
+  -> Writer 写 declared branch span 教材
   -> outputs/
 ```
 
@@ -237,7 +239,7 @@ tre
 - 如果 `materials/` 中没有任何受支持的资料文件，启动会报错并提示先放入资料。
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
-- 所有 source materials embedding 完成后，先构建 source inventory、candidate nodes 和 knowledge graph，再进入考试-写作循环。
+- 所有 source materials embedding 完成后，先构建 KnowledgeGroups、KnowledgeNodes、KnowledgeDAG 和 KnowledgeBranches，再进入 BranchRun 考试-写作循环。
 - 有资料但没有新增或变更：直接从 `.tree/runtime/pipeline-state.json` 恢复循环。
 
 强行关闭 `TREE` 交互界面（例如 Ctrl+C、终端关闭或输入流断开）会自动执行 `/quit`，停止 TREE 和 embedding server。只有主动输入 `/exit` 才会只离开交互界面而保留后台服务。
@@ -385,12 +387,12 @@ tre
 - source materials 写入 RAG 后删除 `.tree/runtime/source_materials/` 中的中间 Markdown。
 - finished outputs 保留在 `outputs/`，同时写入 RAG。
 - drafts 不写入 RAG，Student 直接读取当前 draft 全文。
-- Source RAG 先被整理成 chunk-level source inventory，再聚类成 candidate knowledge nodes。
-- Knowledge Graph Planner 根据 candidate nodes、finished ledger、chunk overlap、concept overlap、prerequisite signal 和 source overlap 选择下一棵树的 root 或当前树的新枝条。
-- Examiner 命题会参考 active graph node、source RAG、finished output RAG 和 ledger 去重信息；当章节绑定了 `Graph_Node` 时，Examiner 不能重新选择全局方向。
+- Source RAG 先被整理成文件内顺序 KnowledgeGroups，再跨文件合并为 canonical KnowledgeNodes。
+- Planner 根据 KnowledgeNodes、finished ledger、依赖边、相邻关系和 source overlap 构建 KnowledgeDAG 与 KnowledgeBranches，并调度 ready BranchRuns。
+- Examiner 命题只在 ActiveBranch Context 内声明连续 `Covered_Node_IDs`，不能选择 root、branch 或全局方向。
 - Student 答题会使用已学习 finished outputs 的 RAG 检索，并直接阅读当前 draft；Learned RAG Hit 视为已学成品教材摘录，不是 source material。
 - Examiner 审核时可用 source RAG 判断 writer 应补什么，但 source RAG 不能作为 student faithfulness 的证据。
-- Writer 会接收 active graph node context，只写当前 node 的增量；required nodes 和 supporting parents 只能作为先修引用，不应重讲。
+- Writer 会接收 branch span context，只写 declared branch span；上游 ancestor nodes 和当前 branch 前序文件只能作为先修引用，不应重讲。
 - chunker 使用约 1500-3000 token 的语义块，查询命中后扩展读取相邻 chunk。
 
 当前 chunk 预算：
@@ -659,12 +661,14 @@ materials/
   -> Archivist cleanup
   -> source RAG
   -> Source Inventory
-  -> Candidate Nodes
-  -> Knowledge Graph Planner selects the next tree node
-  -> Examiner composes inside the selected node
+  -> KnowledgeGroups
+  -> KnowledgeNodes
+  -> KnowledgeDAG / KnowledgeBranches
+  -> BranchRun scheduler
+  -> Examiner composes inside the active branch span
   -> Student blind test
   -> Examiner audit
-  -> Writer creates the node delta
+  -> Writer creates the declared branch span draft
   -> outputs/
 ```
 
@@ -867,7 +871,7 @@ At the `TREE>` prompt:
 /start      # start TREE in the background and ensure embedding is running
 /watch      # refresh current progress until Esc or Ctrl+C returns to TREE>
 /progress   # show one progress snapshot
-/status     # show service and chapter status
+/status     # show service and BranchRun status
 /stop       # stop TREE while keeping embedding running
 /quit       # stop TREE and embedding
 /help       # show interactive commands
@@ -878,7 +882,7 @@ For daily use, stay inside `TREE>` and type these slash commands. Every `/start`
 - if `materials/` contains no supported source files, startup fails and asks you to add materials first
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
-- after all source materials are embedded, tree builds source inventory, candidate nodes, and the knowledge graph before starting the exam-writing loop
+- after all source materials are embedded, tree builds KnowledgeGroups, KnowledgeNodes, the KnowledgeDAG, and KnowledgeBranches before starting BranchRun exam-writing loops
 - if materials exist but nothing is new or changed, the loop resumes from `.tree/runtime/pipeline-state.json`
 
 Force-closing the `TREE` interactive shell, such as Ctrl+C, terminal close, or input-stream disconnect, automatically runs `/quit` and stops TREE plus the embedding server. Only typing `/exit` leaves the shell while keeping background services unchanged.
@@ -1016,9 +1020,9 @@ tre
 
 | Role | Prompt | Purpose |
 | --- | --- | --- |
-| Examiner | `EXAMINER_PROMPT` | Composes inside the Knowledge Graph Planner selected node, audits answers, and decides PASS/FAIL |
+| Examiner | `EXAMINER_PROMPT` | Composes inside the active branch span, audits answers, and decides PASS/FAIL |
 | Student | `STUDENT_PROMPT` | Zero-baseline learner using the current draft, prior full outputs, and learned RAG hits |
-| Writer | `WRITER_PROMPT` | Creates or optimizes drafts from abstract bottleneck reports and the graph-node delta |
+| Writer | `WRITER_PROMPT` | Creates or optimizes drafts from abstract bottleneck reports and the declared branch span |
 | Archivist | `ARCHIVIST_PROMPT` | Cleans PaddleOCR output into normalized Markdown |
 
 #### RAG Strategy
@@ -1026,12 +1030,12 @@ tre
 - Source materials are deleted from `.tree/runtime/source_materials/` after indexing.
 - Finished outputs remain in `outputs/` and are indexed.
 - Drafts are not indexed; the Student reads the current draft directly.
-- Source RAG is first converted into chunk-level source inventory, then clustered into candidate knowledge nodes.
-- The Knowledge Graph Planner selects a new root or the next branch by comparing candidate nodes with the finished ledger using chunk overlap, concept overlap, prerequisite signal, and source overlap.
-- Examiner exam assembly uses the active graph node, source RAG, finished-output RAG, and ledger duplicate checks. When a chapter is bound to `Graph_Node`, the Examiner must not reselect the global direction.
+- Source RAG is first converted into file-local KnowledgeGroups, then clustered across files into canonical KnowledgeNodes.
+- The planner builds a KnowledgeDAG and KnowledgeBranches from KnowledgeNodes, finished ledger coverage, dependency edges, continuity, and source overlap.
+- Examiner exam assembly uses ActiveBranch Context, source RAG, finished-output RAG, and ledger duplicate checks. It must declare continuous `Covered_Node_IDs` and must not choose root, branch, or global direction.
 - Student answers use RAG retrieval over already learned finished outputs and direct reading of the current draft. Learned RAG Hits are treated as excerpts from passed outputs, not source material.
 - During audit, source RAG may help identify what the Writer should add, but it can never support student faithfulness.
-- Writer receives active graph-node context and writes only the current node delta. Required nodes and supporting parents are prerequisites to cite, not material to reteach.
+- Writer receives branch-span context and writes only the declared branch span. Ancestor nodes and prior branch files are prerequisites to cite, not material to reteach.
 - Retrieval uses semantic chunks of about 1500-3000 tokens plus adjacent chunk expansion.
 
 Chunk budgets:

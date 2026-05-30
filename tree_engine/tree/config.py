@@ -48,6 +48,7 @@ class Settings:
     source_archivist_chunk_chars: int = 24000
     pro_degradation_threshold: int = 3
     pro_degradation_cooldown_sec: int = 600
+    max_active_branch_runs: int = 2
     project_root: Path = field(default_factory=lambda: Path.cwd())
 
     @classmethod
@@ -95,6 +96,7 @@ class Settings:
             source_archivist_chunk_chars=_env_int("SOURCE_ARCHIVIST_CHUNK_CHARS", 24000),
             pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
             pro_degradation_cooldown_sec=_env_int("PRO_DEGRADATION_COOLDOWN_SEC", 600),
+            max_active_branch_runs=_env_int("MAX_ACTIVE_BRANCH_RUNS", 2),
             project_root=root,
         )
 

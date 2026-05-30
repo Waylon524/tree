@@ -80,12 +80,24 @@ def candidate_nodes_path(root: Path) -> Path:
     return runtime_root(root) / "candidate-nodes.json"
 
 
+def knowledge_nodes_path(root: Path) -> Path:
+    return candidate_nodes_path(root)
+
+
 def curriculum_map_path(root: Path) -> Path:
     return runtime_root(root) / "curriculum-map.json"
 
 
 def knowledge_graph_path(root: Path) -> Path:
     return runtime_root(root) / "knowledge-graph.json"
+
+
+def knowledge_dag_path(root: Path) -> Path:
+    return runtime_root(root) / "knowledge-dag.json"
+
+
+def knowledge_branches_path(root: Path) -> Path:
+    return runtime_root(root) / "knowledge-branches.json"
 
 
 def rag_store_path(root: Path) -> Path:

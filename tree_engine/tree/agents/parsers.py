@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from tree.state.models import ChapterScanResult, ExamSections, Route
+from tree.state.models import ExamSections, Route
 
 
 class ParseError(Exception):
@@ -52,36 +52,16 @@ def parse_exam_id(text: str) -> str:
 def parse_exam_output(text: str) -> ExamSections:
     """Parse examiner Phase A output into structured sections."""
     kp = extract_section(text, "Next_Knowledge_Point")
+    covered_node_ids = _split_required_list(extract_section(text, "Covered_Node_IDs"), "Covered_Node_IDs")
     be = extract_section(text, "Blind_Exam")
     ak = extract_section(text, "Answer_Key")
     wi = extract_section(text, "Writer_Instructions")
     return ExamSections(
         knowledge_point=kp,
+        covered_node_ids=covered_node_ids,
         blind_exam=be,
         answer_key=ak,
         writer_instructions=wi,
-    )
-
-
-def parse_chapter_scan_output(text: str) -> ChapterScanResult:
-    """Parse examiner Phase C output into chapter metadata plus first exam sections."""
-    chapter_name = extract_section(text, "Next_Chapter").strip()
-    if not chapter_name:
-        raise ParseError("Section ## [Next_Chapter] is empty")
-    source_collection = _normalize_optional_section(extract_section(text, "Source_Collection"))
-    source_collections = _split_optional_list(extract_optional_section(text, "Source_Collections"))
-    if source_collection and source_collection not in source_collections:
-        source_collections.insert(0, source_collection)
-    graph_node_id = _normalize_optional_section(extract_optional_section(text, "Graph_Node"))
-    required_nodes = _split_optional_list(extract_optional_section(text, "Required_Nodes"))
-    return ChapterScanResult(
-        chapter_name=chapter_name,
-        source_collection=source_collection,
-        source_collections=source_collections,
-        graph_node_id=graph_node_id,
-        required_nodes=required_nodes,
-        exam_sections=parse_exam_output(text),
-        selection_rationale=extract_optional_section(text, "Selection_Rationale"),
     )
 
 
@@ -100,6 +80,13 @@ def _split_optional_list(value: str) -> list[str]:
         return []
     items = re.split(r"[,\n，、]+", normalized)
     return [item.strip() for item in items if item.strip()]
+
+
+def _split_required_list(value: str, header: str) -> list[str]:
+    items = _split_optional_list(value)
+    if not items:
+        raise ParseError(f"Section ## [{header}] must contain at least one item")
+    return items
 
 
 def extract_bottleneck_report(text: str) -> str:

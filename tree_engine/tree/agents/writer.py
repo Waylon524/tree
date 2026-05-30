@@ -26,7 +26,7 @@ class WriterAgent:
 
     async def create_or_optimize(
         self,
-        knowledge_point: str,
+        span_title: str,
         file_seq: str,
         bottleneck_report: str,
         prior_file_contents: list[str],
@@ -48,7 +48,7 @@ class WriterAgent:
         )
         parts = [
             f"## Task: {mode} mode\n",
-            f"Knowledge point: {knowledge_point}\n",
+            f"Declared branch span title: {span_title}\n",
             f"File sequence: {file_seq}\n",
             f"Bottleneck Report:\n{bottleneck_report}\n",
         ]
@@ -62,8 +62,8 @@ class WriterAgent:
             parts.append(f"[Writer_Instructions]:\n{writer_instructions}\n")
         if graph_context:
             parts.append(
-                "Planner-bound graph context for the active chapter. Use it only to enforce "
-                "the selected node delta and prerequisite boundaries:\n"
+                "Planner-bound graph context for this active BranchRun. Use it only to enforce "
+                "the declared branch span delta and prerequisite boundaries:\n"
                 f"{graph_context}\n"
             )
         if retrieved_context:
@@ -87,7 +87,7 @@ class WriterAgent:
 def _format_retrieved_context(retrieved_context: list[dict]) -> str:
     parts = [
         "Retrieved RAG context:\n"
-        "- content_kind=source hits may teach the current new knowledge point.\n"
+        "- content_kind=source hits may teach the current declared branch span.\n"
         "- content_kind=finished hits are already taught material. Cite them briefly as prerequisites; "
         "do not duplicate their definitions, examples, or misconception explanations.\n"
         "- content_kind=ledger hits summarize the delta that must remain after removing duplicates.\n"

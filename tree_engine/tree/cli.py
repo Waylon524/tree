@@ -46,7 +46,7 @@ _INTERACTIVE_COMMANDS = [
     ("/start", "Start TREE in the background"),
     ("/init", "Initialize the current folder as a TREE workspace"),
     ("/status", "Show service and pipeline status"),
-    ("/progress", "Show current services, ingest, chapter, and recent trace"),
+    ("/progress", "Show current services, ingest, BranchRun, and recent trace"),
     ("/watch", "Refresh /progress until Esc or Ctrl+C"),
     ("/stop", "Stop TREE but keep embedding running"),
     ("/quit", "Stop TREE and embedding, then leave interactive mode"),
@@ -58,7 +58,7 @@ _INTERACTIVE_COMMANDS = [
     ("/rag status", "Show local RAG index status"),
     ("/rag ledger", "Show finished-output knowledge ledger"),
     ("/rag inventory", "Show chunk-level source inventory"),
-    ("/rag candidates", "Show generated candidate knowledge nodes"),
+    ("/rag nodes", "Show generated KnowledgeNodes"),
     ("/rag graph", "Show knowledge graph nodes and relations"),
     ("/help", "Show this slash-command help"),
     ("/exit", "Leave interactive mode without stopping services"),
@@ -257,7 +257,7 @@ def start_embedding_command(
 def status(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Display current pipeline state, chapter progress, iteration counts."""
+    """Display current pipeline state, BranchRun progress, iteration counts."""
     from tree.state.manager import StateManager
     from tree.services import service_status
 
@@ -281,19 +281,21 @@ def status(
     rprint(services)
 
     if not state.chapters:
-        rprint("[dim]No chapters yet. Pipeline has not started.[/dim]")
+        rprint("[dim]No BranchRun executions yet. Pipeline has not started.[/dim]")
         return
 
     for ch in state.chapters:
         status_color = "green" if ch.status == "completed" else "yellow"
-        files = ", ".join(ch.files_completed) if ch.files_completed else "(none)"
-        title = ch.chapter_title or ch.provisional_chapter_title or "unnamed"
+        files = ", ".join(ch.outputs_completed) if ch.outputs_completed else "(none)"
+        title = ch.display_title or ch.provisional_display_title or "unnamed"
         rprint(
             Panel(
                 f"[{status_color}]{ch.status}[/{status_color}]\n"
+                f"Tree: {ch.tree_id or 'n/a'}\n"
+                f"Branch: {ch.branch_id or 'n/a'}\n"
                 f"Title: {title}\n"
-                f"Files completed: {files}",
-                title=ch.chapter_name,
+                f"Outputs completed: {files}",
+                title=ch.execution_path,
             )
         )
 
@@ -881,15 +883,15 @@ def rag_inventory(
         rprint(f"[dim]{len(collections) - limit} more collections omitted. Use --limit to show more.[/dim]")
 
 
-@rag_app.command("candidates")
-def rag_candidates(
-    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and candidate nodes first"),
+@rag_app.command("nodes")
+def rag_nodes(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and KnowledgeNodes first"),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
 ) -> None:
-    """Show candidate knowledge nodes derived from source inventory."""
+    """Show KnowledgeNodes derived from source inventory."""
     try:
         from tree.curriculum.inventory import load_inventory, rebuild_source_inventory
-        from tree.curriculum.candidate_nodes import load_candidate_nodes, rebuild_candidate_nodes
+        from tree.curriculum.knowledge_nodes import load_knowledge_nodes, rebuild_knowledge_nodes
         from tree.rag.client import RAGClient
         from tree.state.manager import StateManager
 
@@ -897,12 +899,12 @@ def rag_candidates(
         state = StateManager(paths.pipeline_state_path(root)).load()
         completed = {
             collection
-            for chapter in state.chapters
-            if chapter.status == "completed" and chapter.chapter_title
-            for collection in ([chapter.source_collection] + list(chapter.source_collections or []))
+            for execution in state.chapters
+            if execution.status == "completed" and execution.display_title
+            for collection in ([execution.source_collection] + list(execution.source_collections or []))
             if collection
         }
-        if rebuild or not paths.candidate_nodes_path(root).exists():
+        if rebuild or not paths.knowledge_nodes_path(root).exists():
             if rebuild or not paths.source_inventory_path(root).exists():
                 rag = RAGClient(store_path=paths.rag_store_path(root))
                 try:
@@ -916,66 +918,75 @@ def rag_candidates(
                     rag.close()
             else:
                 inventory = load_inventory(root)
-            candidate_nodes = rebuild_candidate_nodes(root, inventory, completed_collections=completed)
+            knowledge_nodes = rebuild_knowledge_nodes(root, inventory, completed_collections=completed)
         else:
-            candidate_nodes = load_candidate_nodes(root)
+            knowledge_nodes = load_knowledge_nodes(root)
     except Exception as exc:
-        rprint(f"[red]Candidate nodes unavailable:[/red] {exc}")
+        rprint(f"[red]KnowledgeNodes unavailable:[/red] {exc}")
         return
 
-    candidates = [
-        item for item in candidate_nodes.get("chapter_candidates", []) if isinstance(item, dict)
+    nodes = [
+        item for item in knowledge_nodes.get("knowledge_nodes", []) if isinstance(item, dict)
     ]
-    if not candidates:
-        rprint("[dim]Candidate nodes are empty. Build source inventory first.[/dim]")
+    if not nodes:
+        rprint("[dim]KnowledgeNodes are empty. Build source inventory first.[/dim]")
         return
 
-    table = Table(title="Candidate Knowledge Nodes")
-    table.add_column("Candidate")
+    table = Table(title="KnowledgeNodes")
+    table.add_column("KnowledgeNode")
     table.add_column("Status")
-    table.add_column("Title Hint")
+    table.add_column("Title")
     table.add_column("Collections")
     table.add_column("Prerequisites")
     table.add_column("Core Concepts")
-    for candidate in candidates[:limit]:
+    for node in nodes[:limit]:
         table.add_row(
-            str(candidate.get("candidate_id", "")),
-            str(candidate.get("status", "")),
-            _truncate(str(candidate.get("title_hint", "")), 34),
-            ", ".join(candidate.get("source_collections", [])),
-            _truncate(", ".join(candidate.get("prerequisite_concepts", [])[:5]), 42),
-            _truncate(", ".join(candidate.get("core_concepts", [])[:8]), 72),
+            str(node.get("node_id", "")),
+            str(node.get("status", "")),
+            _truncate(str(node.get("title", "") or node.get("title_hint", "")), 34),
+            ", ".join(node.get("source_collections", [])),
+            _truncate(", ".join(node.get("prerequisite_concepts", [])[:5]), 42),
+            _truncate(", ".join(node.get("core_concepts", [])[:8]), 72),
         )
     rprint(table)
-    if len(candidates) > limit:
-        rprint(f"[dim]{len(candidates) - limit} more candidates omitted. Use --limit to show more.[/dim]")
+    if len(nodes) > limit:
+        rprint(f"[dim]{len(nodes) - limit} more KnowledgeNodes omitted. Use --limit to show more.[/dim]")
+
+
+@rag_app.command("candidates")
+def rag_candidates(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and KnowledgeNodes first"),
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
+) -> None:
+    """Compatibility alias for `rag nodes`."""
+    rag_nodes(rebuild=rebuild, limit=limit)
 
 
 @rag_app.command("map")
 def rag_map(
-    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and candidate nodes first"),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and KnowledgeNodes first"),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
 ) -> None:
-    """Compatibility alias for `rag candidates`."""
-    rag_candidates(rebuild=rebuild, limit=limit)
+    """Compatibility alias for `rag nodes`."""
+    rag_nodes(rebuild=rebuild, limit=limit)
 
 
 @rag_app.command("graph")
 def rag_graph(
-    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild graph from candidate nodes and ledger first"),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild graph from KnowledgeNodes and ledger first"),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
 ) -> None:
     """Show knowledge graph nodes and relation edges."""
     try:
         from tree.curriculum.graph import load_knowledge_graph, rebuild_knowledge_graph
+        from tree.curriculum.knowledge_nodes import load_knowledge_nodes
         from tree.curriculum.ledger import reconcile_finished_outputs
-        from tree.curriculum.candidate_nodes import load_candidate_nodes
 
         root = Path.cwd()
         if rebuild or not paths.knowledge_graph_path(root).exists():
             ledger = reconcile_finished_outputs(root)
-            candidate_nodes = load_candidate_nodes(root)
-            graph = rebuild_knowledge_graph(root, candidate_nodes, ledger)
+            knowledge_nodes = load_knowledge_nodes(root)
+            graph = rebuild_knowledge_graph(root, knowledge_nodes, ledger)
         else:
             graph = load_knowledge_graph(root)
     except Exception as exc:
@@ -1001,12 +1012,12 @@ def rag_graph(
         "[dim]"
         f"mode={planner.get('mode', 'n/a')} "
         f"selection_mode={planner.get('selection_mode', 'n/a')} "
-        f"planner_selected={planner.get('selected_node') or 'none'} "
+        f"active_planner_node={planner.get('selected_node') or 'none'} "
         f"frontier={len(planner.get('frontier_nodes', []) or [])}"
         "[/dim]"
     )
     if not nodes:
-        rprint("[dim]Knowledge graph is empty. Build candidate nodes first.[/dim]")
+        rprint("[dim]Knowledge graph is empty. Build KnowledgeNodes first.[/dim]")
         return
     selected = next(
         (node for node in nodes if node.get("node_id") == planner.get("selected_node")),
@@ -1030,7 +1041,7 @@ def rag_graph(
         if node.get("is_new_root"):
             tree_flags.append("new-root")
         if node.get("planner_selected"):
-            tree_flags.append("selected")
+            tree_flags.append("active")
         parent = node.get("parent_output") or node.get("backbone_parent")
         if parent:
             tree_flags.append(f"p:{parent}")

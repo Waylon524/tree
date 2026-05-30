@@ -22,16 +22,26 @@ class TraceLogger:
         duration_ms: int = 0,
         route: str | None = None,
         iteration: int | None = None,
+        tree_id: str = "",
+        branch_id: str = "",
+        execution_path: str = "",
+        covered_node_ids: list[str] | None = None,
     ) -> None:
+        execution_path = execution_path or chapter
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "step": step,
-            "chapter": chapter,
+            "execution_path": execution_path,
+            "tree_id": tree_id,
+            "branch_id": branch_id,
+            "chapter": execution_path,
             "file_seq": file_seq,
             "agent": agent,
             "action": action,
             "duration_ms": duration_ms,
         }
+        if covered_node_ids is not None:
+            entry["covered_node_ids"] = covered_node_ids
         if route:
             entry["route"] = route
         if iteration is not None:
