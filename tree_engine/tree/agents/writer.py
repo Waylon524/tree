@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 
 from tree.agents.loader import AgentLoader
-from tree.agents.parsers import detect_exam_too_broad
 from tree.model.client import LLMClient
 from tree.state.models import WriterResult
 
@@ -82,11 +81,7 @@ class WriterAgent:
         user = "\n".join(parts)
         raw = await self._client.call("writer", system, user)
 
-        is_broad, bloat = detect_exam_too_broad(raw)
-        if is_broad:
-            return WriterResult(is_exam_too_broad=True, bloat_description=bloat)
-
-        return WriterResult(is_exam_too_broad=False, draft_content=raw)
+        return WriterResult(draft_content=raw)
 
 
 def _format_retrieved_context(retrieved_context: list[dict]) -> str:

@@ -16,7 +16,7 @@ from tree.agents.parsers import (
 )
 from tree.io import paths
 from tree.model.client import LLMClient
-from tree.state.models import AuditResult, ChapterScanResult, ExamSections, ExamTooBroadContext
+from tree.state.models import AuditResult, ChapterScanResult, ExamSections
 
 
 class ExaminerAgent:
@@ -41,7 +41,6 @@ class ExaminerAgent:
         source_material_paths: list[str] | None = None,
         retrieved_context: list[dict] | None = None,
         graph_context: str | None = None,
-        exam_too_broad_ctx: ExamTooBroadContext | None = None,
     ) -> tuple[ExamSections | None, bool]:
         system = self._loader.load("examiner")
         parts = [
@@ -69,13 +68,6 @@ class ExaminerAgent:
             )
         if retrieved_context:
             parts.append(_format_retrieved_context(retrieved_context))
-        if exam_too_broad_ctx:
-            parts.append(
-                f"⚠ EXAM_TOO_BROAD return from writer.\n"
-                f"Reuse knowledge point name: {exam_too_broad_ctx.knowledge_point_name}\n"
-                f"Bloating defects:\n{exam_too_broad_ctx.bloat_description}\n"
-                f"You must reduce exam scope — remove/replace bloating question types.\n"
-            )
         if prior_file_contents:
             parts.append("Prior completed file contents:\n")
             for i, content in enumerate(prior_file_contents):

@@ -1379,7 +1379,7 @@ def _current_tree_relations(
     warnings = [
         edge
         for edge in edges
-        if edge.get("relation") in {"duplicate", "merge_needed", "split_needed", "adjacent"}
+        if edge.get("relation") in {"duplicate", "merge_needed", "adjacent"}
         and (edge.get("from") in row_ids or edge.get("to") in row_ids)
     ]
     for edge in warnings[:4]:

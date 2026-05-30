@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Protocol
@@ -458,7 +459,7 @@ def _candidate_from_cluster(
         source_collections,
         collection_lookup,
     )
-    candidate_id = f"candidate:{primary}:{index:02d}"
+    candidate_id = f"candidate:{primary}:{_stable_cluster_suffix(cluster, concepts)}"
     return {
         "candidate_id": candidate_id,
         "status": status,
@@ -488,6 +489,13 @@ def _representative_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
         "core_concepts": chunk.get("core_concepts", [])[:8],
         "summary": chunk.get("summary", ""),
     }
+
+
+def _stable_cluster_suffix(cluster: list[dict[str, Any]], concepts: list[str]) -> str:
+    chunk_refs = sorted(str(chunk.get("chunk_ref") or "") for chunk in cluster if chunk.get("chunk_ref"))
+    basis = "\n".join(chunk_refs or sorted(str(concept) for concept in concepts))
+    digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:10]
+    return digest
 
 
 def _cluster_related_collections(

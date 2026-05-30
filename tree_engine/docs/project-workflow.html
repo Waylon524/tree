@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T.R.E.E. System Project Workflow</title>
+  <style>
+    :root {
+      --scale: 1;
+      --bg: #f7f8fb;
+      --ink: #16202a;
+      --muted: #55616f;
+      --line: #c9d2dd;
+      --source: #0f766e;
+      --planning: #1d4ed8;
+      --loop: #9a3412;
+      --pass: #15803d;
+      --removed: #7f1d1d;
+      --surface: #ffffff;
+      --shadow: 0 12px 32px rgba(15, 23, 42, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.42;
+    }
+
+    body {
+      margin: 0;
+      min-width: 1180px;
+    }
+
+    .page {
+      width: calc(1680px * var(--scale));
+      transform-origin: top left;
+      transform: scale(var(--scale));
+      padding: 36px 42px 54px;
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 12px 20px;
+      background: rgba(247, 248, 251, 0.92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+    }
+
+    .toolbar button {
+      border: 1px solid #9aa8b8;
+      background: #fff;
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 9px 14px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 28px;
+      align-items: end;
+      margin-bottom: 26px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 42px;
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 22px;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .legend-item {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+    }
+
+    .workflow {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .lane {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 100%;
+      padding: 18px;
+      background: rgba(255,255,255,0.68);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .lane-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 2px;
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .card {
+      position: relative;
+      padding: 18px 18px 16px;
+      background: var(--surface);
+      border: 2px solid var(--line);
+      border-left-width: 8px;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .source .card { border-left-color: var(--source); }
+    .planning .card { border-left-color: var(--planning); }
+    .loop .card { border-left-color: var(--loop); }
+    .pass .card { border-left-color: var(--pass); }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 25px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 19px;
+    }
+
+    .card ul {
+      margin: 10px 0 0;
+      padding-left: 22px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .connector {
+      display: flex;
+      justify-content: center;
+      color: #66758a;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 900;
+    }
+
+    .decision {
+      border-style: dashed;
+      background: #fffdf7;
+    }
+
+    .cycle-note {
+      margin-top: 20px;
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 20px;
+    }
+
+    .panel {
+      padding: 20px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 27px;
+      letter-spacing: 0;
+    }
+
+    .panel-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .pill {
+      min-height: 76px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 18px;
+      font-weight: 800;
+      background: #f9fafb;
+    }
+
+    .pill span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .removed .pill {
+      border-color: #efc4c4;
+      background: #fff5f5;
+      color: var(--removed);
+    }
+
+    .kept .pill {
+      border-color: #bfdbfe;
+      background: #f0f7ff;
+      color: #1e3a8a;
+    }
+
+    .loop-map {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      align-items: center;
+      margin-top: 14px;
+    }
+
+    .loop-step {
+      min-height: 84px;
+      padding: 14px;
+      border: 2px solid #fed7aa;
+      border-radius: 8px;
+      background: #fff7ed;
+      font-size: 18px;
+      font-weight: 900;
+      text-align: center;
+    }
+
+    .loop-step small {
+      display: block;
+      margin-top: 5px;
+      color: #7c2d12;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .arrow-inline {
+      color: #9a3412;
+      text-align: center;
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    footer {
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    @media print {
+      body {
+        min-width: 0;
+        background: #fff;
+      }
+
+      .toolbar {
+        display: none;
+      }
+
+      .page {
+        width: auto;
+        transform: none;
+        padding: 16px;
+      }
+
+      .workflow {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .cycle-note {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar" aria-label="view controls">
+    <button type="button" data-scale="0.85">缩小</button>
+    <button type="button" data-scale="1">100%</button>
+    <button type="button" data-scale="1.15">放大</button>
+    <button type="button" onclick="window.print()">打印 / 导出 PDF</button>
+  </div>
+
+  <main class="page">
+    <header>
+      <div>
+        <h1>T.R.E.E. 项目完整工作流程</h1>
+        <p class="subtitle">
+          资料驱动、planner 选定完整知识节点、writer 完整写作、examiner 以考促写验收、PASS 后入库并刷新图谱。
+        </p>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><span class="dot" style="background: var(--source)"></span>资料摄入与 RAG</div>
+        <div class="legend-item"><span class="dot" style="background: var(--planning)"></span>候选节点与 Planner</div>
+        <div class="legend-item"><span class="dot" style="background: var(--loop)"></span>以考促写循环</div>
+        <div class="legend-item"><span class="dot" style="background: var(--pass)"></span>入库与续跑</div>
+      </div>
+    </header>
+
+    <section class="workflow" aria-label="project workflow">
+      <div class="lane source">
+        <div class="lane-title"><span class="dot" style="background: var(--source)"></span>1. 资料摄入</div>
+
+        <article class="card">
+          <h2>用户放入原始资料</h2>
+          <p>PDF、图片、DOCX、Markdown、TXT、PPT 等进入 materials / raw_materials。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>OCR / 文档提取</h2>
+          <p>PaddleOCR 或文件提取器读取文本、版面、公式、列表与表格。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>Archivist 结构化</h2>
+          <p>清洗 OCR 噪声，修正结构，重组成教材可用 Markdown。</p>
+          <ul>
+            <li>保留实质内容</li>
+            <li>规范标题与公式</li>
+            <li>写入 source_materials/&lt;collection&gt;</li>
+          </ul>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>Source RAG 入库</h2>
+          <p>source Markdown 被 chunk、embedding 后写入 Qdrant；embedding 成功后删除中间 Markdown。</p>
+        </article>
+      </div>
+
+      <div class="lane planning">
+        <div class="lane-title"><span class="dot" style="background: var(--planning)"></span>2. Planner 建图</div>
+
+        <article class="card">
+          <h2>构建 Source Inventory</h2>
+          <p>从 source RAG chunk 提取概念、先修、方法、公式、summary。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>生成 Candidate Nodes</h2>
+          <p>按概念、先修、方法、signature、相邻 section 聚类，并可由 AI enrichment 增强。</p>
+          <ul>
+            <li>节点 ID 基于 chunk refs 稳定哈希</li>
+            <li>保留 estimated_output_lines / size_fit / size_band</li>
+          </ul>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>构建 Knowledge Graph</h2>
+          <p>结合候选节点与 finished ledger，计算覆盖、重复、合并、先修与相邻关系。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>Planner 选择 selected_node</h2>
+          <p>根据 root_score、support_score、size_fit、evidence_strength 选择下一个完整写作节点。</p>
+        </article>
+      </div>
+
+      <div class="lane loop">
+        <div class="lane-title"><span class="dot" style="background: var(--loop)"></span>3. 以考促写</div>
+
+        <article class="card">
+          <h2>Step 1 Examiner 命题</h2>
+          <p>在 planner selected_node 范围内生成知识点、盲考试卷、标准答案与 writer 指令。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>Step 2 Student 盲测</h2>
+          <p>student 只能读取 prior finished outputs 和当前 draft，不读取 source RAG。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>Step 3 Examiner 审计</h2>
+          <p>同时检查答案正确性、草稿支撑性、知识缺陷与越界使用。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card decision">
+          <h2>PASS 还是 FAIL？</h2>
+          <p>PASS 入库；FAIL 进入 writer 修复，同一试卷继续重测。</p>
+        </article>
+      </div>
+
+      <div class="lane pass">
+        <div class="lane-title"><span class="dot" style="background: var(--pass)"></span>4. 写作与入库</div>
+
+        <article class="card">
+          <h2>Step 4 Writer 写 / 修 draft</h2>
+          <p>writer 必须完整写 planner-selected node，不因长度或过宽拒写。</p>
+          <ul>
+            <li>不返回 EXAM_TOO_BROAD</li>
+            <li>不运行拆分反馈</li>
+            <li>只写 selected node delta</li>
+          </ul>
+        </article>
+        <div class="connector">↘</div>
+
+        <article class="card">
+          <h2>drafts 进入重测</h2>
+          <p>草稿写入 drafts/&lt;chapter&gt; 后回到 Student 盲测，直到 examiner PASS。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>PASS 后入库</h2>
+          <p>draft 移动到 outputs / finished_outputs，并索引为 finished RAG。</p>
+        </article>
+        <div class="connector">↓</div>
+
+        <article class="card">
+          <h2>Ledger + Graph 刷新</h2>
+          <p>记录 graph_node_id、hit_chunks、covered_concepts；刷新 graph 后 planner 继续选下一个节点。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="cycle-note">
+      <div class="panel">
+        <h2>核心循环</h2>
+        <div class="loop-map">
+          <div class="loop-step">Planner<br><small>选择完整 node</small></div>
+          <div class="arrow-inline">→</div>
+          <div class="loop-step">Examiner<br><small>出 3 道盲考题</small></div>
+          <div class="arrow-inline">→</div>
+          <div class="loop-step">Student<br><small>仅凭已学材料答题</small></div>
+          <div class="loop-step">Examiner<br><small>审计缺陷</small></div>
+          <div class="arrow-inline">→</div>
+          <div class="loop-step">Writer<br><small>写完整草稿</small></div>
+          <div class="arrow-inline">↺</div>
+          <div class="loop-step">PASS<br><small>入库并刷新图谱</small></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>当前机制边界</h2>
+        <div class="panel-grid removed">
+          <div class="pill">已取消<span>EXAM_TOO_BROAD 正常路由</span></div>
+          <div class="pill">已取消<span>split_needed 图边</span></div>
+          <div class="pill">已取消<span>planner feedback 自动拆分</span></div>
+        </div>
+        <div class="panel-grid kept" style="margin-top: 12px;">
+          <div class="pill">保留<span>estimated_output_lines</span></div>
+          <div class="pill">保留<span>size_fit / size_band</span></div>
+          <div class="pill">保留<span>planner trace / evidence</span></div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      当前版本原则：planner 决定完整写作节点；writer 负责完整写出；examiner 负责验收；PASS 后 ledger 覆盖节点并驱动下一轮规划。
+    </footer>
+  </main>
+
+  <script>
+    const root = document.documentElement;
+    document.querySelectorAll("[data-scale]").forEach((button) => {
+      button.addEventListener("click", () => {
+        root.style.setProperty("--scale", button.dataset.scale);
+      });
+    });
+  </script>
+</body>
+</html>

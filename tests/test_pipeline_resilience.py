@@ -7,11 +7,13 @@ import pytest
 import tree.engine as engine_module
 from tree.curriculum.candidate_nodes import rebuild_candidate_nodes, save_candidate_nodes
 from tree.curriculum.graph import build_selected_node_context, load_knowledge_graph, rebuild_knowledge_graph
-from tree.engine import TreeEngine, _attach_graph_selection, _pending_materials
+from tree.curriculum.ledger import load_ledger
+from tree.engine import TreeEngine, _attach_graph_selection, _pending_materials, persist_writer_result
 from tree.io import paths
 from tree.rag.client import RAGClient
 from tree.state.manager import StateManager
-from tree.state.models import ChapterRecord, ChapterScanResult, ExamSections, IterationState, PipelineState, Route
+from tree.state.models import ChapterRecord, ChapterScanResult, ExamSections, IterationState, PipelineState, Route, WriterResult
+from tree.agents.writer import WriterAgent
 
 
 class _Point:
@@ -174,6 +176,50 @@ def test_writeable_chunk_cluster_merges_thin_same_section_chunks(tmp_path: Path)
     assert merged["size_band"] == "fit"
 
 
+def test_candidate_node_ids_are_stable_when_unrelated_earlier_cluster_is_added(tmp_path: Path) -> None:
+    base_inventory = {
+        "version": 1,
+        "chunks": [
+            _planning_chunk("b/a#001", "b", ["循环"]),
+        ],
+        "collections": [
+            {
+                "source_collection": "a",
+                "core_concepts": ["网络协议"],
+                "related_collections": [],
+            },
+            {
+                "source_collection": "b",
+                "core_concepts": ["循环"],
+                "related_collections": [],
+            },
+        ],
+    }
+    expanded_inventory = {
+        **base_inventory,
+        "chunks": [
+            _planning_chunk("a/a#001", "a", ["网络协议"]),
+            *base_inventory["chunks"],
+        ],
+    }
+
+    base_nodes = rebuild_candidate_nodes(tmp_path, base_inventory)
+    expanded_nodes = rebuild_candidate_nodes(tmp_path, expanded_inventory)
+
+    base_loop = next(
+        item
+        for item in base_nodes["chapter_candidates"]
+        if {chunk["chunk_ref"] for chunk in item["representative_chunks"]} == {"b/a#001"}
+    )
+    expanded_loop = next(
+        item
+        for item in expanded_nodes["chapter_candidates"]
+        if {chunk["chunk_ref"] for chunk in item["representative_chunks"]} == {"b/a#001"}
+    )
+
+    assert expanded_loop["candidate_id"] == base_loop["candidate_id"]
+
+
 def test_finished_trunk_absorbs_candidate_covered_by_multiple_outputs(tmp_path: Path) -> None:
     graph = rebuild_knowledge_graph(
         tmp_path,
@@ -223,6 +269,36 @@ def test_finished_trunk_absorbs_candidate_covered_by_multiple_outputs(tmp_path: 
     assert selected["node_id"] == "candidate:new-complex"
 
 
+def test_finished_trunk_does_not_absorb_candidate_from_concept_subset_only(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _planning_candidate_nodes(
+            _planning_candidate(
+                "candidate:details",
+                ["溶解度阈值", "相对溶解度"],
+                chunks=["source#009"],
+                sources=["8. 沉淀溶解平衡"],
+            ),
+        ),
+        {
+            "version": 1,
+            "records": [
+                _planning_ledger_record(
+                    "outputs/tree-001/01.overview.md",
+                    ["沉淀溶解平衡概览", "溶解度阈值", "相对溶解度", "晶格能", "离子积"],
+                    chunks=["source#001"],
+                    sources=["8. 沉淀溶解平衡"],
+                )
+            ],
+        },
+    )
+
+    candidate = next(node for node in graph["nodes"] if node["node_id"] == "candidate:details")
+
+    assert candidate["status"] == "planned"
+    assert candidate["finished_solvability"] < 0.82
+
+
 def test_planner_prefers_writeable_size_candidate_and_exposes_scope_context(tmp_path: Path) -> None:
     graph = rebuild_knowledge_graph(
         tmp_path,
@@ -252,6 +328,29 @@ def test_planner_prefers_writeable_size_candidate_and_exposes_scope_context(tmp_
     assert selected["size_fit"] > 0.9
     assert "Expected output size: 360 lines" in context
     assert "Chunk cluster size: 3 chunks" in context
+
+
+def test_planner_keeps_size_observation_without_split_needed_edges(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _planning_candidate_nodes(
+            _planning_candidate(
+                "candidate:broad",
+                [f"概念{i}" for i in range(24)],
+                chunks=[f"source#{i:03d}" for i in range(12)],
+                sources=["source-a", "source-b"],
+                estimated_output_lines=760,
+            ),
+        ),
+        {"version": 1, "records": []},
+    )
+
+    broad = next(node for node in graph["nodes"] if node["node_id"] == "candidate:broad")
+
+    assert broad["estimated_output_lines"] == 760
+    assert broad["size_fit"] < 0.6
+    assert not [edge for edge in graph["edges"] if edge["relation"] == "split_needed"]
+    assert "split_needed_count" not in graph["stats"]
 
 
 def test_manifest_embedded_flag_is_cleared_when_source_vectors_are_missing(tmp_path: Path) -> None:
@@ -455,8 +554,11 @@ def test_handle_pass_refreshes_knowledge_graph_after_saving_output(
     asyncio.run(TreeEngine._handle_pass(fake_engine, iter_state, None))
 
     graph = load_knowledge_graph(tmp_path)
+    ledger = load_ledger(tmp_path)
+
     assert graph["stats"]["finished_count"] == 1
     assert graph["nodes"][0]["node_id"] == "finished:outputs/tree-001/01.变量.md"
+    assert ledger["records"][0]["hit_chunks"] == ["lesson#001"]
 
 
 def test_student_blind_test_receives_prior_finished_file_contents(tmp_path: Path) -> None:
@@ -533,6 +635,43 @@ def test_audit_context_includes_examiner_only_source_rag(tmp_path: Path) -> None
 
     kinds = [hit["metadata"]["content_kind"] for hit in examiner.retrieved_context]
     assert kinds == ["finished", "source"]
+
+
+def test_writer_agent_treats_exam_too_broad_text_as_draft_content() -> None:
+    class FakeClient:
+        async def call(self, *args):
+            return "EXAM_TOO_BROAD\n# 01. 仍然写成草稿"
+
+    class FakeLoader:
+        def load(self, name: str) -> str:
+            assert name == "writer"
+            return "writer system"
+
+    writer = WriterAgent(FakeClient(), FakeLoader())
+
+    result = asyncio.run(
+        writer.create_or_optimize(
+            "01. 测试知识点",
+            "01",
+            "Bottleneck Report",
+            [],
+            [],
+        )
+    )
+
+    assert result.is_exam_too_broad is False
+    assert result.draft_content.startswith("EXAM_TOO_BROAD")
+
+
+def test_persist_writer_result_rejects_obsolete_exam_too_broad_control(tmp_path: Path) -> None:
+    iter_state = IterationState(chapter="tree-001", file_seq="01", knowledge_point="测试")
+
+    with pytest.raises(ValueError, match="obsolete EXAM_TOO_BROAD"):
+        persist_writer_result(
+            tmp_path,
+            iter_state,
+            WriterResult(is_exam_too_broad=True, bloat_description="too long"),
+        )
 
 
 def test_process_chapter_closes_active_node_after_one_pass(tmp_path: Path) -> None:

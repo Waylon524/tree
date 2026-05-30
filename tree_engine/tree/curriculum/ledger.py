@@ -71,6 +71,7 @@ def update_finished_record(
     graph_node_id: str | None = None,
     required_nodes: list[str] | None = None,
     source_collections: list[str] | None = None,
+    hit_chunks: list[str] | None = None,
 ) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     record = build_finished_record(
@@ -81,6 +82,7 @@ def update_finished_record(
         graph_node_id=graph_node_id,
         required_nodes=required_nodes,
         source_collections=source_collections,
+        hit_chunks=hit_chunks,
     )
     ledger = load_ledger(root)
     records = [
@@ -133,6 +135,7 @@ def build_finished_record(
     graph_node_id: str | None = None,
     required_nodes: list[str] | None = None,
     source_collections: list[str] | None = None,
+    hit_chunks: list[str] | None = None,
 ) -> dict[str, Any]:
     metadata = _front_matter(text)
     headings = _headings(text)
@@ -161,6 +164,7 @@ def build_finished_record(
         "graph_node_id": graph_node_id,
         "required_nodes": list(required_nodes or []),
         "source_collections": list(source_collections or []),
+        "hit_chunks": _unique(str(item) for item in hit_chunks or [] if str(item).strip()),
         "summary": _summary(text),
     }
 
@@ -217,7 +221,7 @@ def format_duplicate_brief(brief: dict[str, Any]) -> str:
             "Rules:",
             "- Treat the matched finished outputs as already taught.",
             "- New work must state the incremental delta beyond these matches.",
-            "- If there is no clear delta, skip this candidate or return EXAM_TOO_BROAD.",
+            "- If there is no clear delta, keep duplicate material brief and focus the draft on the remaining planner-selected delta.",
             "- Cite matched concepts briefly as prerequisites; do not reteach them.",
         ]
     )

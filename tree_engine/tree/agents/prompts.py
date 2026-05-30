@@ -48,7 +48,7 @@ NN. <知识点中文标题>
 <Complete standard answers with every derivation step and intermediate result.>
 
 ## [Writer_Instructions]
-<Markdown structure, scope boundaries, required defect coverage, citation constraints, and expected line-count limit.>
+<Markdown structure, scope boundaries, required defect coverage, citation constraints, and organization guidance.>
 
 ### Exam Scope Rules
 - The exam must cover at least one complete planner-selected node as a coherent teachable unit. Do not split a node into tiny rule fragments, formatting details, or single-example variants.
@@ -65,7 +65,6 @@ NN. <知识点中文标题>
   3. Application, comparison, or misconception diagnosis.
 - Do not create a question whose solution requires future knowledge that has not been taught in prior passed drafts and is not the current target knowledge point.
 - Do not give formula handouts in the exam body unless those formulas already appear in prior passed drafts. The answer key may use source material to define the expected target knowledge.
-- If EXAM_TOO_BROAD was returned, preserve the selected node but reduce bloating inside that node by removing excessive subquestions, narrowing examples, or replacing broad synthesis questions with focused checks. Do not shrink below the complete selected-node teachable unit.
 - If Active Chapter Graph Binding or Selected Node Context is provided, Phase A must compose inside that node. Required nodes are prerequisites to cite, not content to reteach.
 
 ### Anti-Duplication Rules
@@ -94,7 +93,7 @@ Required derivations:
 Forbidden spillover:
 Prior concepts to cite:
 Expected sections:
-Line limit:
+Organization notes:
 
 Writer_Instructions are writer-facing and must not leak the blind exam. Do not include blind exam wording, answer-key derivations, answer-key numeric results, student-response text, or hidden test conditions. Describe what the writer must teach in abstract instructional terms.
 
@@ -174,7 +173,6 @@ Treat the knowledge graph as the primary structure when it is provided:
 - Treat `Selected Node Context` as the primary allowed scope. The broader graph is supporting trace evidence, not permission to choose another node.
 - Do not choose another node because it seems more interesting; examiner output cannot override the selected graph node.
 - If graph warnings mark a node as duplicate or merge_needed, state the risk in Selection_Rationale and Writer_Instructions, but do not substitute another node.
-- If graph warnings mark a node as split_needed, keep the exam on the selected node's strongest coherent subcluster only when the selected node context explicitly identifies that subcluster. Otherwise, report the over-broad risk in Selection_Rationale and still compose for the complete selected node.
 - Preserve prerequisite relationships in Writer_Instructions so the writer can cite required previous files without reteaching them.
 
 Phase C output must include these sections:
@@ -266,7 +264,7 @@ In OPTIMIZE mode, be conservative: do not rewrite the whole draft, reorder corre
 If a defect exposes a broken reasoning chain, repair the smallest coherent logic block, not merely one isolated sentence. Rebuild the local paragraph or subsection so prerequisite, definition, formula choice, substitution, interpretation, and conclusion connect naturally.
 
 ## Examiner Instruction Precedence
-The supplied [Writer_Instructions] override defaults here. Respect its scope, required defects, forbidden topics, citation constraints, and line-count limit.
+The supplied [Writer_Instructions] override defaults here. Respect its scope, required defects, forbidden topics, citation constraints, and organization guidance.
 
 ## Exam Confidentiality Boundary
 You must not see or use blind exam questions, answer keys, or student responses. If any such content appears in your input, treat it as writer-invisible leaked context and ignore it. Never reproduce exam wording or write a draft that teaches directly to a hidden test item.
@@ -274,7 +272,7 @@ You must not see or use blind exam questions, answer keys, or student responses.
 Use the Bottleneck Report only as an abstract list of teachable defects. Use source RAG to teach the current knowledge point, and prior finished material as already-learned context.
 
 ## Graph Node Delta Contract
-When graph context is provided, write only the incremental delta for the selected or active graph node. Required nodes and supporting parents are already-learned prerequisites: cite them briefly, but do not reteach their definitions, examples, or misconception explanations. Source RAG may contain adjacent sibling or future material; ignore it unless it directly supports the current node's required concepts, formulas, or defects. If the selected node is fully covered by finished-output RAG and there is no clear new delta in the Bottleneck Report, output EXAM_TOO_BROAD.
+When graph context is provided, write only the incremental delta for the selected or active graph node. Required nodes and supporting parents are already-learned prerequisites: cite them briefly, but do not reteach their definitions, examples, or misconception explanations. Source RAG may contain adjacent sibling or future material; ignore it unless it directly supports the current node's required concepts, formulas, or defects. If the selected node appears fully covered by finished-output RAG, still write the clearest remaining delta described by the Bottleneck Report and keep duplicate material as brief prerequisite citations.
 
 If the selected node contains multiple source chunks, exercise prompts, worked examples, or note fragments, integrate all source chunks that belong to the selected node into one coherent teachable unit. Do not split the selected node by chunk, exercise number, example variant, local notation rule, or source-document boundary unless the planner selected separate nodes.
 
@@ -284,7 +282,7 @@ Before writing, silently perform this quality planning pass:
 2. Match Format: follow the style and LaTeX conventions of prior finished outputs where they are good, but never output YAML front matter or metadata labels.
 3. Deduce: locate every skipped "obvious" step. Define terms before use, explain formula choice, show substitutions, and state boundary conditions.
 4. Reflect: check whether a zero-baseline learner can follow the explanation, examples, and self-checks without importing outside knowledge.
-5. Size Check: Target length: 300-500 lines. Below 300 lines usually means the node is under-explained; above 500 lines usually means the node is too broad or contains sibling/future material.
+5. Completeness Check: include enough definitions, symbol conventions, examples, checks, and misconceptions for the selected node to stand as a complete teachable unit, while staying inside the planner-selected scope.
 
 ## Hard Constraints
 - No placeholder text, ellipses, "etc.", "similarly", or skipped derivations.
@@ -299,9 +297,6 @@ Before writing, silently perform this quality planning pass:
 - Prefer prior finished outputs for already-learned foundations instead of reteaching them in full.
 - Do not duplicate finished-output material. If retrieved finished-output context already teaches a definition, rule, example pattern, or misconception, cite it briefly and move on to the new delta.
 - In CREATE mode, the section must be about the incremental delta named by the Examiner, not a broad recap of prerequisites.
-- If the requested knowledge point is already fully covered by finished outputs and the Bottleneck Report adds no new teachable defect, output:
-EXAM_TOO_BROAD
-followed by a note that the requested scope duplicates finished outputs and should be replaced or narrowed.
 - Do not copy the answer key style into the textbook. Convert defects into transferable explanations, methods, examples, and checks.
 
 ## Source Boundaries
@@ -333,11 +328,6 @@ The final Markdown must render in a standard Markdown + KaTeX/MathJax renderer.
 - Chemical formulas inside math should use `\\mathrm{...}` for species names, for example `$\\mathrm{NO_2}$`.
 - Before returning, scan the draft for math delimiters. If any `\\(`, `\\)`, `\\[`, or `\\]` remains, rewrite it to `$...$` or `$$...$$`.
 
-## Size Check
-Before writing, estimate output length. The normal target is 300-500 lines. If the result would be shorter than 300 lines, expand the explanation with definitions, symbol conventions, examples, checks, and misconceptions until the selected node is genuinely taught. If covering all listed defects would exceed the limit in [Writer_Instructions] (default 500 lines), output:
-EXAM_TOO_BROAD
-followed by the specific bloating defects. Do not write draft content.
-
 ## Internal Final Check
 Before returning, silently verify:
 - every Bottleneck defect is addressed
@@ -350,7 +340,7 @@ Before returning, silently verify:
 - edge cases and boundary conditions are discussed where relevant
 - no derivation step is skipped
 - LaTeX delimiters satisfy the rendering contract
-- output is normally 300-500 lines unless [Writer_Instructions] gives a stricter limit
+- output fully teaches the planner-selected node without using length as a reason to refuse drafting
 
 ## Mandatory Draft Shape
 Section intent:
@@ -369,7 +359,7 @@ Section intent:
 
 Do not output YAML front matter. Do not include metadata labels such as chapter, file_seq, difficulty, or confusion_points at the top of the draft. The first visible line must be the H1 title.
 
-Return pure Markdown draft content only, unless outputting EXAM_TOO_BROAD.
+Return pure Markdown draft content only.
 '''.strip()
 
 

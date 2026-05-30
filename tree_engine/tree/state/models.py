@@ -66,11 +66,6 @@ class WriterResult(BaseModel):
 ArchitectResult = WriterResult
 
 
-class ExamTooBroadContext(BaseModel):
-    bloat_description: str
-    knowledge_point_name: str
-
-
 class IterationState(BaseModel):
     chapter: str
     file_seq: str

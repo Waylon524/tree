@@ -117,7 +117,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
         edge
         for edge in edges
         if selected.get("node_id") in {edge.get("from"), edge.get("to")}
-        and edge.get("relation") in {"duplicate", "merge_needed", "split_needed"}
+        and edge.get("relation") in {"duplicate", "merge_needed"}
     ]
     prerequisite_edges = [
         edge
@@ -151,7 +151,7 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
             "Out of scope:",
             "- Do not reteach required nodes; cite them as prerequisites.",
             "- Do not expand into sibling or child nodes unless needed for a tiny prerequisite bridge.",
-            "- If warnings below show duplicate/merge/split risk, narrow or skip rather than changing direction.",
+            "- If warnings below show duplicate/merge risk, keep the selected node scope and avoid duplicating finished material.",
             "",
             "Prerequisite evidence:",
         ]
@@ -185,7 +185,7 @@ def build_knowledge_graph_context(graph: dict[str, Any], limit_nodes: int = 12, 
     warnings = [
         edge
         for edge in edges
-        if edge.get("relation") in {"duplicate", "merge_needed", "split_needed"}
+        if edge.get("relation") in {"duplicate", "merge_needed"}
     ]
 
     lines = [
@@ -305,8 +305,6 @@ def _relation_edges(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for i, left in enumerate(nodes):
         if left.get("status") == "covered":
             continue
-        if _needs_split(left):
-            edges.append(_split_edge(left))
         for right in nodes[i + 1 :]:
             if right.get("status") == "covered":
                 continue
@@ -330,9 +328,7 @@ def _classify_pair(left: dict[str, Any], right: dict[str, Any]) -> list[dict[str
     if right_requires_left and not left_requires_right:
         return [_edge(left, right, "prerequisite", scores, "Left node covers prerequisites needed by right node.")]
 
-    if scores["concept"] >= _MIN_DUPLICATE_CONCEPT and (
-        scores["chunk"] >= _MIN_DUPLICATE_CHUNK or scores["concept"] >= 0.78
-    ):
+    if _is_duplicate_pair(left, right, scores):
         return [_edge(left, right, "duplicate", scores, "Core concepts and source chunks overlap strongly.")]
     if (
         left.get("status") == "planned"
@@ -359,6 +355,15 @@ def _pair_scores(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float
     }
 
 
+def _is_duplicate_pair(left: dict[str, Any], right: dict[str, Any], scores: dict[str, float]) -> bool:
+    left_concepts = _term_set(left.get("core_concepts", []))
+    right_concepts = _term_set(right.get("core_concepts", []))
+    concept_similarity = _jaccard_score(left_concepts, right_concepts)
+    if concept_similarity < _MIN_DUPLICATE_CONCEPT:
+        return False
+    return scores["chunk"] >= _MIN_DUPLICATE_CHUNK or concept_similarity >= 0.78
+
+
 def _edge(
     source: dict[str, Any],
     target: dict[str, Any],
@@ -374,38 +379,6 @@ def _edge(
         "evidence": _edge_evidence(source, target),
         "reason": reason,
     }
-
-
-def _split_edge(node: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "from": node.get("node_id", ""),
-        "to": node.get("node_id", ""),
-        "relation": "split_needed",
-        "scores": {
-            "concept": min(1.0, len(node.get("core_concepts", [])) / 28),
-            "chunk": min(1.0, len(node.get("hit_chunks", [])) / 10),
-            "source": min(1.0, len(node.get("source_collections", [])) / 4),
-            "prerequisite_ab": 0.0,
-            "prerequisite_ba": 0.0,
-        },
-        "evidence": {
-            "matched_concepts": node.get("core_concepts", [])[:16],
-            "matched_chunks": node.get("hit_chunks", [])[:12],
-            "matched_sources": node.get("source_collections", [])[:8],
-            "prerequisite_hits": [],
-        },
-        "reason": "Candidate spans many concepts, chunks, or source collections; examiner should narrow the next knowledge point.",
-    }
-
-
-def _needs_split(node: dict[str, Any]) -> bool:
-    if node.get("status") != "planned":
-        return False
-    return (
-        len(node.get("source_collections", [])) >= 4
-        or len(node.get("hit_chunks", [])) >= 10
-        or (len(node.get("core_concepts", [])) >= 20 and len(node.get("source_collections", [])) >= 2)
-    )
 
 
 def _resolve_finished_coverage(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
@@ -475,14 +448,16 @@ def _finished_trunk_solvability(
             or node_sources & candidate_sources
         ):
             supporting.append(node)
-    concept_coverage = _overlap_score(finished_concepts, candidate_concepts)
-    chunk_coverage = _overlap_score(finished_chunks, candidate_chunks)
-    source_coverage = _overlap_score(finished_sources, candidate_sources)
-    solvability = max(
-        concept_coverage,
-        chunk_coverage,
-        concept_coverage * 0.50 + chunk_coverage * 0.30 + source_coverage * 0.20,
-    )
+    concept_coverage = _coverage_score(finished_concepts, candidate_concepts)
+    chunk_coverage = _coverage_recall(finished_chunks, candidate_chunks)
+    source_coverage = _coverage_recall(finished_sources, candidate_sources)
+    if candidate_chunks:
+        solvability = max(
+            chunk_coverage,
+            concept_coverage * 0.55 + chunk_coverage * 0.35 + source_coverage * 0.10,
+        )
+    else:
+        solvability = concept_coverage
     return min(1.0, solvability), supporting
 
 
@@ -1149,7 +1124,7 @@ def _node_warning_penalty(node: dict[str, Any], edges: list[dict[str, Any]]) -> 
         relation = edge.get("relation")
         if relation == "duplicate":
             penalty += 4
-        elif relation in {"merge_needed", "split_needed"}:
+        elif relation == "merge_needed":
             penalty += 3
     return penalty
 
@@ -1165,7 +1140,7 @@ def _selection_evidence(node: dict[str, Any], edges: list[dict[str, Any]]) -> di
         edge
         for edge in edges
         if node_id in {edge.get("from"), edge.get("to")}
-        and edge.get("relation") in {"duplicate", "merge_needed", "split_needed"}
+        and edge.get("relation") in {"duplicate", "merge_needed"}
     ]
     return {
         "tree_depth": int(node.get("tree_depth", 0)),
@@ -1223,7 +1198,7 @@ def _why_selected(node: dict[str, Any]) -> str:
     if penalty:
         parts.append(f"warning_penalty={penalty}")
     else:
-        parts.append("no duplicate/merge/split warning penalty")
+        parts.append("no duplicate/merge warning penalty")
     return "; ".join(parts)
 
 
@@ -1359,7 +1334,7 @@ def _boundary_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
             boundary.append({"edge": f"{edge.get('from')}->{edge.get('to')}", "reason": "low_backbone_confidence"})
         elif relation == "duplicate" and 0.5 <= float(scores.get("concept") or 0) <= 0.72:
             boundary.append({"edge": f"{edge.get('from')}->{edge.get('to')}", "reason": "near_duplicate_threshold"})
-        elif relation in {"merge_needed", "split_needed"}:
+        elif relation == "merge_needed":
             boundary.append({"edge": f"{edge.get('from')}->{edge.get('to')}", "reason": relation})
     return boundary[:20]
 
@@ -1442,7 +1417,6 @@ def _graph_stats(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> di
         "supporting_parent_count": len([edge for edge in edges if edge.get("relation") == "supporting_parent"]),
         "duplicate_count": len([edge for edge in edges if edge.get("relation") == "duplicate"]),
         "prerequisite_count": len([edge for edge in edges if edge.get("relation") == "prerequisite"]),
-        "split_needed_count": len([edge for edge in edges if edge.get("relation") == "split_needed"]),
         "merge_needed_count": len([edge for edge in edges if edge.get("relation") == "merge_needed"]),
     }
 
@@ -1512,6 +1486,26 @@ def _overlap_score(left: set[str], right: set[str]) -> float:
     return len(left & right) / max(1, min(len(left), len(right)))
 
 
+def _coverage_recall(covered: set[str], target: set[str]) -> float:
+    if not covered or not target:
+        return 0.0
+    return len(covered & target) / max(1, len(target))
+
+
+def _jaccard_score(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / max(1, len(left | right))
+
+
+def _coverage_score(covered: set[str], target: set[str]) -> float:
+    if not covered or not target:
+        return 0.0
+    recall = _coverage_recall(covered, target)
+    jaccard = _jaccard_score(covered, target)
+    return recall * 0.65 + jaccard * 0.35
+
+
 def _clean_term(value: str) -> str:
     value = re.sub(r"`([^`]+)`", r"\1", value)
     value = re.sub(r"\s+", "", value)
@@ -1536,7 +1530,6 @@ def _edge_rank(relation: str) -> int:
     order = {
         "duplicate": 0,
         "merge_needed": 1,
-        "split_needed": 2,
         "prerequisite": 3,
         "branch": 4,
         "supporting_parent": 5,

@@ -49,14 +49,6 @@ def parse_exam_id(text: str) -> str:
     return match.group(1).strip()
 
 
-def detect_exam_too_broad(text: str) -> tuple[bool, str]:
-    if "EXAM_TOO_BROAD" not in text:
-        return False, ""
-    idx = text.index("EXAM_TOO_BROAD")
-    bloat = text[idx:].strip()
-    return True, bloat
-
-
 def parse_exam_output(text: str) -> ExamSections:
     """Parse examiner Phase A output into structured sections."""
     kp = extract_section(text, "Next_Knowledge_Point")

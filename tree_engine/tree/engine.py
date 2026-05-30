@@ -54,7 +54,6 @@ from tree.state.models import (
     AuditResult,
     ChapterScanResult,
     ExamSections,
-    ExamTooBroadContext,
     IterationState,
     PipelineState,
     Route,
@@ -456,11 +455,6 @@ class TreeEngine:
                 iteration=iter_state.iteration,
             )
 
-            if writer_result.is_exam_too_broad:
-                print("  Step 4: EXAM_TOO_BROAD — returning to Step 1")
-                iter_state = await self._handle_exam_too_broad(iter_state, writer_result)
-                continue
-
             writer_result = persist_writer_result(self.settings.project_root, iter_state, writer_result)
             # Draft written → back to Step 2 (same exam)
             iter_state.previous_bottleneck = audit.bottleneck_report
@@ -473,7 +467,6 @@ class TreeEngine:
         self,
         chapter: object,
         next_seq: str,
-        exam_too_broad_ctx: ExamTooBroadContext | None = None,
     ) -> tuple[ExamSections, bool]:
         from tree.state.models import ChapterRecord
 
@@ -523,7 +516,6 @@ class TreeEngine:
             source_material_paths=self._source_paths_from_rag(source_collections),
             retrieved_context=retrieved_context,
             graph_context=self._active_chapter_graph_context(ch),
-            exam_too_broad_ctx=exam_too_broad_ctx,
         )
 
     async def _step2_blind_test(self, iter_state: IterationState) -> str:
@@ -656,6 +648,7 @@ class TreeEngine:
             graph_node_id=getattr(chapter, "graph_node_id", None),
             required_nodes=getattr(chapter, "required_nodes", None) or [],
             source_collections=_chapter_source_collections(chapter),
+            hit_chunks=_chapter_graph_hit_chunks(self.settings.project_root, chapter),
         )
         state = self.state_mgr.add_file_completed(state, iter_state.chapter, filename)
         self.state_mgr.save(state)
@@ -698,6 +691,7 @@ class TreeEngine:
                 graph_node_id=getattr(chapter, "graph_node_id", None),
                 required_nodes=getattr(chapter, "required_nodes", None) or [],
                 source_collections=_chapter_source_collections(chapter),
+                hit_chunks=_chapter_graph_hit_chunks(self.settings.project_root, chapter),
             )
             completed.add(path.name)
             changed = True
@@ -766,23 +760,6 @@ class TreeEngine:
             graph_node_id=scan_result.graph_node_id,
             required_nodes=scan_result.required_nodes,
         )
-
-    async def _handle_exam_too_broad(
-        self, iter_state: IterationState, writer_result: WriterResult
-    ) -> IterationState:
-        """Return to Step 1 with narrowed scope."""
-        exam_sections, _ = await self._step1_compose(
-            type("Ch", (), {"chapter_name": iter_state.chapter})(),
-            iter_state.file_seq,
-            ExamTooBroadContext(
-                bloat_description=writer_result.bloat_description,
-                knowledge_point_name=iter_state.knowledge_point,
-            ),
-        )
-        iter_state.exam_sections = exam_sections
-        iter_state.knowledge_point = exam_sections.knowledge_point
-        iter_state.previous_bottleneck = None
-        return iter_state
 
     async def _scan_next_chapter(self, state: object) -> ChapterScanResult | None:
         """Scan source materials for next chapter. Returns chapter name or None."""
@@ -1170,6 +1147,55 @@ def _chapter_source_collections(chapter: object | None) -> list[str]:
     return collections
 
 
+def _chapter_graph_hit_chunks(root: Path, chapter: object | None) -> list[str]:
+    graph_node_id = getattr(chapter, "graph_node_id", None)
+    if not graph_node_id:
+        return []
+    graph = load_knowledge_graph(root)
+    for node in graph.get("nodes", []):
+        if isinstance(node, dict) and node.get("node_id") == graph_node_id:
+            chunks = _string_list(node.get("hit_chunks"))
+            if chunks:
+                return chunks
+    candidate_nodes = load_candidate_nodes(root)
+    for candidate in candidate_nodes.get("chapter_candidates", []):
+        if isinstance(candidate, dict) and candidate.get("candidate_id") == graph_node_id:
+            return _candidate_hit_chunks(candidate)
+    return []
+
+
+def _candidate_hit_chunks(candidate: dict[str, Any]) -> list[str]:
+    chunks = []
+    for item in candidate.get("representative_chunks", []) or []:
+        if isinstance(item, str):
+            chunks.append(item)
+        elif isinstance(item, dict) and item.get("chunk_ref"):
+            chunks.append(str(item["chunk_ref"]))
+    return _unique(chunks)
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = re.split(r"[,\n，、]+", value)
+    if not isinstance(value, list):
+        return []
+    return _unique(str(item).strip() for item in value if str(item).strip())
+
+
+def _unique(values: Any) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if not value:
+            continue
+        key = str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+    return result
+
+
 def _attach_graph_selection(
     scan_result: ChapterScanResult | None,
     knowledge_graph: dict[str, Any],
@@ -1250,7 +1276,7 @@ def persist_writer_result(
 ) -> WriterResult:
     """Persist writer Markdown into drafts/{chapter}/{NN}.{title}.md."""
     if writer_result.is_exam_too_broad:
-        return writer_result
+        raise ValueError("Writer returned obsolete EXAM_TOO_BROAD control signal")
     if not writer_result.draft_content.strip():
         raise ValueError("Writer returned no draft content")
 
