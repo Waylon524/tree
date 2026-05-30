@@ -42,6 +42,7 @@ class ExaminerAgent:
         source_material_contents: list[str] | None = None,
         source_material_paths: list[str] | None = None,
         retrieved_context: list[dict] | None = None,
+        graph_context: str | None = None,
         exam_too_broad_ctx: ExamTooBroadContext | None = None,
     ) -> tuple[ExamSections | None, bool]:
         system = self._loader.load("examiner")
@@ -62,6 +63,12 @@ class ExaminerAgent:
             parts.append("Source material contents:\n")
             for i, content in enumerate(source_material_contents):
                 parts.append(f"--- Source {i + 1} ---\n{content}\n")
+        if graph_context:
+            parts.append(
+                "Planner-bound graph context for this active chapter. Treat this as the "
+                "highest-priority scope constraint for Phase A:\n"
+                f"{graph_context}\n"
+            )
         if retrieved_context:
             parts.append(_format_retrieved_context(retrieved_context))
         if exam_too_broad_ctx:

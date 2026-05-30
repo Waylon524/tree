@@ -96,14 +96,15 @@ def relation_affinity(scores: dict[str, float]) -> float:
     return _affinity(scores)
 
 
-def build_selected_node_context(graph: dict[str, Any]) -> str:
-    """Format the planner-selected node as the examiner's primary scope."""
+def build_selected_node_context(graph: dict[str, Any], node_id: str | None = None) -> str:
+    """Format a planner-selected or chapter-bound node as the examiner's primary scope."""
     nodes = [item for item in graph.get("nodes", []) if isinstance(item, dict)]
     edges = [item for item in graph.get("edges", []) if isinstance(item, dict)]
-    selected = _node_by_id(nodes, graph.get("planner", {}).get("selected_node"))
+    selected_node_id = node_id or graph.get("planner", {}).get("selected_node")
+    selected = _node_by_id(nodes, selected_node_id)
     lines = [
         "## Selected Node Context",
-        "This is the fixed next growth node selected by the deterministic planner.",
+        "This is the fixed next growth node selected by the deterministic planner or already bound to the active chapter.",
         "Examiner must compose the next exam inside this node's scope.",
         "",
     ]

@@ -1,10 +1,10 @@
-# 输入/结构化资料
-/raw_materials/*
-!/raw_materials/.gitkeep
+# 输入资料
+/materials/*
+!/materials/.gitkeep
 
 # 产出结果
-/finished_outputs/*
-!/finished_outputs/.gitkeep
+/outputs/*
+!/outputs/.gitkeep
 
 # 运行时状态
 /tree_engine/.runtime/
@@ -29,5 +29,6 @@ __pycache__/
 
 # 本地测试资料与开发草稿
 /1.pdf
-/tests/
+/tests/*
+!/tests/test_pipeline_resilience.py
 /tree_engine/docs/*refactor*.md

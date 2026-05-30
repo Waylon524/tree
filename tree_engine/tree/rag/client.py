@@ -195,8 +195,7 @@ class RAGClient:
         if doc_id is None or center_index is None:
             return text, []
 
-        records, _ = self._client.scroll(
-            collection_name=_COLLECTION,
+        records = self._scroll_records(
             limit=10000,
             scroll_filter=models.Filter(
                 must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
@@ -229,8 +228,7 @@ class RAGClient:
     ) -> list[dict]:
         """Read indexed chunk payloads without opening source/finished files."""
         conditions = self._build_filters(filters, include_drafts)
-        records, _ = self._client.scroll(
-            collection_name=_COLLECTION,
+        records = self._scroll_records(
             limit=limit,
             scroll_filter=models.Filter(must=conditions) if conditions else None,
             with_payload=True,
@@ -270,8 +268,7 @@ class RAGClient:
 
     def get_chapter_ledger(self, chapter: str) -> list[dict]:
         """Get a summary of all indexed files in a chapter (for auto-briefing)."""
-        records, _ = self._client.scroll(
-            collection_name=_COLLECTION,
+        records = self._scroll_records(
             limit=10000,
             scroll_filter=models.Filter(
                 must=[models.FieldCondition(key="chapter", match=models.MatchValue(value=chapter))]
@@ -306,6 +303,32 @@ class RAGClient:
             }
             for v in sorted(files.values(), key=lambda x: x["file_seq"])
         ]
+
+    def _scroll_records(
+        self,
+        *,
+        limit: int,
+        scroll_filter: models.Filter | None = None,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+    ) -> list[models.Record]:
+        """Return every record matching a Qdrant scroll query."""
+        records: list[models.Record] = []
+        offset = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "collection_name": _COLLECTION,
+                "limit": limit,
+                "scroll_filter": scroll_filter,
+                "with_payload": with_payload,
+                "with_vectors": with_vectors,
+            }
+            if offset is not None:
+                kwargs["offset"] = offset
+            page, offset = self._client.scroll(**kwargs)
+            records.extend(page)
+            if offset is None:
+                return records
 
     @staticmethod
     def _make_point_id(file_seq: str, chunk_id: str) -> int:

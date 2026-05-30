@@ -17,10 +17,13 @@ materials/
   -> PaddleOCR-VL-1.6
   -> Archivist 结构化清洗
   -> source RAG
-  -> Examiner 命题
+  -> Source Inventory
+  -> Candidate Nodes
+  -> Knowledge Graph Planner 选择树上下一节点
+  -> Examiner 在选中节点内命题
   -> Student 盲测
   -> Examiner 批改
-  -> Writer 创建或优化教材
+  -> Writer 写当前节点的增量教材
   -> outputs/
 ```
 
@@ -126,7 +129,7 @@ tre doctor
 
 `doctor` 会检查 Python、`tre` 是否在 PATH 中、包安装位置、`TREE_HOME`、全局配置、当前 workspace 目录、embedding server 和 Git 状态。它不会修改配置。
 
-`/progress` 和 `/watch` 会读取 `.tree/runtime/progress.json`，显示 OCR 页级进度、source embedding 进度，以及当前知识点所处阶段：寻找知识点、Examiner 出卷、Student 盲测、Examiner 审核、Writer 写草稿和 PASS 保存。
+`/progress` 和 `/watch` 会读取 `.tree/runtime/progress.json` 与 `.tree/runtime/knowledge-graph.json`，显示 OCR 页级进度、source embedding 进度、当前知识点阶段，以及 Current Tree 面板。Current Tree 会展示已生成 node 之间的 parent / support 关系和正在生成的 node；如果旧数据或中断状态导致 parent 信息不完整，则自动降级为关系表。
 
 ### 更新
 
@@ -234,7 +237,7 @@ tre
 - 如果 `materials/` 中没有任何受支持的资料文件，启动会报错并提示先放入资料。
 - 有新增或变更资料：先执行 OCR -> Archivist -> source embedding。
 - 第一个 source material 生成后即可开始串行 embedding。
-- 所有 source materials embedding 完成后，才进入考试-写作循环。
+- 所有 source materials embedding 完成后，先构建 source inventory、candidate nodes 和 knowledge graph，再进入考试-写作循环。
 - 有资料但没有新增或变更：直接从 `.tree/runtime/pipeline-state.json` 恢复循环。
 
 强行关闭 `TREE` 交互界面（例如 Ctrl+C、终端关闭或输入流断开）会自动执行 `/quit`，停止 TREE 和 embedding server。只有主动输入 `/exit` 才会只离开交互界面而保留后台服务。
@@ -260,6 +263,7 @@ tre ingest --input materials/课件 --collection 课件 --no-index
 tre --help
 tre start
 tre status
+tre progress
 tre watch
 tre stop
 tre quit
@@ -268,6 +272,9 @@ tre materials
 tre logs --tail 20
 tre models
 tre rag status
+tre rag inventory
+tre rag candidates
+tre rag graph
 tre rag search "化学平衡常数" --kind source --top-k 5
 ```
 
@@ -368,9 +375,9 @@ tre
 
 | Role | Prompt | 作用 |
 | --- | --- | --- |
-| Examiner | `EXAMINER_PROMPT` | 发现章节/知识点、命题、批改、判断 PASS/FAIL |
-| Student | `STUDENT_PROMPT` | 零基础学生，只基于已学内容和当前草稿作答 |
-| Writer | `WRITER_PROMPT` | 根据抽象 Bottleneck Report 创建或优化教材草稿 |
+| Examiner | `EXAMINER_PROMPT` | 按 Knowledge Graph Planner 选中的 node 命题、批改、判断 PASS/FAIL |
+| Student | `STUDENT_PROMPT` | 零基础学生，只基于当前草稿、已学全文和 learned RAG hits 作答 |
+| Writer | `WRITER_PROMPT` | 根据抽象 Bottleneck Report 和 graph node delta 创建或优化教材草稿 |
 | Archivist | `ARCHIVIST_PROMPT` | 对 PaddleOCR 输出做轻量清洗和 Markdown 标准化 |
 
 #### RAG 策略
@@ -378,8 +385,12 @@ tre
 - source materials 写入 RAG 后删除 `.tree/runtime/source_materials/` 中的中间 Markdown。
 - finished outputs 保留在 `outputs/`，同时写入 RAG。
 - drafts 不写入 RAG，Student 直接读取当前 draft 全文。
-- Examiner 命题会参考 source RAG 和 finished output RAG。
-- Student 答题会使用已学习 finished outputs 的 RAG 检索，并直接阅读当前 draft。
+- Source RAG 先被整理成 chunk-level source inventory，再聚类成 candidate knowledge nodes。
+- Knowledge Graph Planner 根据 candidate nodes、finished ledger、chunk overlap、concept overlap、prerequisite signal 和 source overlap 选择下一棵树的 root 或当前树的新枝条。
+- Examiner 命题会参考 active graph node、source RAG、finished output RAG 和 ledger 去重信息；当章节绑定了 `Graph_Node` 时，Examiner 不能重新选择全局方向。
+- Student 答题会使用已学习 finished outputs 的 RAG 检索，并直接阅读当前 draft；Learned RAG Hit 视为已学成品教材摘录，不是 source material。
+- Examiner 审核时可用 source RAG 判断 writer 应补什么，但 source RAG 不能作为 student faithfulness 的证据。
+- Writer 会接收 active graph node context，只写当前 node 的增量；required nodes 和 supporting parents 只能作为先修引用，不应重讲。
 - chunker 使用约 1500-3000 token 的语义块，查询命中后扩展读取相邻 chunk。
 
 当前 chunk 预算：
@@ -480,6 +491,10 @@ my-course/
     └── runtime/
         ├── source_materials/
         ├── drafts/
+        ├── knowledge-ledger.json
+        ├── source-inventory.json
+        ├── candidate-nodes.json
+        ├── knowledge-graph.json
         ├── pipeline-temp/
         ├── rag-store/
         └── services/
@@ -609,10 +624,11 @@ GitHub 页面显示的仓库名是 `tree`。
 
 #### 开发验证
 
-当前仓库不保留内置样例数据和单元测试目录。修改代码后建议至少执行：
+当前仓库不保留内置样例数据。仓库保留必要的回归测试；本地开发时也可以放置更多 ignored 测试文件。修改代码后建议至少执行：
 
 ```bash
-ruff check tree_engine/tree tree_engine/rag tree_engine/ingest
+python -m pytest
+ruff check tree_engine tests
 python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 ```
 
@@ -642,10 +658,13 @@ materials/
   -> PaddleOCR-VL-1.6
   -> Archivist cleanup
   -> source RAG
-  -> Examiner exam assembly
+  -> Source Inventory
+  -> Candidate Nodes
+  -> Knowledge Graph Planner selects the next tree node
+  -> Examiner composes inside the selected node
   -> Student blind test
   -> Examiner audit
-  -> Writer create/optimize
+  -> Writer creates the node delta
   -> outputs/
 ```
 
@@ -751,7 +770,7 @@ tre doctor
 
 `doctor` checks Python, whether `tre` is on PATH, package location, `TREE_HOME`, global config, the current workspace folders, the embedding server, and Git state. It does not modify configuration.
 
-`/progress` and `/watch` read `.tree/runtime/progress.json` and show OCR page progress, source embedding progress, and the current knowledge-point stage: finding the point, Examiner exam assembly, Student blind test, Examiner audit, Writer drafting, and PASS/save.
+`/progress` and `/watch` read `.tree/runtime/progress.json` and `.tree/runtime/knowledge-graph.json`. They show OCR page progress, source embedding progress, the current knowledge-point stage, and a Current Tree panel. Current Tree shows parent/support relationships among generated nodes plus the node currently being generated. If older data or an interrupted run has incomplete parent metadata, it falls back to a relation table.
 
 ### Update
 
@@ -859,7 +878,7 @@ For daily use, stay inside `TREE>` and type these slash commands. Every `/start`
 - if `materials/` contains no supported source files, startup fails and asks you to add materials first
 - new or changed materials are processed through OCR -> Archivist -> source embedding
 - embedding starts as soon as the first source material is produced
-- the exam-writing loop starts only after all source materials are embedded
+- after all source materials are embedded, tree builds source inventory, candidate nodes, and the knowledge graph before starting the exam-writing loop
 - if materials exist but nothing is new or changed, the loop resumes from `.tree/runtime/pipeline-state.json`
 
 Force-closing the `TREE` interactive shell, such as Ctrl+C, terminal close, or input-stream disconnect, automatically runs `/quit` and stops TREE plus the embedding server. Only typing `/exit` leaves the shell while keeping background services unchanged.
@@ -885,6 +904,7 @@ Common one-shot commands:
 tre --help
 tre start
 tre status
+tre progress
 tre watch
 tre stop
 tre quit
@@ -893,6 +913,9 @@ tre materials
 tre logs --tail 20
 tre models
 tre rag status
+tre rag inventory
+tre rag candidates
+tre rag graph
 tre rag search "equilibrium constant" --kind source --top-k 5
 ```
 
@@ -993,9 +1016,9 @@ tre
 
 | Role | Prompt | Purpose |
 | --- | --- | --- |
-| Examiner | `EXAMINER_PROMPT` | Finds knowledge points, composes exams, audits answers |
-| Student | `STUDENT_PROMPT` | Zero-baseline learner using only learned materials and current draft |
-| Writer | `WRITER_PROMPT` | Creates or optimizes drafts from abstract bottleneck reports |
+| Examiner | `EXAMINER_PROMPT` | Composes inside the Knowledge Graph Planner selected node, audits answers, and decides PASS/FAIL |
+| Student | `STUDENT_PROMPT` | Zero-baseline learner using the current draft, prior full outputs, and learned RAG hits |
+| Writer | `WRITER_PROMPT` | Creates or optimizes drafts from abstract bottleneck reports and the graph-node delta |
 | Archivist | `ARCHIVIST_PROMPT` | Cleans PaddleOCR output into normalized Markdown |
 
 #### RAG Strategy
@@ -1003,8 +1026,12 @@ tre
 - Source materials are deleted from `.tree/runtime/source_materials/` after indexing.
 - Finished outputs remain in `outputs/` and are indexed.
 - Drafts are not indexed; the Student reads the current draft directly.
-- Examiner exam assembly uses source RAG and finished-output RAG.
-- Student answers use RAG retrieval over already learned finished outputs and direct reading of the current draft.
+- Source RAG is first converted into chunk-level source inventory, then clustered into candidate knowledge nodes.
+- The Knowledge Graph Planner selects a new root or the next branch by comparing candidate nodes with the finished ledger using chunk overlap, concept overlap, prerequisite signal, and source overlap.
+- Examiner exam assembly uses the active graph node, source RAG, finished-output RAG, and ledger duplicate checks. When a chapter is bound to `Graph_Node`, the Examiner must not reselect the global direction.
+- Student answers use RAG retrieval over already learned finished outputs and direct reading of the current draft. Learned RAG Hits are treated as excerpts from passed outputs, not source material.
+- During audit, source RAG may help identify what the Writer should add, but it can never support student faithfulness.
+- Writer receives active graph-node context and writes only the current node delta. Required nodes and supporting parents are prerequisites to cite, not material to reteach.
 - Retrieval uses semantic chunks of about 1500-3000 tokens plus adjacent chunk expansion.
 
 Chunk budgets:
@@ -1105,6 +1132,10 @@ my-course/
     └── runtime/
         ├── source_materials/
         ├── drafts/
+        ├── knowledge-ledger.json
+        ├── source-inventory.json
+        ├── candidate-nodes.json
+        ├── knowledge-graph.json
         ├── pipeline-temp/
         ├── rag-store/
         └── services/
@@ -1234,10 +1265,11 @@ The GitHub repository is displayed as `tree`.
 
 #### Development Verification
 
-This repository no longer ships built-in sample data or a unit test directory. For code changes, run at least:
+This repository no longer ships built-in sample data. It keeps essential regression tests; local development may also include ignored scratch tests. For code changes, run at least:
 
 ```bash
-ruff check tree_engine/tree tree_engine/rag tree_engine/ingest
+python -m pytest
+ruff check tree_engine tests
 python -m compileall tree_engine/tree tree_engine/rag tree_engine/ingest
 ```
 

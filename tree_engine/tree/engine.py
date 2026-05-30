@@ -199,6 +199,7 @@ class TreeEngine:
         root = self.settings.project_root
         self._raise_if_stop_requested()
         manifest = _load_source_manifest(root)
+        _refresh_manifest_index_status(root, manifest, getattr(self, "rag_indexer", None))
         pending = _pending_materials(root, manifest)
 
         if pending:
@@ -277,7 +278,7 @@ class TreeEngine:
                 print(f"Source ingest: embedded {embedded_count} source material file(s).")
 
         self._ensure_all_source_materials_embedded()
-        _mark_manifest_outputs_embedded(manifest)
+        _refresh_manifest_index_status(root, manifest, getattr(self, "rag_indexer", None))
         _save_source_manifest(root, manifest)
 
     def _ensure_all_source_materials_embedded(self) -> None:
@@ -528,11 +529,13 @@ class TreeEngine:
             source_material_contents=[],
             source_material_paths=self._source_paths_from_rag(source_collections),
             retrieved_context=retrieved_context,
+            graph_context=self._active_chapter_graph_context(ch),
             exam_too_broad_ctx=exam_too_broad_ctx,
         )
 
     async def _step2_blind_test(self, iter_state: IterationState) -> str:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
+        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
@@ -544,7 +547,7 @@ class TreeEngine:
         retrieved_context = self._finished_rag_query(query_text, top_k=6)
         return await self.student.blind_test(
             iter_state.exam_sections.blind_exam,
-            [],
+            prior_contents,
             prior_paths,
             draft_text,
             retrieved_context=retrieved_context,
@@ -552,30 +555,45 @@ class TreeEngine:
 
     async def _step3_audit(self, iter_state: IterationState, answer: str) -> AuditResult:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
+        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
         assert iter_state.exam_sections is not None
+        query_text = f"{iter_state.knowledge_point}\n{iter_state.exam_sections.blind_exam}\n{answer}"
+        source_filters = {"content_kind": "source"}
+        source_collections = self._source_collections_for_chapter(iter_state.chapter)
+        if source_collections:
+            source_filters["source_collection"] = source_collections
+        retrieved_context = (
+            self._finished_rag_query(query_text, top_k=6)
+            + self._rag_query(
+                query_text,
+                filters=source_filters,
+                top_k=5,
+                include_drafts=False,
+            )
+        )
         return await self.examiner.audit(
             iter_state.exam_sections.blind_exam,
             iter_state.exam_sections.answer_key,
             answer,
             draft_text,
-            [],
+            prior_contents,
             prior_paths,
             iter_state.previous_bottleneck,
-            retrieved_context=self._finished_rag_query(
-                f"{iter_state.knowledge_point}\n{iter_state.exam_sections.blind_exam}\n{answer}",
-                top_k=6,
-            ),
+            retrieved_context=retrieved_context,
         )
 
     async def _step4_writer(self, iter_state: IterationState, audit: AuditResult) -> WriterResult:
         prior_paths = [str(p) for p in file_ops.list_prior_paths(self.settings.project_root, iter_state.chapter)]
+        prior_contents = file_ops.read_prior_files(self.settings.project_root, iter_state.chapter)
         draft_text = None
         if iter_state.draft_path and iter_state.draft_path.exists():
             draft_text = iter_state.draft_path.read_text(encoding="utf-8")
         writer_instructions = iter_state.exam_sections.writer_instructions if iter_state.exam_sections else None
+        state = self.state_mgr.load()
+        chapter = next((ch for ch in state.chapters if ch.chapter_name == iter_state.chapter), None)
         source_collections = self._source_collections_for_chapter(iter_state.chapter)
         writer_bottleneck = sanitize_writer_context(audit.bottleneck_report)
         query_text = f"{iter_state.knowledge_point}\n{writer_bottleneck}"
@@ -608,12 +626,13 @@ class TreeEngine:
             iter_state.knowledge_point,
             iter_state.file_seq,
             writer_bottleneck,
-            [],
+            prior_contents,
             prior_paths,
             draft_text,
             iter_state.previous_bottleneck,
             writer_instructions,
             retrieved_context=retrieved_context,
+            graph_context=self._active_chapter_graph_context(chapter),
         )
 
     # --- Handlers ---
@@ -625,20 +644,12 @@ class TreeEngine:
             dst = file_ops.move_draft_to_finished(
                 self.settings.project_root, iter_state.chapter, filename
             )
+            self._index_finished_output_or_raise(iter_state.chapter, dst)
             git_ops.git_add_commit(
                 dst,
                 f"docs({filename}): PASS — {iter_state.knowledge_point}",
                 cwd=self.settings.project_root,
             )
-            if rag_indexer := getattr(self, "rag_indexer", None):
-                try:
-                    rag_indexer.index_finished_file(
-                        self.settings.project_root,
-                        iter_state.chapter,
-                        dst,
-                    )
-                except Exception:
-                    pass
             state = self.state_mgr.load()
             chapter = next((ch for ch in state.chapters if ch.chapter_name == iter_state.chapter), None)
             update_finished_record(
@@ -667,6 +678,7 @@ class TreeEngine:
         for path in sorted(output_dir.glob("*.md")):
             if path.name in completed:
                 continue
+            self._index_finished_output_or_raise(chapter_name, path)
             reconciled = self.state_mgr.add_file_completed(reconciled, chapter_name, path.name)
             update_finished_record(
                 self.settings.project_root,
@@ -681,6 +693,15 @@ class TreeEngine:
         if changed:
             self.state_mgr.save(reconciled)
         return reconciled
+
+    def _index_finished_output_or_raise(self, chapter: str, path: Path) -> int:
+        rag_indexer = getattr(self, "rag_indexer", None)
+        if rag_indexer is None:
+            raise RuntimeError(
+                "Finished output passed but RAG indexer is unavailable. "
+                "Start the embedding service before marking the file complete."
+            )
+        return rag_indexer.index_finished_file(self.settings.project_root, chapter, path)
 
     async def _name_completed_chapters(self, state: PipelineState) -> PipelineState:
         """Name completed unnamed trees after their boundaries are known."""
@@ -857,6 +878,26 @@ class TreeEngine:
         collections = self._source_collections_for_chapter(chapter_name)
         return collections[0] if collections else None
 
+    def _active_chapter_graph_context(self, chapter: object | None) -> str | None:
+        from tree.state.models import ChapterRecord
+
+        if not isinstance(chapter, ChapterRecord):
+            return None
+        if not chapter.graph_node_id and not chapter.required_nodes:
+            return None
+        lines = [
+            "## Active Chapter Graph Binding",
+            f"Chapter tree id: {chapter.chapter_name}",
+            f"Graph node id: {chapter.graph_node_id or 'none'}",
+            f"Required nodes: {', '.join(chapter.required_nodes) or 'none'}",
+            f"Source collections: {', '.join(_chapter_source_collections(chapter)) or 'none'}",
+            "",
+        ]
+        if chapter.graph_node_id:
+            graph = self._load_knowledge_graph()
+            lines.append(build_selected_node_context(graph, node_id=chapter.graph_node_id))
+        return "\n".join(lines).strip()
+
     def _source_collections_for_chapter(self, chapter_name: str) -> list[str]:
         state_mgr = getattr(self, "state_mgr", None)
         if state_mgr is None:
@@ -1025,13 +1066,39 @@ def _mark_material_ingested(
     }
 
 
-def _mark_manifest_outputs_embedded(manifest: dict[str, Any]) -> None:
+def _refresh_manifest_index_status(
+    root: Path,
+    manifest: dict[str, Any],
+    indexer: object | None,
+) -> None:
+    """Keep source-ingest manifest in sync with actual source vectors."""
     for entry in manifest.values():
         if not isinstance(entry, dict):
             continue
         outputs = entry.get("outputs") or []
-        if outputs:
-            entry["embedded"] = True
+        if not outputs:
+            continue
+        collection = entry.get("collection")
+        if not collection or indexer is None:
+            entry["embedded"] = False
+            continue
+        is_indexed = getattr(indexer, "is_source_file_indexed", None)
+        if is_indexed is None:
+            entry["embedded"] = False
+            continue
+        entry["embedded"] = all(
+            bool(is_indexed(root, collection, _manifest_output_path(root, collection, output)))
+            for output in outputs
+        )
+
+
+def _manifest_output_path(root: Path, collection: str, output: str) -> Path:
+    path = Path(output)
+    if path.is_absolute():
+        return path
+    if len(path.parts) == 1:
+        return source_ops.source_root(root) / collection / path
+    return root / path
 
 
 def _mark_material_embedded(root: Path, manifest: dict[str, Any], material_path: Path) -> None:

@@ -36,6 +36,7 @@ class WriterAgent:
         previous_bottleneck: str | None = None,
         writer_instructions: str | None = None,
         retrieved_context: list[dict] | None = None,
+        graph_context: str | None = None,
     ) -> WriterResult:
         system = self._loader.load("writer")
         mode = "OPTIMIZE" if draft_text else "CREATE"
@@ -60,6 +61,12 @@ class WriterAgent:
             parts.append("Current draft: 尚未创建 (CREATE from scratch)\n")
         if writer_instructions:
             parts.append(f"[Writer_Instructions]:\n{writer_instructions}\n")
+        if graph_context:
+            parts.append(
+                "Planner-bound graph context for the active chapter. Use it only to enforce "
+                "the selected node delta and prerequisite boundaries:\n"
+                f"{graph_context}\n"
+            )
         if retrieved_context:
             parts.append(_format_retrieved_context(retrieved_context))
         parts.append(
