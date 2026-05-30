@@ -7,11 +7,11 @@ import pytest
 import tree.engine as engine_module
 from tree.curriculum.candidate_nodes import save_candidate_nodes
 from tree.curriculum.graph import load_knowledge_graph
-from tree.engine import TreeEngine, _pending_materials
+from tree.engine import TreeEngine, _attach_graph_selection, _pending_materials
 from tree.io import paths
 from tree.rag.client import RAGClient
 from tree.state.manager import StateManager
-from tree.state.models import ChapterRecord, ExamSections, IterationState, PipelineState, Route
+from tree.state.models import ChapterRecord, ChapterScanResult, ExamSections, IterationState, PipelineState, Route
 
 
 class _Point:
@@ -71,6 +71,54 @@ def test_manifest_embedded_flag_is_cleared_when_source_vectors_are_missing(tmp_p
 
     assert manifest["materials/lesson.pdf"]["embedded"] is False
     assert _pending_materials(tmp_path, manifest) == [(source, "lesson")]
+
+
+def test_attach_graph_selection_uses_planner_required_nodes_over_examiner_output() -> None:
+    scan_result = ChapterScanResult(
+        chapter_name="tree-999",
+        source_collection="examiner-source",
+        source_collections=["examiner-source"],
+        graph_node_id="candidate:wrong",
+        required_nodes=["finished:outputs/tree-999/99.examiner.md"],
+        parent_output="finished:outputs/tree-999/99.examiner.md",
+        exam_sections=ExamSections(
+            knowledge_point="变量",
+            blind_exam="Q",
+            answer_key="A",
+            writer_instructions="W",
+        ),
+    )
+    knowledge_graph = {
+        "planner": {"selected_node": "candidate:loops", "selection_mode": "branch"},
+        "nodes": [
+            {
+                "node_id": "candidate:loops",
+                "kind": "candidate",
+                "status": "planned",
+                "primary_source_collection": "planner-source",
+                "source_collections": ["planner-source"],
+                "required_nodes": [
+                    "finished:outputs/tree-001/01.variables.md",
+                    "finished:outputs/tree-001/02.conditionals.md",
+                ],
+                "parent_output": "finished:outputs/tree-001/02.conditionals.md",
+                "is_new_root": False,
+            }
+        ],
+    }
+
+    attached = _attach_graph_selection(scan_result, knowledge_graph)
+
+    assert attached is not None
+    assert attached.graph_node_id == "candidate:loops"
+    assert attached.required_nodes == [
+        "finished:outputs/tree-001/01.variables.md",
+        "finished:outputs/tree-001/02.conditionals.md",
+    ]
+    assert attached.parent_output == "finished:outputs/tree-001/02.conditionals.md"
+    assert attached.source_collection == "planner-source"
+    assert attached.source_collections == ["planner-source"]
+    assert attached.selection_mode == "branch"
 
 
 def test_handle_pass_raises_when_finished_output_indexing_fails(

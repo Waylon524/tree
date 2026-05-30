@@ -1181,8 +1181,6 @@ def _attach_graph_selection(
     if selected is None:
         return scan_result
     required_nodes = list(selected.get("required_nodes", []))
-    if scan_result.required_nodes:
-        required_nodes = scan_result.required_nodes
     source_collections = list(selected.get("source_collections", [])) or scan_result.source_collections
     source_collection = selected.get("primary_source_collection") or scan_result.source_collection
     planner = knowledge_graph.get("planner") or {}
