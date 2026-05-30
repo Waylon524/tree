@@ -1,6 +1,6 @@
 [project]
 name = "tree-engine"
-version = "0.1.16"
+version = "0.1.17"
 description = "T.R.E.E. independent orchestration engine for exam-driven textbook generation"
 requires-python = ">=3.12"
 dependencies = [

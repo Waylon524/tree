@@ -1,11 +1,14 @@
 import asyncio
+import time
 from pathlib import Path
+
+import pytest
 
 from rag.chunker import chunk_markdown
 from tree.curriculum.candidate_nodes import rebuild_candidate_nodes_with_ai
 from tree.curriculum.knowledge_nodes import load_knowledge_nodes, rebuild_knowledge_nodes
 from tree.curriculum.graph import rebuild_knowledge_graph, rebuild_knowledge_graph_with_ai
-from tree.curriculum.inventory import rebuild_source_inventory_with_ai
+from tree.curriculum.inventory import load_inventory, rebuild_source_inventory_with_ai
 from tree.rag.client import RAGClient
 
 
@@ -185,6 +188,192 @@ def test_inventory_rebuild_reuses_cached_ai_chunk_analysis(tmp_path: Path) -> No
     assert second["chunks"][0]["analysis_mode"] == "ai"
     assert second["chunks"][0]["core_concepts"] == first["chunks"][0]["core_concepts"]
     assert second["knowledge_groups"][0]["title_hint"] == "折射定律"
+
+
+def test_inventory_rebuild_saves_completed_ai_chunks_before_cancellation(tmp_path: Path) -> None:
+    source_hits = [
+        {
+            "chunk_id": "physics-000",
+            "text": "折射定律描述入射角与折射角的关系。",
+            "metadata": {
+                "source_collection": "physics",
+                "filename": "optics.md",
+                "path": "optics.md",
+                "chunk_index": 0,
+                "section_id": "折射定律",
+                "token_estimate": 80,
+            },
+        },
+        {
+            "chunk_id": "physics-001",
+            "text": "证明使用几何关系。",
+            "metadata": {
+                "source_collection": "physics",
+                "filename": "optics.md",
+                "path": "optics.md",
+                "chunk_index": 1,
+                "section_id": "折射定律",
+                "token_estimate": 60,
+            },
+        },
+    ]
+
+    class CancellingAnalyzer:
+        async def analyze_inventory_chunk(self, payload: dict) -> dict:
+            if payload["chunk"]["metadata"]["chunk_index"] == 1:
+                raise asyncio.CancelledError()
+            return {
+                "merge_with_previous": False,
+                "is_complete_knowledge_point": True,
+                "title_hint": "折射定律",
+                "core_concepts": ["折射定律"],
+                "methods": [],
+                "misconceptions": [],
+                "prerequisites": [],
+                "formula_roles": [],
+                "source_type": "lecture",
+                "teaching_role": "foundation",
+                "completeness": "complete",
+                "evidence_spans": ["折射定律描述"],
+                "summary": "介绍折射定律。",
+            }
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(rebuild_source_inventory_with_ai(tmp_path, source_hits, CancellingAnalyzer()))
+
+    cached = load_inventory(tmp_path)
+
+    assert len(cached["chunks"]) == 1
+    assert cached["chunks"][0]["analysis_mode"] == "ai"
+    assert cached["chunks"][0]["core_concepts"] == ["折射定律"]
+
+
+def test_inventory_rebuild_updates_planner_progress_per_chunk(tmp_path: Path) -> None:
+    class ProgressRecorder:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def planner_stage(self, **kwargs: object) -> None:
+            self.calls.append(dict(kwargs))
+
+    class Analyzer:
+        async def analyze_inventory_chunk(self, payload: dict) -> dict:
+            return {
+                "merge_with_previous": False,
+                "title_hint": "折射定律",
+                "core_concepts": ["折射定律"],
+                "methods": [],
+                "misconceptions": [],
+                "prerequisites": [],
+                "formula_roles": [],
+                "source_type": "lecture",
+                "teaching_role": "foundation",
+                "completeness": "complete",
+                "evidence_spans": [],
+                "summary": "介绍折射定律。",
+            }
+
+    progress = ProgressRecorder()
+
+    asyncio.run(
+        rebuild_source_inventory_with_ai(
+            tmp_path,
+            [
+                {
+                    "chunk_id": "physics-000",
+                    "text": "折射定律描述入射角与折射角的关系。",
+                    "metadata": {
+                        "source_collection": "physics",
+                        "filename": "optics.md",
+                        "path": "optics.md",
+                        "chunk_index": 0,
+                    },
+                },
+                {
+                    "chunk_id": "physics-001",
+                    "text": "证明使用几何关系。",
+                    "metadata": {
+                        "source_collection": "physics",
+                        "filename": "optics.md",
+                        "path": "optics.md",
+                        "chunk_index": 1,
+                    },
+                },
+            ],
+            Analyzer(),
+            progress=progress,
+        )
+    )
+
+    assert [call["details"]["chunks_done"] for call in progress.calls] == [0, 1, 1, 2]
+    assert progress.calls[-1]["stage"] == "source_inventory"
+    assert progress.calls[-1]["stage_index"] == 1
+    assert progress.calls[-1]["details"]["chunks_total"] == 2
+    assert progress.calls[-1]["details"]["current_chunk_index"] == 1
+
+
+def test_inventory_rebuild_processes_files_concurrently_but_chunks_in_order(tmp_path: Path) -> None:
+    events: list[tuple[str, str, int, float]] = []
+    active_files = 0
+    max_active_files = 0
+    lock = asyncio.Lock()
+
+    class Analyzer:
+        async def analyze_inventory_chunk(self, payload: dict) -> dict:
+            nonlocal active_files, max_active_files
+            metadata = payload["chunk"]["metadata"]
+            path = metadata["path"]
+            chunk_index = metadata["chunk_index"]
+            async with lock:
+                events.append(("start", path, chunk_index, time.monotonic()))
+                active_files += 1
+                max_active_files = max(max_active_files, active_files)
+            await asyncio.sleep(0.03)
+            async with lock:
+                events.append(("end", path, chunk_index, time.monotonic()))
+                active_files -= 1
+            return {
+                "merge_with_previous": chunk_index == 1,
+                "title_hint": f"{path} 知识点",
+                "core_concepts": [f"{path} 概念 {chunk_index}"],
+                "methods": [],
+                "misconceptions": [],
+                "prerequisites": [],
+                "formula_roles": [],
+                "source_type": "lecture",
+                "teaching_role": "foundation",
+                "completeness": "complete",
+                "evidence_spans": [],
+                "summary": f"{path} chunk {chunk_index}",
+            }
+
+    hits = []
+    for filename in ("a.md", "b.md", "c.md"):
+        for chunk_index in (0, 1):
+            hits.append(
+                {
+                    "chunk_id": f"{filename}-{chunk_index}",
+                    "text": f"{filename} chunk {chunk_index}",
+                    "metadata": {
+                        "source_collection": "physics",
+                        "filename": filename,
+                        "path": filename,
+                        "chunk_index": chunk_index,
+                    },
+                }
+            )
+
+    inventory = asyncio.run(rebuild_source_inventory_with_ai(tmp_path, hits, Analyzer(), concurrency=2))
+
+    assert max_active_files == 2
+    assert len(inventory["knowledge_groups"]) == 3
+    assert all(len(group["source_chunks"]) == 2 for group in inventory["knowledge_groups"])
+    for filename in ("a.md", "b.md", "c.md"):
+        starts = [event for event in events if event[0] == "start" and event[1] == filename]
+        ends = [event for event in events if event[0] == "end" and event[1] == filename]
+        assert [event[2] for event in starts] == [0, 1]
+        assert [event[2] for event in ends] == [0, 1]
+        assert starts[1][3] >= ends[0][3]
 
 
 def test_inventory_merge_preserves_weak_group_metrics(tmp_path: Path) -> None:

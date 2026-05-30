@@ -1200,7 +1200,8 @@ class TreeEngine:
             self.settings.project_root,
             chunks,
             self.archivist,
-            concurrency=self.settings.source_archivist_concurrency,
+            concurrency=self.settings.source_inventory_file_concurrency,
+            progress=getattr(self, "progress", None),
         )
 
     def _load_candidate_nodes(self) -> dict[str, Any]:

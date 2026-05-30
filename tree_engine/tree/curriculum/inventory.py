@@ -7,6 +7,7 @@ planner and AI reason about KnowledgeGroup relationships without rereading every
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import hashlib
@@ -168,6 +169,7 @@ async def rebuild_source_inventory_with_ai(
     source_chunks: list[dict],
     analyzer: SourceChunkAnalyzer | None,
     concurrency: int = 4,
+    progress: object | None = None,
 ) -> dict[str, Any]:
     """Build source inventory, using AI semantic analysis when available.
 
@@ -177,50 +179,72 @@ async def rebuild_source_inventory_with_ai(
     if analyzer is None:
         return rebuild_source_inventory(root, source_chunks)
 
-    _ = concurrency  # Sequential grouping intentionally preserves file order.
     sorted_hits = sorted(source_chunks, key=_hit_sort_key)
     cached_records = _cached_ai_records_by_hash(load_inventory(root))
-    records = []
-    groups = []
-    active_group: dict[str, Any] | None = None
-    active_file_key: tuple[str, str, str] | None = None
+    chunks_total = len(sorted_hits)
+    file_batches = _inventory_file_batches(sorted_hits)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    state_lock = asyncio.Lock()
+    records_by_ref: dict[str, dict[str, Any]] = {}
+    file_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    file_active_groups: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+    chunks_done = 0
 
-    for hit in sorted_hits:
-        base = _chunk_record(hit)
-        current_file_key = (
-            str(base.get("source_collection") or ""),
-            str(base.get("doc_id") or ""),
-            str(base.get("path") or base.get("filename") or ""),
-        )
-        if active_file_key is not None and current_file_key != active_file_key:
-            if active_group is not None:
-                groups.append(active_group)
-            active_group = None
-        active_file_key = current_file_key
+    async def process_file(file_key: tuple[str, str, str], hits: list[dict[str, Any]]) -> None:
+        nonlocal chunks_done
+        async with semaphore:
+            local_groups: list[dict[str, Any]] = []
+            active_group: dict[str, Any] | None = None
+            for hit in hits:
+                base = _chunk_record(hit)
+                async with state_lock:
+                    _mark_inventory_chunk_progress(
+                        progress,
+                        base=base,
+                        chunks_done=chunks_done,
+                        chunks_total=chunks_total,
+                        state="analyzing",
+                    )
+                cached = cached_records.get(str(base.get("text_hash") or ""))
+                if cached is not None:
+                    record = _merge_cached_ai_analysis(base, cached)
+                    ai = record
+                else:
+                    try:
+                        ai = await _analyze_inventory_chunk(analyzer, hit, base, active_group)
+                        record = _merge_ai_analysis(base, ai)
+                    except Exception:
+                        ai = {}
+                        record = base
 
-        cached = cached_records.get(str(base.get("text_hash") or ""))
-        if cached is not None:
-            record = _merge_cached_ai_analysis(base, cached)
-            ai = record
-        else:
-            try:
-                ai = await _analyze_inventory_chunk(analyzer, hit, base, active_group)
-                record = _merge_ai_analysis(base, ai)
-            except Exception:
-                ai = {}
-                record = base
+                should_merge = bool(ai.get("merge_with_previous")) and active_group is not None
+                if should_merge:
+                    active_group = _merge_group_record(active_group, record)
+                else:
+                    if active_group is not None:
+                        local_groups.append(active_group)
+                    active_group = _group_from_records([record])
+                async with state_lock:
+                    records_by_ref[_chunk_ref(record)] = record
+                    file_groups[file_key] = [*local_groups]
+                    file_active_groups[file_key] = active_group
+                    chunks_done += 1
+                    _save_partial_inventory(
+                        root,
+                        list(records_by_ref.values()),
+                        _groups_from_file_state(file_batches, file_groups, file_active_groups),
+                    )
+                    _mark_inventory_chunk_progress(
+                        progress,
+                        base=base,
+                        chunks_done=chunks_done,
+                        chunks_total=chunks_total,
+                        state="done",
+                    )
 
-        records.append(record)
-        should_merge = bool(ai.get("merge_with_previous")) and active_group is not None
-        if should_merge:
-            active_group = _merge_group_record(active_group, record)
-        else:
-            if active_group is not None:
-                groups.append(active_group)
-            active_group = _group_from_records([record])
-
-    if active_group is not None:
-        groups.append(active_group)
+    await asyncio.gather(*(process_file(file_key, hits) for file_key, hits in file_batches))
+    records = list(records_by_ref.values())
+    groups = _groups_from_file_state(file_batches, file_groups, file_active_groups)
     records = sorted(
         records,
         key=lambda item: (
@@ -238,6 +262,89 @@ async def rebuild_source_inventory_with_ai(
     }
     save_inventory(root, inventory)
     return inventory
+
+
+def _save_partial_inventory(
+    root: Path,
+    records: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+) -> None:
+    save_inventory(
+        root,
+        {
+            "version": 2,
+            "analysis_mode": "ai_sequential_groups_partial",
+            "chunks": sorted(
+                records,
+                key=lambda item: (
+                    item.get("source_collection", ""),
+                    item.get("path", ""),
+                    item.get("chunk_index", 0),
+                ),
+            ),
+            "knowledge_groups": groups,
+            "collections": _collection_summaries(groups),
+        },
+    )
+
+
+def _inventory_file_batches(sorted_hits: list[dict[str, Any]]) -> list[tuple[tuple[str, str, str], list[dict[str, Any]]]]:
+    batches: list[tuple[tuple[str, str, str], list[dict[str, Any]]]] = []
+    batch_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for hit in sorted_hits:
+        base = _chunk_record(hit)
+        file_key = (
+            str(base.get("source_collection") or ""),
+            str(base.get("doc_id") or ""),
+            str(base.get("path") or base.get("filename") or ""),
+        )
+        if file_key not in batch_by_key:
+            batch_by_key[file_key] = []
+            batches.append((file_key, batch_by_key[file_key]))
+        batch_by_key[file_key].append(hit)
+    return batches
+
+
+def _groups_from_file_state(
+    file_batches: list[tuple[tuple[str, str, str], list[dict[str, Any]]]],
+    file_groups: dict[tuple[str, str, str], list[dict[str, Any]]],
+    file_active_groups: dict[tuple[str, str, str], dict[str, Any] | None],
+) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for file_key, _hits in file_batches:
+        groups.extend(file_groups.get(file_key, []))
+        active_group = file_active_groups.get(file_key)
+        if active_group is not None:
+            groups.append(active_group)
+    return groups
+
+
+def _mark_inventory_chunk_progress(
+    progress: object | None,
+    *,
+    base: dict[str, Any],
+    chunks_done: int,
+    chunks_total: int,
+    state: str,
+) -> None:
+    planner_stage = getattr(progress, "planner_stage", None)
+    if not callable(planner_stage):
+        return
+    planner_stage(
+        stage="source_inventory",
+        stage_label="Building source inventory",
+        stage_index=1,
+        details={
+            "state": state,
+            "chunks_done": chunks_done,
+            "chunks_total": chunks_total,
+            "current_file": str(base.get("path") or base.get("filename") or ""),
+            "current_collection": str(base.get("source_collection") or ""),
+            "current_chunk_index": int(base.get("chunk_index") or 0),
+            "current_text_hash": str(base.get("text_hash") or ""),
+        },
+        message="Archivist is analyzing source chunks for KnowledgeGroups",
+    )
 
 
 def _cached_ai_records_by_hash(inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:

@@ -45,6 +45,7 @@ class Settings:
     source_ocr_concurrency: int = 16
     source_ocr_upload_interval_sec: float = 5.0
     source_archivist_concurrency: int = 16
+    source_inventory_file_concurrency: int = 5
     source_embedding_concurrency: int = 1
     source_archivist_chunk_chars: int = 24000
     pro_degradation_threshold: int = 3
@@ -94,6 +95,7 @@ class Settings:
             source_ocr_concurrency=_env_int("SOURCE_OCR_CONCURRENCY", 16),
             source_ocr_upload_interval_sec=_env_float("SOURCE_OCR_UPLOAD_INTERVAL_SEC", 5.0),
             source_archivist_concurrency=_env_int("SOURCE_ARCHIVIST_CONCURRENCY", 16),
+            source_inventory_file_concurrency=_env_int("SOURCE_INVENTORY_FILE_CONCURRENCY", 5),
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
             source_archivist_chunk_chars=_env_int("SOURCE_ARCHIVIST_CHUNK_CHARS", 24000),
             pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
