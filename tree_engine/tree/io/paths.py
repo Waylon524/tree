@@ -76,6 +76,10 @@ def source_inventory_path(root: Path) -> Path:
     return runtime_root(root) / "source-inventory.json"
 
 
+def candidate_nodes_path(root: Path) -> Path:
+    return runtime_root(root) / "candidate-nodes.json"
+
+
 def curriculum_map_path(root: Path) -> Path:
     return runtime_root(root) / "curriculum-map.json"
 

@@ -37,6 +37,7 @@ class StateManager:
         source_collections: list[str] | None = None,
         graph_node_id: str | None = None,
         required_nodes: list[str] | None = None,
+        provisional_chapter_title: str | None = None,
     ) -> PipelineState:
         collections = list(source_collections or [])
         if source_collection and source_collection not in collections:
@@ -45,12 +46,65 @@ class StateManager:
             ChapterRecord(
                 chapter_name=name,
                 status="in_progress",
+                provisional_chapter_title=provisional_chapter_title,
                 source_collection=source_collection,
                 source_collections=collections,
                 graph_node_id=graph_node_id,
                 required_nodes=list(required_nodes or []),
             )
         ]
+        return PipelineState(chapters=chapters)
+
+    def reopen_chapter(
+        self,
+        state: PipelineState,
+        name: str,
+        source_collection: str | None = None,
+        source_collections: list[str] | None = None,
+        graph_node_id: str | None = None,
+        required_nodes: list[str] | None = None,
+    ) -> PipelineState:
+        collections = list(source_collections or [])
+        if source_collection and source_collection not in collections:
+            collections.insert(0, source_collection)
+        chapters = []
+        for ch in state.chapters:
+            if ch.chapter_name == name:
+                chapters.append(
+                    ch.model_copy(
+                        update={
+                            "status": "in_progress",
+                            "source_collection": source_collection or ch.source_collection,
+                            "source_collections": collections or ch.source_collections,
+                            "graph_node_id": graph_node_id or ch.graph_node_id,
+                            "required_nodes": list(required_nodes or ch.required_nodes),
+                        }
+                    )
+                )
+            else:
+                chapters.append(ch)
+        return PipelineState(chapters=chapters)
+
+    def set_chapter_title(
+        self,
+        state: PipelineState,
+        name: str,
+        title: str,
+        reason: str = "",
+    ) -> PipelineState:
+        chapters = []
+        for ch in state.chapters:
+            if ch.chapter_name == name:
+                chapters.append(
+                    ch.model_copy(
+                        update={
+                            "chapter_title": title,
+                            "chapter_naming_reason": reason,
+                        }
+                    )
+                )
+            else:
+                chapters.append(ch)
         return PipelineState(chapters=chapters)
 
     def complete_chapter(self, state: PipelineState, name: str) -> PipelineState:

@@ -152,10 +152,10 @@ PASS requires all answers correct, every step supported by drafts, no unresolved
 
 ## Phase C: Chapter Continuation
 
-After CHAPTER_COMPLETE, compare pipeline-state.json, finished-output coverage, source inventory, curriculum map, and knowledge graph against all structured source material collections. If uncovered source material exists, choose one eligible knowledge graph node or coherent uncovered source cluster first, name the new chapter, and output the Phase C sections below. If all source materials are covered, output exactly:
+After CHAPTER_COMPLETE, compare pipeline-state.json, finished-output coverage, source inventory, candidate nodes, and knowledge graph against all structured source material collections. If uncovered source material exists, compose for the deterministic planner-selected knowledge graph node and output the Phase C sections below. If all source materials are covered, output exactly:
 PIPELINE_COMPLETE
 
-Do not start a new chapter that merely renames or repackages finished-output concepts. A chapter can begin only when the source materials contain a meaningful uncovered cluster of knowledge.
+Do not start a new chapter that merely renames or repackages finished-output concepts. TREE uses internal tree ids for active chapters. Final human chapter titles are assigned only after the planner opens a new root or the pipeline completes, using all finished outputs from the closed tree.
 
 Treat the knowledge graph as the primary structure when it is provided:
 - A knowledge point file is a graph node, not just the next item in a line.
@@ -170,7 +170,7 @@ Treat the knowledge graph as the primary structure when it is provided:
 Phase C output must include these sections:
 
 ## [Next_Chapter]
-Use a broad textbook-style chapter name for the uncovered source collection or coherent source cluster, not the first knowledge point name. Prefer a stable curriculum unit name that can contain multiple knowledge points.
+Output a short provisional label for traceability only. The engine will ignore this as the stable chapter id and will name the closed chapter later from the finished tree concepts.
 
 ## [Source_Collection]
 Output exactly one primary collection id from the provided "Structured source material collections" headings, such as `1`, `2`, or `3`. This binds the first knowledge point to the primary source collection. If and only if no collection id is available, output `none`.

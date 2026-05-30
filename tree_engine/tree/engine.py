@@ -15,15 +15,20 @@ from tree.agents.loader import AgentLoader
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.config import Settings
+from tree.curriculum.chapter_naming import (
+    build_chapter_naming_context,
+    fallback_chapter_title,
+    next_tree_id,
+)
 from tree.curriculum.inventory import (
     build_inventory_context,
     load_inventory,
     rebuild_source_inventory_with_ai,
 )
-from tree.curriculum.map import (
-    build_curriculum_map_context,
-    load_curriculum_map,
-    rebuild_curriculum_map_with_ai,
+from tree.curriculum.candidate_nodes import (
+    build_candidate_nodes_context,
+    load_candidate_nodes,
+    rebuild_candidate_nodes_with_ai,
 )
 from tree.curriculum.graph import (
     build_knowledge_graph_context,
@@ -124,11 +129,27 @@ class TreeEngine:
                 )
                 scan_result = await self._scan_next_chapter(state)
                 if scan_result is None:
+                    state = await self._name_completed_chapters(state)
+                    self.state_mgr.save(state)
                     self.tracer.log_pipeline_complete()
                     self.progress.complete("PIPELINE_COMPLETE — all source materials covered.")
                     print("PIPELINE_COMPLETE — all source materials covered.")
                     return
-                new_name = scan_result.chapter_name
+                if scan_result.selection_mode == "branch":
+                    continued = self._continue_existing_tree(state, scan_result)
+                    if continued is not None:
+                        state = continued
+                        self.state_mgr.save(state)
+                        chapter = self.state_mgr.find_in_progress(state)
+                        print(f"Continuing chapter tree: {chapter.chapter_name}")
+                        await self.process_chapter(chapter.chapter_name)
+                        continue
+
+                if scan_result.selection_mode == "new_root":
+                    state = await self._name_completed_chapters(state)
+
+                provisional_title = scan_result.chapter_name
+                new_name = next_tree_id(state)
                 state = self.state_mgr.add_chapter(
                     state,
                     new_name,
@@ -136,6 +157,7 @@ class TreeEngine:
                     source_collections=scan_result.source_collections,
                     graph_node_id=scan_result.graph_node_id,
                     required_nodes=scan_result.required_nodes,
+                    provisional_chapter_title=provisional_title,
                 )
                 self.state_mgr.save(state)
                 chapter = self.state_mgr.find_in_progress(state)
@@ -144,7 +166,8 @@ class TreeEngine:
                     if scan_result.source_collection
                     else ""
                 )
-                print(f"New chapter discovered: {new_name}{collection_suffix}")
+                title_suffix = f" (provisional title: {provisional_title})" if provisional_title else ""
+                print(f"New chapter tree discovered: {new_name}{collection_suffix}{title_suffix}")
 
             await self.process_chapter(chapter.chapter_name)
 
@@ -659,6 +682,59 @@ class TreeEngine:
             self.state_mgr.save(reconciled)
         return reconciled
 
+    async def _name_completed_chapters(self, state: PipelineState) -> PipelineState:
+        """Name completed unnamed trees after their boundaries are known."""
+        ledger = reconcile_finished_outputs(self.settings.project_root)
+        updated = state
+        for chapter in state.chapters:
+            if chapter.status != "completed" or chapter.chapter_title:
+                continue
+            context = build_chapter_naming_context(ledger, chapter.chapter_name)
+            if not context.get("file_count"):
+                continue
+            try:
+                result = await self.archivist.name_chapter(context)
+            except Exception:
+                result = fallback_chapter_title(context)
+            updated = self.state_mgr.set_chapter_title(
+                updated,
+                chapter.chapter_name,
+                result["chapter_title"],
+                result.get("reason", ""),
+            )
+            print(f"Chapter named: {chapter.chapter_name} -> {result['chapter_title']}")
+        return updated
+
+    def _continue_existing_tree(
+        self,
+        state: PipelineState,
+        scan_result: ChapterScanResult,
+    ) -> PipelineState | None:
+        """Reopen the tree that owns the selected branch's finished parent."""
+        chapter_name = _chapter_name_from_required_nodes(
+            [scan_result.parent_output] if scan_result.parent_output else scan_result.required_nodes
+        )
+        if not chapter_name:
+            return None
+        chapter = next(
+            (
+                item
+                for item in state.chapters
+                if item.chapter_name == chapter_name and item.status == "completed" and not item.chapter_title
+            ),
+            None,
+        )
+        if chapter is None:
+            return None
+        return self.state_mgr.reopen_chapter(
+            state,
+            chapter.chapter_name,
+            source_collection=scan_result.source_collection,
+            source_collections=scan_result.source_collections,
+            graph_node_id=scan_result.graph_node_id,
+            required_nodes=scan_result.required_nodes,
+        )
+
     async def _handle_exam_too_broad(
         self, iter_state: IterationState, writer_result: WriterResult
     ) -> IterationState:
@@ -684,7 +760,7 @@ class TreeEngine:
         state_text = s.model_dump_json(indent=2) if s else "{}"
         ledger = reconcile_finished_outputs(self.settings.project_root)
         inventory = await self._rebuild_source_inventory_from_rag()
-        curriculum_map = await rebuild_curriculum_map_with_ai(
+        candidate_nodes = await rebuild_candidate_nodes_with_ai(
             self.settings.project_root,
             inventory,
             self.archivist,
@@ -692,7 +768,7 @@ class TreeEngine:
         )
         knowledge_graph = rebuild_knowledge_graph(
             self.settings.project_root,
-            curriculum_map,
+            candidate_nodes,
             ledger,
         )
         source_payload = self._source_payload_from_rag()
@@ -702,13 +778,13 @@ class TreeEngine:
             inventory,
             completed_collections=_completed_source_collections(s),
         )
-        curriculum_map_context = build_curriculum_map_context(curriculum_map)
+        candidate_nodes_context = build_candidate_nodes_context(candidate_nodes)
         selected_node_context = build_selected_node_context(knowledge_graph)
         knowledge_graph_context = build_knowledge_graph_context(knowledge_graph)
         source_inventory_context = (
             f"{selected_node_context}\n\n"
             f"{source_inventory_context}\n\n"
-            f"{curriculum_map_context}\n\n"
+            f"{candidate_nodes_context}\n\n"
             f"{knowledge_graph_context}"
         )
         scan_result, is_complete = await self.examiner.scan_next_chapter(
@@ -821,8 +897,8 @@ class TreeEngine:
             concurrency=self.settings.source_archivist_concurrency,
         )
 
-    def _load_curriculum_map(self) -> dict[str, Any]:
-        return load_curriculum_map(self.settings.project_root)
+    def _load_candidate_nodes(self) -> dict[str, Any]:
+        return load_candidate_nodes(self.settings.project_root)
 
     def _load_knowledge_graph(self) -> dict[str, Any]:
         return load_knowledge_graph(self.settings.project_root)
@@ -998,7 +1074,7 @@ def _completed_source_collections(state: PipelineState | None) -> set[str]:
         return set()
     completed = set()
     for chapter in state.chapters:
-        if chapter.status != "completed":
+        if chapter.status != "completed" or not chapter.chapter_title:
             continue
         completed.update(_chapter_source_collections(chapter))
     return completed
@@ -1029,10 +1105,14 @@ def _attach_graph_selection(
         required_nodes = scan_result.required_nodes
     source_collections = list(selected.get("source_collections", [])) or scan_result.source_collections
     source_collection = selected.get("primary_source_collection") or scan_result.source_collection
+    planner = knowledge_graph.get("planner") or {}
     return scan_result.model_copy(
         update={
             "graph_node_id": selected.get("node_id"),
             "required_nodes": required_nodes,
+            "parent_output": selected.get("parent_output"),
+            "is_new_root": bool(selected.get("is_new_root")),
+            "selection_mode": str(planner.get("selection_mode") or ""),
             "source_collection": source_collection,
             "source_collections": source_collections,
         }
@@ -1071,6 +1151,17 @@ def _match_graph_node(scan_result: ChapterScanResult, knowledge_graph: dict[str,
         )
         if selected_collections & set(ranked[0].get("source_collections", [])):
             return ranked[0]
+    return None
+
+
+def _chapter_name_from_required_nodes(required_nodes: list[str]) -> str | None:
+    for node_id in required_nodes:
+        if not node_id.startswith("finished:"):
+            continue
+        rel = node_id.removeprefix("finished:")
+        parts = Path(rel).parts
+        if len(parts) >= 3 and parts[0] == "outputs":
+            return parts[1]
     return None
 
 

@@ -17,6 +17,13 @@ _MIN_MERGE_CHUNK = 0.62
 _MIN_PREREQUISITE = 0.25
 _MIN_ADJACENT = 0.12
 _MIN_BACKBONE_AFFINITY = 0.05
+_NEW_ROOT_PARENT_SCORE_THRESHOLD = 0.18
+_NEW_ROOT_PREREQUISITE_THRESHOLD = 0.25
+_MULTI_PARENT_SCORE_THRESHOLD = 0.30
+_MULTI_PARENT_PREREQ_THRESHOLD = 0.25
+_MAX_SUPPORTING_PARENTS = 4
+_STRONG_PARENT_SOURCE = 0.50
+_STRONG_PARENT_CHUNK = 0.45
 
 
 def load_knowledge_graph(root: Path) -> dict[str, Any]:
@@ -49,7 +56,7 @@ def save_knowledge_graph(root: Path, graph: dict[str, Any]) -> None:
 
 def rebuild_knowledge_graph(
     root: Path,
-    curriculum_map: dict[str, Any],
+    candidate_nodes: dict[str, Any],
     ledger: dict[str, Any],
 ) -> dict[str, Any]:
     """Build and persist a derived knowledge graph."""
@@ -60,14 +67,14 @@ def rebuild_knowledge_graph(
     ]
     planned_nodes = [
         _candidate_node(candidate)
-        for candidate in curriculum_map.get("chapter_candidates", [])
+        for candidate in candidate_nodes.get("chapter_candidates", [])
         if isinstance(candidate, dict)
     ]
     nodes = finished_nodes + planned_nodes
     edges = _relation_edges(nodes)
-    planner = _apply_backbone_planner(nodes, edges)
+    _resolve_finished_coverage(nodes, edges)
     _attach_node_links(nodes, edges)
-    _select_frontier(nodes, edges, planner)
+    planner = _apply_incremental_forest_planner(nodes, edges)
     graph = {
         "version": 1,
         "nodes": nodes,
@@ -77,6 +84,16 @@ def rebuild_knowledge_graph(
     }
     save_knowledge_graph(root, graph)
     return graph
+
+
+def relation_pair_scores(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float]:
+    """Return the shared relation-classification similarity scores for two nodes."""
+    return _pair_scores(left, right)
+
+
+def relation_affinity(scores: dict[str, float]) -> float:
+    """Return the shared relation-classification weighted affinity."""
+    return _affinity(scores)
 
 
 def build_selected_node_context(graph: dict[str, Any]) -> str:
@@ -112,7 +129,12 @@ def build_selected_node_context(graph: dict[str, Any]) -> str:
             f"Primary source collection: {selected.get('primary_source_collection') or 'n/a'}",
             f"Source collections: {', '.join(selected.get('source_collections', [])) or 'n/a'}",
             f"Required nodes: {', '.join(selected.get('required_nodes', [])) or 'none'}",
-            f"Backbone parent: {selected.get('backbone_parent') or 'none'}",
+            f"Parent output: {selected.get('parent_output') or 'none'}",
+            f"Supporting parents: {_supporting_parent_text(selected.get('supporting_parents', [])) or 'none'}",
+            f"New root: {'yes' if selected.get('is_new_root') else 'no'}",
+            f"Branch score: {selected.get('branch_score', 0):.2f}",
+            f"Support score: {selected.get('support_score', 0):.2f}",
+            f"Tree distance: {selected.get('tree_distance', 0):.2f}",
             f"Tree depth: {selected.get('tree_depth', 0)}",
             f"Why selected: {selected.get('why_selected') or 'n/a'}",
             "",
@@ -163,8 +185,8 @@ def build_knowledge_graph_context(graph: dict[str, Any], limit_nodes: int = 12, 
 
     lines = [
         "## Knowledge Graph",
-        "Use this graph as the primary structure: knowledge files are nodes, and required_nodes are prerequisites.",
-        "The deterministic planner selects the growth direction. Examiner should compose for the selected node.",
+        "Use this graph as the primary structure: finished outputs are real tree nodes, and candidate nodes are possible next growth points.",
+        "The incremental forest planner selects the root or branch. Examiner should compose for the selected node.",
         "",
         f"- finished_nodes: {graph.get('stats', {}).get('finished_count', 0)}",
         f"- planned_nodes: {graph.get('stats', {}).get('planned_count', 0)}",
@@ -373,6 +395,434 @@ def _needs_split(node: dict[str, Any]) -> bool:
         or len(node.get("hit_chunks", [])) >= 10
         or (len(node.get("core_concepts", [])) >= 20 and len(node.get("source_collections", [])) >= 2)
     )
+
+
+def _resolve_finished_coverage(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+    by_id = {node.get("node_id"): node for node in nodes}
+    finished_by_graph_id = {
+        node.get("graph_node_id"): node
+        for node in nodes
+        if node.get("kind") == "finished" and node.get("graph_node_id")
+    }
+    for node in nodes:
+        if node.get("kind") != "candidate" or node.get("status") != "planned":
+            continue
+        source = finished_by_graph_id.get(node.get("node_id"))
+        if source:
+            _mark_candidate_covered(node, source, "covered by finished output graph_node_id")
+    for edge in edges:
+        if edge.get("relation") != "duplicate":
+            continue
+        left = by_id.get(edge.get("from"))
+        right = by_id.get(edge.get("to"))
+        if not left or not right:
+            continue
+        if left.get("kind") == "finished" and right.get("kind") == "candidate":
+            _mark_candidate_covered(right, left, "covered by finished output duplicate relation")
+        elif right.get("kind") == "finished" and left.get("kind") == "candidate":
+            _mark_candidate_covered(left, right, "covered by finished output duplicate relation")
+
+
+def _mark_candidate_covered(candidate: dict[str, Any], finished: dict[str, Any], reason: str) -> None:
+    candidate["status"] = "covered"
+    candidate["covered_by_output"] = finished.get("node_id")
+    candidate["coverage_reason"] = reason
+    candidate["eligible"] = False
+
+
+def _apply_incremental_forest_planner(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
+    candidates = [node for node in nodes if node.get("kind") == "candidate"]
+    finished = [node for node in nodes if node.get("kind") == "finished"]
+    planned = [node for node in candidates if node.get("status") == "planned"]
+    for node in nodes:
+        node["planner_selected"] = False
+        if node.get("kind") == "finished":
+            node["is_root"] = not bool(node.get("required_nodes"))
+            node["tree_depth"] = len(node.get("required_nodes", []) or [])
+    for node in candidates:
+        node["is_root"] = False
+        node["is_new_root"] = False
+        node["root_score"] = round(_root_score(node, candidates, edges), 4)
+        node["backbone_parent"] = None
+        node["backbone_children"] = []
+        node["parent_output"] = None
+        node["branch_score"] = 0.0
+        node["support_score"] = 0.0
+        node["nearest_finished_output"] = None
+        node["tree_distance"] = 1.0
+        node["distance_components"] = _empty_distance_components()
+        node["supporting_parents"] = []
+        node["evidence_strength"] = round(_evidence_strength(node), 4)
+        node.setdefault("tree_depth", 0)
+
+    planner = {
+        "mode": "incremental_forest_v1",
+        "root_nodes": _finished_root_nodes(finished),
+        "frontier_nodes": [],
+        "selected_node": None,
+        "selection_mode": "none",
+        "selection_evidence": {},
+        "boundary_edges": _boundary_edges(edges),
+        "new_root_thresholds": {
+            "parent_score": _NEW_ROOT_PARENT_SCORE_THRESHOLD,
+            "prerequisite_coverage": _NEW_ROOT_PREREQUISITE_THRESHOLD,
+        },
+        "multi_parent_thresholds": {
+            "parent_score": _MULTI_PARENT_SCORE_THRESHOLD,
+            "prerequisite_coverage": _MULTI_PARENT_PREREQ_THRESHOLD,
+            "max_supporting_parents": _MAX_SUPPORTING_PARENTS,
+        },
+    }
+    if not planned:
+        planner["trace"] = _planner_trace(planner, [])
+        return planner
+    if not finished:
+        selected = _select_root_candidate(planned, candidates, edges)
+        _mark_selected_root(selected, planner, edges, "initial_root")
+        planner["trace"] = _planner_trace(planner, planned)
+        return planner
+
+    for node in planned:
+        parents = _parent_outputs(node, finished)
+        _attach_parent_metrics(node, parents)
+
+    frontier = [node for node in planned if node.get("eligible", True)]
+    if not frontier:
+        planner["trace"] = _planner_trace(planner, planned)
+        return planner
+    frontier.sort(key=lambda node: _branch_sort_key(node, edges))
+    best_branch = frontier[0]
+    if _should_start_new_root(best_branch):
+        selected = _select_root_candidate(frontier, candidates, edges)
+        _mark_selected_root(selected, planner, edges, "new_root")
+    else:
+        _mark_selected_branch(best_branch, planner, edges)
+    planner["frontier_nodes"] = [node.get("node_id", "") for node in frontier]
+    planner["trace"] = _planner_trace(planner, frontier)
+    return planner
+
+
+def _finished_root_nodes(finished: list[dict[str, Any]]) -> list[str]:
+    roots = []
+    for node in finished:
+        if node.get("required_nodes"):
+            continue
+        roots.append(str(node.get("node_id") or ""))
+    return [item for item in roots if item]
+
+
+def _select_root_candidate(
+    planned: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    for node in planned:
+        node["root_score"] = round(_root_score(node, candidates, edges), 4)
+    return sorted(
+        planned,
+        key=lambda node: (
+            _node_warning_penalty(node, edges),
+            -float(node.get("root_score", 0)),
+            -float(node.get("evidence_strength", 0)),
+            -float(node.get("selection_priority", 0)),
+            str(node.get("node_id", "")),
+        ),
+    )[0]
+
+
+def _mark_selected_root(node: dict[str, Any], planner: dict[str, Any], edges: list[dict[str, Any]], mode: str) -> None:
+    node["planner_selected"] = True
+    node["is_root"] = True
+    node["is_new_root"] = True
+    node["parent_output"] = None
+    node["branch_score"] = 0.0
+    node["tree_depth"] = 0
+    node["selection_evidence"] = _selection_evidence(node, edges)
+    node["why_selected"] = (
+        "first root selected by root selector"
+        if mode == "initial_root"
+        else "remaining candidates are distant from the finished tree; root selector opened a new root"
+    )
+    planner["selection_mode"] = mode
+    planner["selected_node"] = node.get("node_id")
+    planner["selection_evidence"] = node["selection_evidence"]
+    if node.get("node_id") not in planner["root_nodes"]:
+        planner["root_nodes"].append(node.get("node_id"))
+    planner["frontier_nodes"] = [node.get("node_id", "")]
+
+
+def _mark_selected_branch(node: dict[str, Any], planner: dict[str, Any], edges: list[dict[str, Any]]) -> None:
+    parent = str(node.get("parent_output") or "")
+    node["planner_selected"] = True
+    node["is_new_root"] = False
+    required = node.setdefault("required_nodes", [])
+    supporting_parent_ids = [
+        str(item.get("node_id") or "")
+        for item in node.get("supporting_parents", [])
+        if item.get("node_id")
+    ]
+    if parent and parent not in supporting_parent_ids:
+        supporting_parent_ids.insert(0, parent)
+    for parent_id in supporting_parent_ids:
+        if parent_id not in required:
+            required.append(parent_id)
+    if parent:
+        if not any(
+            edge.get("relation") == "branch"
+            and edge.get("from") == parent
+            and edge.get("to") == node.get("node_id")
+            for edge in edges
+        ):
+            edges.append(_branch_edge(parent, node))
+    for parent_id in supporting_parent_ids:
+        if parent_id == parent:
+            continue
+        if not any(
+            edge.get("relation") == "supporting_parent"
+            and edge.get("from") == parent_id
+            and edge.get("to") == node.get("node_id")
+            for edge in edges
+        ):
+            edges.append(_supporting_parent_edge(parent_id, node))
+    node["selection_evidence"] = _selection_evidence(node, edges)
+    node["why_selected"] = "best attachable branch from existing finished tree"
+    planner["selection_mode"] = "branch"
+    planner["selected_node"] = node.get("node_id")
+    planner["selection_evidence"] = node["selection_evidence"]
+
+
+def _parent_outputs(candidate: dict[str, Any], finished: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    parents = []
+    for parent in finished:
+        scores = _pair_scores(parent, candidate)
+        prerequisite_coverage = _prerequisite_coverage(parent, candidate)
+        parent_score = (
+            prerequisite_coverage * 0.45
+            + _affinity(scores) * 0.35
+            + scores["source"] * 0.10
+            + scores["chunk"] * 0.10
+        )
+        parents.append(
+            {
+                "node": parent,
+                "score": parent_score,
+                "scores": scores,
+                "prerequisite_coverage": prerequisite_coverage,
+            }
+        )
+    parents.sort(
+        key=lambda item: (
+            -float(item.get("score") or 0),
+            -float(item.get("prerequisite_coverage") or 0),
+            str(item.get("node", {}).get("node_id", "")),
+        )
+    )
+    return parents
+
+
+def _attach_parent_metrics(node: dict[str, Any], parents: list[dict[str, Any]]) -> None:
+    primary = parents[0] if parents else {"node": None, "score": 0.0, "scores": {}, "prerequisite_coverage": 0.0}
+    parent_node = primary.get("node")
+    scores = primary.get("scores", {})
+    supporting = _supporting_parent_outputs(parents)
+    node["parent_output"] = parent_node.get("node_id") if parent_node else None
+    node["branch_score"] = round(float(primary.get("score") or 0), 4)
+    node["best_parent_affinity"] = round(_affinity(scores), 4) if scores else 0.0
+    node["prerequisite_coverage"] = round(float(primary.get("prerequisite_coverage") or 0), 4)
+    node["parent_relation_scores"] = {key: round(value, 4) for key, value in scores.items()}
+    node["supporting_parents"] = [_supporting_parent_summary(item) for item in supporting]
+    node["combined_prerequisite_coverage"] = round(_combined_prerequisite_coverage(supporting, node), 4)
+    node["support_score"] = round(_support_score(node), 4)
+    node["nearest_finished_output"] = node["parent_output"]
+    node["tree_distance"] = round(max(0.0, min(1.0, 1 - float(node.get("support_score") or 0))), 4)
+    node["distance_components"] = _distance_components(
+        scores,
+        float(node.get("combined_prerequisite_coverage") or 0),
+    )
+    node["tree_depth"] = int(parent_node.get("tree_depth", 0)) + 1 if parent_node else 0
+
+
+def _should_start_new_root(node: dict[str, Any]) -> bool:
+    scores = node.get("parent_relation_scores", {})
+    parent_signal = max(float(node.get("branch_score") or 0), float(node.get("support_score") or 0))
+    prerequisite_signal = max(
+        float(node.get("prerequisite_coverage") or 0),
+        float(node.get("combined_prerequisite_coverage") or 0),
+    )
+    return (
+        parent_signal < _NEW_ROOT_PARENT_SCORE_THRESHOLD
+        and prerequisite_signal < _NEW_ROOT_PREREQUISITE_THRESHOLD
+        and float(scores.get("source") or 0) < _STRONG_PARENT_SOURCE
+        and float(scores.get("chunk") or 0) < _STRONG_PARENT_CHUNK
+    )
+
+
+def _branch_sort_key(node: dict[str, Any], edges: list[dict[str, Any]]) -> tuple[Any, ...]:
+    return (
+        _node_warning_penalty(node, edges),
+        -float(node.get("support_score") or 0),
+        -float(node.get("branch_score") or 0),
+        -float(node.get("combined_prerequisite_coverage") or 0),
+        -float(node.get("prerequisite_coverage") or 0),
+        -float(node.get("best_parent_affinity") or 0),
+        -float(node.get("evidence_strength") or 0),
+        str(node.get("node_id", "")),
+    )
+
+
+def _prerequisite_coverage(parent: dict[str, Any], candidate: dict[str, Any]) -> float:
+    prereqs = _term_set(candidate.get("prerequisites", []))
+    if not prereqs:
+        return 0.0
+    parent_terms = _term_set(parent.get("core_concepts", []))
+    return _overlap_score(parent_terms, prereqs)
+
+
+def _supporting_parent_outputs(parents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not parents:
+        return []
+    primary = parents[0]
+    supporting = [primary]
+    for parent in parents[1:]:
+        if not _is_supporting_parent(parent):
+            continue
+        supporting.append(parent)
+        if len(supporting) >= _MAX_SUPPORTING_PARENTS:
+            break
+    return supporting
+
+
+def _is_supporting_parent(parent: dict[str, Any]) -> bool:
+    scores = parent.get("scores", {})
+    semantic_signal = (
+        float(parent.get("prerequisite_coverage") or 0) > 0
+        or float(scores.get("concept") or 0) > 0
+        or float(scores.get("chunk") or 0) > 0
+    )
+    if not semantic_signal:
+        return False
+    return (
+        float(parent.get("score") or 0) >= _MULTI_PARENT_SCORE_THRESHOLD
+        or float(parent.get("prerequisite_coverage") or 0) >= _MULTI_PARENT_PREREQ_THRESHOLD
+    )
+
+
+def _supporting_parent_summary(parent: dict[str, Any]) -> dict[str, Any]:
+    node = parent.get("node") or {}
+    scores = parent.get("scores", {})
+    return {
+        "node_id": node.get("node_id"),
+        "score": round(float(parent.get("score") or 0), 4),
+        "prerequisite_coverage": round(float(parent.get("prerequisite_coverage") or 0), 4),
+        "affinity": round(_affinity(scores), 4) if scores else 0.0,
+        "concept": round(float(scores.get("concept") or 0), 4),
+        "chunk": round(float(scores.get("chunk") or 0), 4),
+        "source": round(float(scores.get("source") or 0), 4),
+    }
+
+
+def _combined_prerequisite_coverage(parents: list[dict[str, Any]], candidate: dict[str, Any]) -> float:
+    prereqs = _term_set(candidate.get("prerequisites", []))
+    if not prereqs:
+        return 0.0
+    parent_terms: set[str] = set()
+    for parent in parents:
+        node = parent.get("node") or {}
+        parent_terms.update(_term_set(node.get("core_concepts", [])))
+    return _overlap_score(parent_terms, prereqs)
+
+
+def _support_score(node: dict[str, Any]) -> float:
+    supporting_count = len(node.get("supporting_parents", []) or [])
+    supporting_bonus = min(1.0, supporting_count / max(1, _MAX_SUPPORTING_PARENTS))
+    return min(
+        1.0,
+        float(node.get("branch_score") or 0) * 0.65
+        + float(node.get("combined_prerequisite_coverage") or 0) * 0.25
+        + supporting_bonus * 0.10,
+    )
+
+
+def _empty_distance_components() -> dict[str, float]:
+    return {
+        "concept_distance": 1.0,
+        "chunk_distance": 1.0,
+        "source_distance": 1.0,
+        "affinity_distance": 1.0,
+        "prerequisite_gap": 1.0,
+    }
+
+
+def _distance_components(scores: dict[str, float], combined_prerequisite_coverage: float) -> dict[str, float]:
+    if not scores:
+        return _empty_distance_components()
+    return {
+        "concept_distance": round(1 - float(scores.get("concept") or 0), 4),
+        "chunk_distance": round(1 - float(scores.get("chunk") or 0), 4),
+        "source_distance": round(1 - float(scores.get("source") or 0), 4),
+        "affinity_distance": round(1 - _affinity(scores), 4),
+        "prerequisite_gap": round(1 - combined_prerequisite_coverage, 4),
+    }
+
+
+def _planner_trace(planner: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    selected_id = planner.get("selected_node")
+    ranked = sorted(candidates, key=lambda node: _trace_sort_key(node))
+    return {
+        "mode": planner.get("mode"),
+        "selection_mode": planner.get("selection_mode"),
+        "selected_node": selected_id,
+        "candidate_count": len(candidates),
+        "candidate_ranking": [
+            _trace_candidate_entry(index, node, selected_id, planner.get("selection_mode"))
+            for index, node in enumerate(ranked, start=1)
+        ],
+    }
+
+
+def _trace_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        float(node.get("tree_distance") if node.get("tree_distance") is not None else 1.0),
+        -float(node.get("support_score") or 0),
+        -float(node.get("branch_score") or 0),
+        -float(node.get("root_score") or 0),
+        str(node.get("node_id", "")),
+    )
+
+
+def _trace_candidate_entry(
+    rank: int,
+    node: dict[str, Any],
+    selected_id: Any,
+    selection_mode: Any,
+) -> dict[str, Any]:
+    selected = node.get("node_id") == selected_id
+    return {
+        "rank": rank,
+        "node_id": node.get("node_id"),
+        "selected": selected,
+        "reason": _trace_reason(selected, selection_mode, node),
+        "parent_output": node.get("parent_output"),
+        "nearest_finished_output": node.get("nearest_finished_output"),
+        "tree_distance": round(float(node.get("tree_distance") or 0), 4),
+        "branch_score": round(float(node.get("branch_score") or 0), 4),
+        "support_score": round(float(node.get("support_score") or 0), 4),
+        "root_score": round(float(node.get("root_score") or 0), 4),
+        "prerequisite_coverage": round(float(node.get("prerequisite_coverage") or 0), 4),
+        "combined_prerequisite_coverage": round(float(node.get("combined_prerequisite_coverage") or 0), 4),
+        "supporting_parent_count": len(node.get("supporting_parents", []) or []),
+        "distance_components": node.get("distance_components", _empty_distance_components()),
+    }
+
+
+def _trace_reason(selected: bool, selection_mode: Any, node: dict[str, Any]) -> str:
+    if selected:
+        return "selected"
+    if selection_mode == "new_root" and _should_start_new_root(node):
+        return "new_root_distance"
+    if selection_mode in {"initial_root", "new_root"}:
+        return "lower_root_score"
+    return "lower_support_score"
 
 
 def _apply_backbone_planner(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
@@ -607,6 +1057,17 @@ def _selection_evidence(node: dict[str, Any], edges: list[dict[str, Any]]) -> di
         "selection_priority": round(float(node.get("selection_priority") or 0), 4),
         "warning_penalty": _node_warning_penalty(node, edges),
         "backbone_parent": node.get("backbone_parent"),
+        "parent_output": node.get("parent_output"),
+        "supporting_parents": node.get("supporting_parents", [])[:_MAX_SUPPORTING_PARENTS],
+        "is_new_root": bool(node.get("is_new_root")),
+        "branch_score": round(float(node.get("branch_score") or 0), 4),
+        "support_score": round(float(node.get("support_score") or 0), 4),
+        "tree_distance": round(float(node.get("tree_distance") or 0), 4),
+        "nearest_finished_output": node.get("nearest_finished_output"),
+        "distance_components": node.get("distance_components", _empty_distance_components()),
+        "prerequisite_coverage": round(float(node.get("prerequisite_coverage") or 0), 4),
+        "combined_prerequisite_coverage": round(float(node.get("combined_prerequisite_coverage") or 0), 4),
+        "best_parent_affinity": round(float(node.get("best_parent_affinity") or 0), 4),
         "incoming_prerequisites": [
             {
                 "from": edge.get("from"),
@@ -628,6 +1089,14 @@ def _selection_evidence(node: dict[str, Any], edges: list[dict[str, Any]]) -> di
 
 def _why_selected(node: dict[str, Any]) -> str:
     evidence = node.get("selection_evidence", {})
+    if node.get("is_new_root"):
+        return "root selector opened a new root because no existing output is a strong parent"
+    if node.get("parent_output"):
+        return (
+            f"best attachable branch under {node.get('parent_output')}; "
+            f"branch_score={float(node.get('branch_score') or 0):.2f}; "
+            f"supporting_parents={len(node.get('supporting_parents', []) or [])}"
+        )
     parts = [
         f"eligible frontier node at depth {evidence.get('tree_depth', 0)}",
         f"evidence_strength={evidence.get('evidence_strength', 0):.2f}",
@@ -657,6 +1126,63 @@ def _backbone_edge(source: dict[str, Any], target: dict[str, Any], affinity: flo
         "evidence": _edge_evidence(source, target),
         "confidence": round(min(1.0, affinity / 0.72), 4),
         "reason": "Deterministic maximum-spanning backbone edge.",
+    }
+
+
+def _branch_edge(parent_id: str, target: dict[str, Any]) -> dict[str, Any]:
+    scores = target.get("parent_relation_scores", {})
+    return {
+        "from": parent_id,
+        "to": target.get("node_id", ""),
+        "relation": "branch",
+        "scores": {
+            "affinity": round(float(target.get("best_parent_affinity") or 0), 4),
+            "concept": round(float(scores.get("concept") or 0), 4),
+            "chunk": round(float(scores.get("chunk") or 0), 4),
+            "source": round(float(scores.get("source") or 0), 4),
+            "prerequisite": round(float(target.get("prerequisite_coverage") or 0), 4),
+            "branch": round(float(target.get("branch_score") or 0), 4),
+        },
+        "evidence": {
+            "matched_concepts": [],
+            "matched_chunks": target.get("hit_chunks", [])[:8],
+            "matched_sources": target.get("source_collections", [])[:8],
+            "prerequisite_hits": target.get("prerequisites", [])[:8],
+        },
+        "confidence": round(min(1.0, float(target.get("branch_score") or 0) / 0.72), 4),
+        "reason": "Incremental forest planner inserted this branch under the best finished output parent.",
+    }
+
+
+def _supporting_parent_edge(parent_id: str, target: dict[str, Any]) -> dict[str, Any]:
+    support = next(
+        (
+            item
+            for item in target.get("supporting_parents", [])
+            if item.get("node_id") == parent_id
+        ),
+        {},
+    )
+    return {
+        "from": parent_id,
+        "to": target.get("node_id", ""),
+        "relation": "supporting_parent",
+        "scores": {
+            "affinity": round(float(support.get("affinity") or 0), 4),
+            "concept": round(float(support.get("concept") or 0), 4),
+            "chunk": round(float(support.get("chunk") or 0), 4),
+            "source": round(float(support.get("source") or 0), 4),
+            "prerequisite": round(float(support.get("prerequisite_coverage") or 0), 4),
+            "support": round(float(support.get("score") or 0), 4),
+        },
+        "evidence": {
+            "matched_concepts": [],
+            "matched_chunks": target.get("hit_chunks", [])[:8],
+            "matched_sources": target.get("source_collections", [])[:8],
+            "prerequisite_hits": target.get("prerequisites", [])[:8],
+        },
+        "confidence": round(min(1.0, float(support.get("score") or 0) / 0.72), 4),
+        "reason": "Additional finished output parent exceeds the multi-parent support threshold.",
     }
 
 
@@ -795,6 +1321,8 @@ def _graph_stats(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> di
         "selected_count": len([node for node in planned if node.get("planner_selected")]),
         "edge_count": len(edges),
         "backbone_count": len([edge for edge in edges if edge.get("relation") == "backbone"]),
+        "branch_count": len([edge for edge in edges if edge.get("relation") == "branch"]),
+        "supporting_parent_count": len([edge for edge in edges if edge.get("relation") == "supporting_parent"]),
         "duplicate_count": len([edge for edge in edges if edge.get("relation") == "duplicate"]),
         "prerequisite_count": len([edge for edge in edges if edge.get("relation") == "prerequisite"]),
         "split_needed_count": len([edge for edge in edges if edge.get("relation") == "split_needed"]),
@@ -806,9 +1334,10 @@ def _node_line(node: dict[str, Any]) -> str:
     concepts = ", ".join(node.get("core_concepts", [])[:8]) or "n/a"
     required = ", ".join(node.get("required_nodes", [])[:5]) or "none"
     chunks = ", ".join(node.get("hit_chunks", [])[:4]) or "n/a"
+    parent = node.get("parent_output") or "root" if node.get("is_new_root") else node.get("parent_output") or "none"
     return (
         f"- {node.get('node_id')}: {node.get('title')} | "
-        f"requires: {required} | concepts: {concepts} | chunks: {chunks}"
+        f"parent: {parent} | requires: {required} | concepts: {concepts} | chunks: {chunks}"
     )
 
 
@@ -892,6 +1421,19 @@ def _edge_rank(relation: str) -> int:
         "merge_needed": 1,
         "split_needed": 2,
         "prerequisite": 3,
-        "adjacent": 4,
+        "branch": 4,
+        "supporting_parent": 5,
+        "adjacent": 6,
     }
     return order.get(relation, 9)
+
+
+def _supporting_parent_text(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    parts = []
+    for item in items[:_MAX_SUPPORTING_PARENTS]:
+        if not isinstance(item, dict):
+            continue
+        parts.append(f"{item.get('node_id')}:{float(item.get('score') or 0):.2f}")
+    return ", ".join(parts)

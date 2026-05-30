@@ -54,25 +54,25 @@ class ArchivistAgent:
         raw = await self._client.call("archivist", system, user)
         return _extract_json_object(raw)
 
-    async def build_curriculum_map(
+    async def build_candidate_nodes(
         self,
         inventory_summary: dict[str, Any],
         completed_collections: list[str],
     ) -> dict[str, Any]:
-        """Build domain-neutral curriculum map candidates from source inventory JSON."""
+        """Build candidate knowledge nodes from source inventory JSON."""
         system = self._loader.load("archivist")
         user = (
-            "## Task: Build Curriculum Map Candidates\n\n"
+            "## Task: Build Candidate Knowledge Nodes\n\n"
             "Return strict JSON only. Do not wrap it in Markdown.\n\n"
-            "Input is a source inventory summary. Create candidate chapter clusters by semantic "
-            "teaching units, not upload order. A chapter may use multiple related source collections, "
-            "and one collection may still be split later by the examiner.\n\n"
+            "Input is a source inventory summary. Create candidate knowledge nodes by semantic "
+            "teaching units, not upload order. This step does not choose curriculum order; "
+            "the deterministic graph planner will choose roots, branches, and frontier nodes.\n\n"
             "Schema:\n"
             "{\n"
             '  "chapter_candidates": [\n'
             "    {\n"
             '      "candidate_id": "candidate:<stable-id>",\n'
-            '      "title_hint": "broad textbook-style chapter title",\n'
+            '      "title_hint": "knowledge node title hint",\n'
             '      "primary_source_collection": "collection id",\n'
             '      "source_collections": ["primary", "related"],\n'
             '      "core_concepts": ["main chapter concepts"],\n'
@@ -86,6 +86,7 @@ class ArchivistAgent:
             "Rules:\n"
             "- Do not encode domain-specific fixed ranks. Infer prerequisites from concepts.\n"
             "- If a source collection is mostly application/review, place its prerequisite concepts clearly.\n"
+            "- Do not choose roots, sequence, or next chapter. Only generate candidate nodes.\n"
             "- Do not mark a candidate completed; the engine will do that.\n"
             "- Use only collection ids and chunk refs that appear in the input.\n\n"
             f"Completed collections:\n{json.dumps(completed_collections, ensure_ascii=False)}\n\n"
@@ -93,6 +94,40 @@ class ArchivistAgent:
         )
         raw = await self._client.call("archivist", system, user)
         return _extract_json_object(raw)
+
+    async def build_curriculum_map(
+        self,
+        inventory_summary: dict[str, Any],
+        completed_collections: list[str],
+    ) -> dict[str, Any]:
+        """Compatibility wrapper for older curriculum-map callers."""
+        return await self.build_candidate_nodes(inventory_summary, completed_collections)
+
+    async def name_chapter(self, naming_context: dict[str, Any]) -> dict[str, str]:
+        """Name a closed chapter/tree from its finished output concepts."""
+        system = self._loader.load("archivist")
+        user = (
+            "## Task: Name Closed TREE Chapter\n\n"
+            "Return strict JSON only. Do not wrap it in Markdown.\n\n"
+            "The input is a finished knowledge tree. Name the chapter after seeing "
+            "all generated outputs, not before the tree grows.\n\n"
+            "Schema:\n"
+            "{\n"
+            '  "chapter_title": "broad textbook-style chapter title",\n'
+            '  "short_slug": "short display slug",\n'
+            '  "reason": "brief reason based on the concepts"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- Use the actual knowledge points and concepts, not source collection ids.\n"
+            "- Prefer a broad title that can contain all listed knowledge points.\n"
+            "- Do not mention TREE, files, outputs, candidate nodes, or implementation details.\n"
+            "- Keep chapter_title concise, usually 6-16 Chinese characters when the input is Chinese.\n\n"
+            f"Closed tree context:\n{json.dumps(naming_context, ensure_ascii=False)[:12000]}"
+        )
+        raw = await self._client.call("archivist", system, user)
+        from tree.curriculum.chapter_naming import parse_chapter_naming_response
+
+        return parse_chapter_naming_response(raw)
 
 
 def _extract_json_object(raw: str) -> dict[str, Any]:

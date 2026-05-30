@@ -1,10 +1,12 @@
 # Deterministic Tree Planner Refactor Plan
 
+> **Superseded direction note:** The one-shot backbone/MST planner in this document has been replaced by `tree_engine/docs/incremental-forest-planner-refactor.md`. The current planner direction is incremental forest growth: select an initial root, let finished outputs become the real tree nodes, attach new branches to finished outputs, and re-run root selection when remaining candidates are too distant.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans or follow this plan task-by-task. Each phase must leave TREE runnable.
 
 **Goal:** Move direction control from examiner to a deterministic tree planner. TREE should compute the best knowledge growth tree first, use AI only for low-confidence boundary cases, and ask examiner to write exams for the planner-selected frontier node.
 
-**Architecture:** Source inventory and curriculum map still produce candidate knowledge nodes. A deterministic planner computes pairwise distances, builds a maximum-spanning backbone tree or forest, chooses roots, orients edges, adds multi-prerequisite dependency edges, and produces a selected frontier node. Examiner receives this fixed tree decision and should not choose the global direction itself.
+**Architecture:** Source inventory feeds a candidate node generator. The deterministic planner then computes pairwise distances, builds a maximum-spanning backbone tree or forest, chooses roots, orients edges, adds multi-prerequisite dependency edges, and produces a selected frontier node. Examiner receives this fixed tree decision and should not choose the global direction itself.
 
 **Tech Stack:** Python 3.12, local `.tree/runtime/knowledge-graph.json`, rule-based graph algorithms, optional Archivist boundary reviews in later phases.
 
@@ -15,14 +17,14 @@
 Current graph-aware flow still lets examiner choose direction:
 
 ```text
-source inventory -> curriculum map -> knowledge graph context -> examiner chooses next node
+source inventory -> candidate nodes -> knowledge graph context -> examiner chooses next node
 ```
 
 Target planner-controlled flow:
 
 ```text
 source inventory
-  -> curriculum map candidates
+  -> candidate knowledge nodes
   -> deterministic tree planner
   -> selected frontier node
   -> examiner composes exam only for that node

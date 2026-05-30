@@ -14,7 +14,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import click
 import typer
@@ -58,7 +58,7 @@ _INTERACTIVE_COMMANDS = [
     ("/rag status", "Show local RAG index status"),
     ("/rag ledger", "Show finished-output knowledge ledger"),
     ("/rag inventory", "Show chunk-level source inventory"),
-    ("/rag map", "Show curriculum map candidates"),
+    ("/rag candidates", "Show generated candidate knowledge nodes"),
     ("/rag graph", "Show knowledge graph nodes and relations"),
     ("/help", "Show this slash-command help"),
     ("/exit", "Leave interactive mode without stopping services"),
@@ -287,9 +287,11 @@ def status(
     for ch in state.chapters:
         status_color = "green" if ch.status == "completed" else "yellow"
         files = ", ".join(ch.files_completed) if ch.files_completed else "(none)"
+        title = ch.chapter_title or ch.provisional_chapter_title or "unnamed"
         rprint(
             Panel(
                 f"[{status_color}]{ch.status}[/{status_color}]\n"
+                f"Title: {title}\n"
                 f"Files completed: {files}",
                 title=ch.chapter_name,
             )
@@ -879,15 +881,15 @@ def rag_inventory(
         rprint(f"[dim]{len(collections) - limit} more collections omitted. Use --limit to show more.[/dim]")
 
 
-@rag_app.command("map")
-def rag_map(
-    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and map first"),
+@rag_app.command("candidates")
+def rag_candidates(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and candidate nodes first"),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
 ) -> None:
-    """Show curriculum map candidates derived from source inventory."""
+    """Show candidate knowledge nodes derived from source inventory."""
     try:
         from tree.curriculum.inventory import load_inventory, rebuild_source_inventory
-        from tree.curriculum.map import load_curriculum_map, rebuild_curriculum_map
+        from tree.curriculum.candidate_nodes import load_candidate_nodes, rebuild_candidate_nodes
         from tree.rag.client import RAGClient
         from tree.state.manager import StateManager
 
@@ -896,11 +898,11 @@ def rag_map(
         completed = {
             collection
             for chapter in state.chapters
-            if chapter.status == "completed"
+            if chapter.status == "completed" and chapter.chapter_title
             for collection in ([chapter.source_collection] + list(chapter.source_collections or []))
             if collection
         }
-        if rebuild or not paths.curriculum_map_path(root).exists():
+        if rebuild or not paths.candidate_nodes_path(root).exists():
             if rebuild or not paths.source_inventory_path(root).exists():
                 rag = RAGClient(store_path=paths.rag_store_path(root))
                 try:
@@ -914,21 +916,21 @@ def rag_map(
                     rag.close()
             else:
                 inventory = load_inventory(root)
-            curriculum_map = rebuild_curriculum_map(root, inventory, completed_collections=completed)
+            candidate_nodes = rebuild_candidate_nodes(root, inventory, completed_collections=completed)
         else:
-            curriculum_map = load_curriculum_map(root)
+            candidate_nodes = load_candidate_nodes(root)
     except Exception as exc:
-        rprint(f"[red]Curriculum map unavailable:[/red] {exc}")
+        rprint(f"[red]Candidate nodes unavailable:[/red] {exc}")
         return
 
     candidates = [
-        item for item in curriculum_map.get("chapter_candidates", []) if isinstance(item, dict)
+        item for item in candidate_nodes.get("chapter_candidates", []) if isinstance(item, dict)
     ]
     if not candidates:
-        rprint("[dim]Curriculum map is empty. Build source inventory first.[/dim]")
+        rprint("[dim]Candidate nodes are empty. Build source inventory first.[/dim]")
         return
 
-    table = Table(title="Curriculum Map Candidates")
+    table = Table(title="Candidate Knowledge Nodes")
     table.add_column("Candidate")
     table.add_column("Status")
     table.add_column("Title Hint")
@@ -949,22 +951,31 @@ def rag_map(
         rprint(f"[dim]{len(candidates) - limit} more candidates omitted. Use --limit to show more.[/dim]")
 
 
+@rag_app.command("map")
+def rag_map(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild inventory and candidate nodes first"),
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
+) -> None:
+    """Compatibility alias for `rag candidates`."""
+    rag_candidates(rebuild=rebuild, limit=limit)
+
+
 @rag_app.command("graph")
 def rag_graph(
-    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild graph from map and ledger first"),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild graph from candidate nodes and ledger first"),
     limit: int = typer.Option(20, "--limit", "-n", min=1, max=100),
 ) -> None:
     """Show knowledge graph nodes and relation edges."""
     try:
         from tree.curriculum.graph import load_knowledge_graph, rebuild_knowledge_graph
         from tree.curriculum.ledger import reconcile_finished_outputs
-        from tree.curriculum.map import load_curriculum_map
+        from tree.curriculum.candidate_nodes import load_candidate_nodes
 
         root = Path.cwd()
         if rebuild or not paths.knowledge_graph_path(root).exists():
             ledger = reconcile_finished_outputs(root)
-            curriculum_map = load_curriculum_map(root)
-            graph = rebuild_knowledge_graph(root, curriculum_map, ledger)
+            candidate_nodes = load_candidate_nodes(root)
+            graph = rebuild_knowledge_graph(root, candidate_nodes, ledger)
         else:
             graph = load_knowledge_graph(root)
     except Exception as exc:
@@ -982,18 +993,20 @@ def rag_graph(
         f"eligible={stats.get('eligible_count', 0)} "
         f"blocked={stats.get('blocked_count', 0)} "
         f"roots={stats.get('root_count', 0)} "
-        f"backbone={stats.get('backbone_count', 0)} "
+        f"branches={stats.get('branch_count', 0)} "
         f"edges={stats.get('edge_count', 0)}"
         "[/dim]"
     )
     rprint(
         "[dim]"
+        f"mode={planner.get('mode', 'n/a')} "
+        f"selection_mode={planner.get('selection_mode', 'n/a')} "
         f"planner_selected={planner.get('selected_node') or 'none'} "
         f"frontier={len(planner.get('frontier_nodes', []) or [])}"
         "[/dim]"
     )
     if not nodes:
-        rprint("[dim]Knowledge graph is empty. Build curriculum map first.[/dim]")
+        rprint("[dim]Knowledge graph is empty. Build candidate nodes first.[/dim]")
         return
     selected = next(
         (node for node in nodes if node.get("node_id") == planner.get("selected_node")),
@@ -1006,7 +1019,7 @@ def rag_graph(
     node_table.add_column("Node")
     node_table.add_column("Status")
     node_table.add_column("Eligible")
-    node_table.add_column("Tree")
+    node_table.add_column("Forest")
     node_table.add_column("Title")
     node_table.add_column("Requires")
     node_table.add_column("Concepts")
@@ -1014,11 +1027,17 @@ def rag_graph(
         tree_flags = []
         if node.get("is_root"):
             tree_flags.append("root")
+        if node.get("is_new_root"):
+            tree_flags.append("new-root")
         if node.get("planner_selected"):
             tree_flags.append("selected")
-        parent = node.get("backbone_parent")
+        parent = node.get("parent_output") or node.get("backbone_parent")
         if parent:
             tree_flags.append(f"p:{parent}")
+        if node.get("branch_score"):
+            tree_flags.append(f"b:{node.get('branch_score'):.2f}")
+        if node.get("supporting_parents"):
+            tree_flags.append(f"sup:{len(node.get('supporting_parents') or [])}")
         node_table.add_row(
             str(node.get("node_id", "")),
             str(node.get("status", "")),
@@ -1131,8 +1150,333 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
         completed_files=completed_files,
         active_chapter=active_chapter,
     )
+    current_tree = _current_tree_panel(root, active_chapter=active_chapter)
     tree_log = _tail_panel(paths.service_log_path(root, "tree"), title="TREE Log Tail")
-    return Group(services, live_progress, tree_log)
+    return Group(services, live_progress, current_tree, tree_log)
+
+
+def _current_tree_panel(root: Path, active_chapter: str = "") -> Panel | Table:
+    try:
+        from tree.curriculum.graph import load_knowledge_graph
+
+        graph = load_knowledge_graph(root)
+    except Exception as exc:
+        return Panel(
+            f"[dim]Knowledge graph unavailable: {exc}[/dim]",
+            title="Current Tree",
+            border_style=_TREE_BORDER,
+        )
+    model = _current_tree_view_model(graph, active_chapter=active_chapter)
+    if not model["nodes"]:
+        return Panel(
+            "[dim]No knowledge graph nodes yet.[/dim]",
+            title="Current Tree",
+            border_style=_TREE_BORDER,
+        )
+    if model["mode"] == "table":
+        return _current_tree_relation_table(model)
+    return Panel(
+        Group(
+            _current_tree_node_table(model),
+            _current_tree_edge_table(model),
+        ),
+        title=f"Current Tree: {model['current_tree'] or 'n/a'}",
+        border_style=_TREE_BORDER,
+    )
+
+
+def _current_tree_view_model(
+    graph: dict[str, Any],
+    active_chapter: str = "",
+    limit: int = 12,
+) -> dict[str, Any]:
+    nodes = [item for item in graph.get("nodes", []) if isinstance(item, dict)]
+    edges = [item for item in graph.get("edges", []) if isinstance(item, dict)]
+    planner = graph.get("planner") if isinstance(graph.get("planner"), dict) else {}
+    selected_id = str(planner.get("selected_node") or "")
+    selected = next((node for node in nodes if node.get("node_id") == selected_id), None)
+    current_tree = _current_tree_id(active_chapter, selected, nodes)
+    selected_parent_tree = _node_tree_id(selected) if selected else ""
+
+    finished = [
+        node
+        for node in nodes
+        if node.get("kind") == "finished"
+        and (not current_tree or _node_tree_id(node) == current_tree)
+    ]
+    visible = sorted(finished, key=_tree_node_sort_key)
+    if selected and selected.get("status") == "planned":
+        if (
+            selected.get("is_new_root")
+            or not current_tree
+            or current_tree == "new-root"
+            or selected_parent_tree == current_tree
+        ):
+            visible.append(selected)
+
+    all_ids = {str(node.get("node_id") or "") for node in nodes}
+    rows = []
+    missing_reasons = []
+    for node in visible[:limit]:
+        parents = _tree_parent_ids(node)
+        missing = [parent for parent in parents if parent not in all_ids]
+        parent_status = "missing" if missing else ("ok" if parents else "root")
+        if missing:
+            missing_reasons.append(
+                f"missing parent for {_short_node_id(str(node.get('node_id') or ''))}: "
+                + ", ".join(_short_node_id(parent) for parent in missing)
+            )
+        if node.get("kind") == "candidate" and not node.get("is_new_root") and not parents:
+            parent_status = "missing"
+            missing_reasons.append(f"missing parent for {_short_node_id(str(node.get('node_id') or ''))}")
+        rows.append(
+            {
+                "node_id": str(node.get("node_id") or ""),
+                "marker": "▶" if node.get("node_id") == selected_id else "✓",
+                "kind": str(node.get("kind") or ""),
+                "status": str(node.get("status") or ""),
+                "title": str(node.get("title") or ""),
+                "parents": parents,
+                "parent_status": parent_status,
+                "depth": _tree_depth(node, visible),
+                "concepts": [str(item) for item in (node.get("core_concepts") or [])[:4]],
+                "branch_score": float(node.get("branch_score") or 0),
+                "support_score": float(node.get("support_score") or 0),
+            }
+        )
+    relation_rows = _current_tree_relations(rows, edges)
+    if len(visible) > limit:
+        relation_rows.append(
+            {
+                "relation": "omitted",
+                "from": "",
+                "to": f"{len(visible) - limit} more nodes",
+                "score": "",
+            }
+        )
+    mode = "table" if missing_reasons else "tree"
+    return {
+        "mode": mode,
+        "reason": "; ".join(missing_reasons),
+        "current_tree": current_tree,
+        "selected_node": selected_id,
+        "selection_mode": str(planner.get("selection_mode") or ""),
+        "nodes": rows,
+        "relations": relation_rows,
+    }
+
+
+def _current_tree_id(
+    active_chapter: str,
+    selected: dict[str, Any] | None,
+    nodes: list[dict[str, Any]],
+) -> str:
+    if active_chapter:
+        return active_chapter
+    if selected:
+        selected_tree = _node_tree_id(selected)
+        if selected_tree:
+            return selected_tree
+        if selected.get("is_new_root"):
+            return "new-root"
+    for node in nodes:
+        if node.get("kind") == "finished":
+            tree_id = _node_tree_id(node)
+            if tree_id:
+                return tree_id
+    return ""
+
+
+def _node_tree_id(node: dict[str, Any] | None) -> str:
+    if not node:
+        return ""
+    chapter = str(node.get("chapter") or "")
+    if chapter:
+        return chapter
+    for value in [
+        node.get("path"),
+        node.get("node_id"),
+        node.get("parent_output"),
+        *((node.get("required_nodes") or []) if isinstance(node.get("required_nodes"), list) else []),
+    ]:
+        tree_id = _tree_id_from_output_ref(str(value or ""))
+        if tree_id:
+            return tree_id
+    supporting = node.get("supporting_parents") or []
+    if isinstance(supporting, list):
+        for item in supporting:
+            if isinstance(item, dict):
+                tree_id = _tree_id_from_output_ref(str(item.get("node_id") or ""))
+                if tree_id:
+                    return tree_id
+    return ""
+
+
+def _tree_id_from_output_ref(value: str) -> str:
+    match = re.search(r"(?:^|:)outputs/([^/]+)/", value)
+    return match.group(1) if match else ""
+
+
+def _tree_parent_ids(node: dict[str, Any]) -> list[str]:
+    parents: list[str] = []
+    parent_output = str(node.get("parent_output") or "")
+    if parent_output:
+        parents.append(parent_output)
+    required = node.get("required_nodes") or []
+    if isinstance(required, list):
+        parents.extend(str(item) for item in required if item)
+    supporting = node.get("supporting_parents") or []
+    if isinstance(supporting, list):
+        for item in supporting:
+            if isinstance(item, dict) and item.get("node_id"):
+                parents.append(str(item.get("node_id")))
+    seen = set()
+    unique = []
+    for parent in parents:
+        if parent in seen:
+            continue
+        seen.add(parent)
+        unique.append(parent)
+    return unique
+
+
+def _tree_depth(node: dict[str, Any], visible: list[dict[str, Any]]) -> int:
+    explicit = node.get("tree_depth")
+    if isinstance(explicit, int):
+        return max(0, explicit)
+    by_id = {str(item.get("node_id") or ""): item for item in visible}
+    parents = [parent for parent in _tree_parent_ids(node) if parent in by_id]
+    if not parents:
+        return 0
+    return 1 + min(_tree_depth(by_id[parent], visible) for parent in parents)
+
+
+def _tree_node_sort_key(node: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        int(node.get("tree_depth") or 0),
+        str(node.get("file_seq") or ""),
+        str(node.get("path") or ""),
+        str(node.get("node_id") or ""),
+    )
+
+
+def _current_tree_relations(
+    rows: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    row_ids = {row["node_id"] for row in rows}
+    relation_rows = []
+    for row in rows:
+        for index, parent in enumerate(row["parents"]):
+            relation_rows.append(
+                {
+                    "relation": "branch" if index == 0 else "support",
+                    "from": parent,
+                    "to": row["node_id"],
+                    "score": _relation_score(parent, row["node_id"], edges),
+                }
+            )
+    warnings = [
+        edge
+        for edge in edges
+        if edge.get("relation") in {"duplicate", "merge_needed", "split_needed", "adjacent"}
+        and (edge.get("from") in row_ids or edge.get("to") in row_ids)
+    ]
+    for edge in warnings[:4]:
+        relation_rows.append(
+            {
+                "relation": str(edge.get("relation") or ""),
+                "from": str(edge.get("from") or ""),
+                "to": str(edge.get("to") or ""),
+                "score": _edge_score_label(edge),
+            }
+        )
+    return relation_rows[:12]
+
+
+def _relation_score(parent: str, child: str, edges: list[dict[str, Any]]) -> str:
+    for edge in edges:
+        if edge.get("from") == parent and edge.get("to") == child:
+            return _edge_score_label(edge)
+    return ""
+
+
+def _edge_score_label(edge: dict[str, Any]) -> str:
+    scores = edge.get("scores") if isinstance(edge.get("scores"), dict) else {}
+    for key in ("affinity", "concept", "chunk", "source"):
+        value = scores.get(key)
+        if isinstance(value, int | float):
+            return f"{key[0]}={value:.2f}"
+    return ""
+
+
+def _current_tree_node_table(model: dict[str, Any]) -> Table:
+    table = Table(title="Nodes", expand=True)
+    table.add_column("")
+    table.add_column("Node")
+    table.add_column("Title")
+    table.add_column("Parents")
+    table.add_column("Concepts")
+    for row in model["nodes"]:
+        indent = "  " * int(row.get("depth") or 0)
+        marker = "[yellow]▶[/yellow]" if row["marker"] == "▶" else "[green]✓[/green]"
+        table.add_row(
+            marker,
+            indent + _short_node_id(row["node_id"]),
+            _truncate(row["title"], 28),
+            _truncate(", ".join(_short_node_id(parent) for parent in row["parents"]) or "root", 40),
+            _truncate(", ".join(row["concepts"]), 44),
+        )
+    return table
+
+
+def _current_tree_edge_table(model: dict[str, Any]) -> Table:
+    table = Table(title="Relations", expand=True)
+    table.add_column("Relation")
+    table.add_column("From")
+    table.add_column("To")
+    table.add_column("Score")
+    if not model["relations"]:
+        table.add_row("root", "", "[dim]No parent relations yet[/dim]", "")
+        return table
+    for row in model["relations"]:
+        table.add_row(
+            str(row.get("relation") or ""),
+            _truncate(_short_node_id(str(row.get("from") or "")), 32),
+            _truncate(_short_node_id(str(row.get("to") or "")), 32),
+            str(row.get("score") or ""),
+        )
+    return table
+
+
+def _current_tree_relation_table(model: dict[str, Any]) -> Table:
+    table = Table(title=f"Current Tree: {model['current_tree'] or 'n/a'} (relation table)", expand=True)
+    table.add_column("Status")
+    table.add_column("Node")
+    table.add_column("Title")
+    table.add_column("Parents")
+    table.add_column("Reason")
+    for row in model["nodes"]:
+        status = "[red]missing parent[/red]" if row["parent_status"] == "missing" else row["parent_status"]
+        table.add_row(
+            status,
+            _short_node_id(row["node_id"]),
+            _truncate(row["title"], 30),
+            _truncate(", ".join(_short_node_id(parent) for parent in row["parents"]) or "root", 44),
+            _truncate(model["reason"], 54),
+        )
+    return table
+
+
+def _short_node_id(node_id: str) -> str:
+    if not node_id:
+        return ""
+    value = node_id.removeprefix("finished:").removeprefix("candidate:")
+    if value.startswith("outputs/"):
+        parts = value.split("/")
+        if len(parts) >= 3:
+            return "/".join(parts[1:])
+    return value
 
 
 def _live_progress_table(

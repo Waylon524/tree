@@ -1,12 +1,12 @@
 # Tree Knowledge Graph Refactor Plan
 
-> Superseded direction note: this document records the first graph-aware design. The current direction is planner-controlled tree growth, documented in `tree_engine/docs/deterministic-tree-planner-refactor.md`, where examiner follows the deterministic planner-selected frontier instead of choosing the global direction.
+> Superseded direction note: this document records the first graph-aware design. The current direction is incremental forest growth, documented in `tree_engine/docs/incremental-forest-planner-refactor.md`, where examiner follows the planner-selected root or branch instead of choosing the global direction. The former curriculum-map layer has also been reframed as candidate node generation in `tree_engine/docs/candidate-node-generator-refactor.md`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans or follow this document task-by-task. Each phase should leave the engine runnable.
 
 **Goal:** Turn TREE from a mostly linear chapter pipeline into a knowledge graph pipeline where each knowledge point file can depend on multiple previous files and can branch into multiple next files.
 
-**Architecture:** Keep source RAG, source inventory, curriculum map, and finished ledger as the lower layers. Add a knowledge graph layer that normalizes candidates and finished outputs into nodes, computes relation edges, and gives examiner a graph-aware selection context. The existing chapter loop remains as a compatibility shell while the graph becomes the decision surface.
+**Architecture:** Keep source RAG, source inventory, candidate nodes, and finished ledger as the lower layers. Add a knowledge graph layer that normalizes candidates and finished outputs into nodes, computes relation edges, and gives examiner a graph-aware selection context. The existing chapter loop remains as a compatibility shell while the graph becomes the decision surface.
 
 **Tech Stack:** Python 3.12, Pydantic-style JSON dictionaries, local `.tree/runtime/*.json` state files, Qdrant-backed RAG, OpenAI-compatible LLM agents.
 
@@ -33,7 +33,7 @@ Each node should contain:
 }
 ```
 
-Planned nodes come from `curriculum-map.json`; finished nodes come from `knowledge-ledger.json`. A planned node becomes eligible only when its required nodes are already finished, or when it has no required nodes.
+Planned nodes come from `candidate-nodes.json`; finished nodes come from `knowledge-ledger.json`. A planned node becomes eligible only when its required nodes are already finished, or when it has no required nodes.
 
 ## 2. Relation Algorithm
 
@@ -91,7 +91,7 @@ The file is derived and can be rebuilt. It should not become the only source of 
 Current flow:
 
 ```text
-source RAG -> source inventory -> curriculum map -> examiner selects next chapter
+source RAG -> source inventory -> candidate nodes -> examiner selects next chapter
 ```
 
 Target flow:
@@ -99,7 +99,7 @@ Target flow:
 ```text
 source RAG
   -> source inventory
-  -> curriculum map candidates
+  -> candidate knowledge nodes
   -> knowledge graph
   -> examiner selects next eligible node
   -> student / examiner / writer loop
@@ -111,7 +111,7 @@ source RAG
 The first implementation should not remove chapter state. Instead, it should make chapter selection graph-aware:
 
 1. Rebuild source inventory.
-2. Rebuild curriculum map.
+2. Rebuild candidate nodes.
 3. Rebuild knowledge graph.
 4. Pass graph context to examiner.
 5. Examiner chooses an eligible planned node, or explains why it must split/merge/skip.
@@ -131,7 +131,7 @@ Tasks:
 1. Add `knowledge_graph_path(root)`.
 2. Add graph load/save helpers.
 3. Convert finished ledger records to `finished:*` nodes.
-4. Convert curriculum map candidates to `candidate:*` nodes.
+4. Convert candidate knowledge nodes to `candidate:*` graph nodes.
 5. Compute relation edges using concept, chunk, source, and prerequisite overlap.
 6. Add `tre rag graph` to inspect nodes and edges.
 
@@ -146,7 +146,7 @@ Tasks:
 Tasks:
 
 1. Rebuild graph during `_scan_next_chapter`.
-2. Append a compact graph context after inventory and curriculum map context.
+2. Append a compact graph context after inventory and candidate node context.
 3. Tell examiner to prefer eligible graph nodes and avoid duplicate/merge-needed nodes.
 4. Preserve existing section output format so the rest of the loop still works.
 
