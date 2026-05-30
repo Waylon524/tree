@@ -26,3 +26,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+
+# 本地测试资料与开发草稿
+/1.pdf
+/tests/
+/tree_engine/docs/*refactor*.md
