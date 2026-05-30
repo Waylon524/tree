@@ -15,6 +15,32 @@ _TITLE_STOPWORDS = {"AI", "Python", "教学目标", "教学内容"}
 _MIN_CLUSTER_AFFINITY = 0.30
 _MIN_CLUSTER_CONCEPT = 0.34
 _MIN_CLUSTER_PREREQUISITE = 0.34
+_MIN_CLUSTER_METHOD = 0.50
+_MIN_CLUSTER_SIGNATURE = 0.46
+_MIN_ADJACENT_SIGNATURE = 0.12
+_TERM_RE = re.compile(r"[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_`()+\-]*")
+_SPLIT_RE = re.compile(r"[，,、/；;：:（）()\[\]【】\s的与和及或]+")
+_SIGNATURE_STOPWORDS = {
+    "an",
+    "and",
+    "based",
+    "for",
+    "from",
+    "in",
+    "known",
+    "of",
+    "on",
+    "requiring",
+    "set",
+    "students",
+    "their",
+    "to",
+    "using",
+    "various",
+    "write",
+    "写出下列各",
+    "确定下列各",
+}
 
 
 class CandidateNodeBuilder(Protocol):
@@ -133,7 +159,7 @@ def _rebuild_chunk_cluster_nodes(
     nodes = [_chunk_cluster_node(chunk) for chunk in chunks]
     for index, left in enumerate(nodes):
         for right in nodes[index + 1 :]:
-            scores = relation_pair_scores(left, right)
+            scores = _candidate_pair_scores(left, right)
             if _should_cluster(scores):
                 union.union(left["node_id"], right["node_id"])
 
@@ -177,6 +203,9 @@ def _rebuild_chunk_cluster_nodes(
             "min_affinity": _MIN_CLUSTER_AFFINITY,
             "min_concept": _MIN_CLUSTER_CONCEPT,
             "min_prerequisite": _MIN_CLUSTER_PREREQUISITE,
+            "min_method": _MIN_CLUSTER_METHOD,
+            "min_signature": _MIN_CLUSTER_SIGNATURE,
+            "min_adjacent_signature": _MIN_ADJACENT_SIGNATURE,
         },
         "chapter_candidates": candidates,
     }
@@ -283,8 +312,11 @@ def _inventory_chunks(inventory: dict[str, Any]) -> list[dict[str, Any]]:
             "chunk_index": _int(raw.get("chunk_index"), index),
             "core_concepts": _string_list(raw.get("core_concepts")),
             "prerequisites": _string_list(raw.get("prerequisites")),
+            "methods": _string_list(raw.get("methods")),
+            "formulas": _string_list(raw.get("formulas")),
             "summary": str(raw.get("summary") or ""),
         }
+        chunk["signature_terms"] = _knowledge_signature_terms(chunk)
         chunks.append(chunk)
     chunks.sort(key=_chunk_sort_key)
     return chunks
@@ -295,9 +327,27 @@ def _chunk_cluster_node(chunk: dict[str, Any]) -> dict[str, Any]:
         "node_id": chunk["_cluster_id"],
         "core_concepts": chunk.get("core_concepts", []),
         "prerequisites": chunk.get("prerequisites", []),
+        "methods": chunk.get("methods", []),
+        "signature_terms": chunk.get("signature_terms", []),
         "hit_chunks": [chunk.get("chunk_ref", "")],
         "source_collections": [chunk.get("source_collection", "")],
+        "path": chunk.get("path", ""),
+        "chunk_index": chunk.get("chunk_index", 0),
     }
+
+
+def _candidate_pair_scores(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float]:
+    scores = relation_pair_scores(left, right)
+    scores["method"] = _overlap_score(
+        _term_set(left.get("methods", [])),
+        _term_set(right.get("methods", [])),
+    )
+    scores["signature"] = _overlap_score(
+        set(left.get("signature_terms", [])),
+        set(right.get("signature_terms", [])),
+    )
+    scores["adjacent"] = 1.0 if _same_path_adjacent(left, right) else 0.0
+    return scores
 
 
 def _should_cluster(scores: dict[str, float]) -> bool:
@@ -306,9 +356,69 @@ def _should_cluster(scores: dict[str, float]) -> bool:
         return True
     if prerequisite >= _MIN_CLUSTER_PREREQUISITE:
         return True
+    if scores.get("method", 0.0) >= _MIN_CLUSTER_METHOD:
+        return True
+    if scores.get("signature", 0.0) >= _MIN_CLUSTER_SIGNATURE and (
+        scores["concept"] > 0 or prerequisite > 0 or scores.get("method", 0.0) > 0
+    ):
+        return True
+    if scores.get("adjacent", 0.0) and (
+        scores.get("method", 0.0) > 0
+        or scores.get("signature", 0.0) >= _MIN_ADJACENT_SIGNATURE
+    ):
+        return True
     return relation_affinity(scores) >= _MIN_CLUSTER_AFFINITY and (
         scores["concept"] > 0 or prerequisite > 0
     )
+
+
+def _same_path_adjacent(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    if left.get("source_collections") != right.get("source_collections"):
+        return False
+    if str(left.get("path") or "") != str(right.get("path") or ""):
+        return False
+    return abs(_int(left.get("chunk_index")) - _int(right.get("chunk_index"))) <= 1
+
+
+def _knowledge_signature_terms(chunk: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("core_concepts", "prerequisites", "methods"):
+        values.extend(_string_list(chunk.get(key)))
+    summary = str(chunk.get("summary") or "")
+    if summary:
+        values.append(summary)
+    return sorted(_term_set(values))
+
+
+def _term_set(values: Any) -> set[str]:
+    terms = set()
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return terms
+    for value in values:
+        text = str(value)
+        for raw in _TERM_RE.findall(text):
+            token = _clean_signature_term(raw)
+            if len(token) >= 2 and token.lower() not in _SIGNATURE_STOPWORDS:
+                terms.add(token.lower())
+            for piece in _SPLIT_RE.split(token):
+                piece = _clean_signature_term(piece)
+                if len(piece) >= 2 and piece.lower() not in _SIGNATURE_STOPWORDS:
+                    terms.add(piece.lower())
+    return terms
+
+
+def _overlap_score(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / max(1, min(len(left), len(right)))
+
+
+def _clean_signature_term(value: str) -> str:
+    value = re.sub(r"`([^`]+)`", r"\1", value)
+    value = re.sub(r"\s+", "", value)
+    return value.strip(" -—:：。；;，,")
 
 
 def _candidate_from_cluster(

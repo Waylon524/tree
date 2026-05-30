@@ -36,7 +36,7 @@ You are given:
 - retrieved RAG context, including source, finished, and ledger hits
 - structured source material paths and contents when available
 
-There is no predefined list of knowledge points. Structured source materials are the ground truth for what can be taught. If planner-bound graph context is provided, it is the highest-priority scope boundary: do not reselect the global direction, and do not choose a sibling, child, or unrelated node. Determine the next logical minimal knowledge point inside that graph node, create exam questions yourself from that source scope, then output exactly these parseable sections:
+There is no predefined list of knowledge points. Structured source materials are the ground truth for what can be taught. If planner-bound graph context is provided, it is the highest-priority scope boundary: do not reselect the global direction, and do not choose a sibling, child, or unrelated node. Compose for the complete selected graph node as one teachable unit, create exam questions yourself from that node scope, then output exactly these parseable sections:
 
 ## [Next_Knowledge_Point]
 NN. <知识点中文标题>
@@ -51,7 +51,10 @@ NN. <知识点中文标题>
 <Markdown structure, scope boundaries, required defect coverage, citation constraints, and expected line-count limit.>
 
 ### Exam Scope Rules
-- The exam must target exactly one minimal knowledge point, not a whole section or chapter.
+- The exam must cover at least one complete planner-selected node as a coherent teachable unit. Do not split a node into tiny rule fragments, formatting details, or single-example variants.
+- The exam must target exactly the selected node, not a whole source section, sibling node, future branch, or only a sub-rule inside the selected node.
+- Treat a valid file as a complete learning unit: concept boundary, method/procedure, representative examples, common misconceptions, and self-checkable applications should fit together.
+- Local notation rules, naming separators, prefixes, formula-writing conventions, and small exception cases that serve the same procedure must be merged into the same node-level file unless the planner explicitly selected different nodes for them.
 - Use exactly 3 top-level questions.
 - Each top-level question may contain at most 3 subquestions.
 - Prefer this coverage pattern:
@@ -60,7 +63,7 @@ NN. <知识点中文标题>
   3. Application, comparison, or misconception diagnosis.
 - Do not create a question whose solution requires future knowledge that has not been taught in prior passed drafts and is not the current target knowledge point.
 - Do not give formula handouts in the exam body unless those formulas already appear in prior passed drafts. The answer key may use source material to define the expected target knowledge.
-- If EXAM_TOO_BROAD was returned, preserve the knowledge point name but reduce the exam scope by removing bloating subquestions, narrowing conditions, or replacing broad synthesis questions with focused checks.
+- If EXAM_TOO_BROAD was returned, preserve the selected node but reduce bloating inside that node by removing excessive subquestions, narrowing examples, or replacing broad synthesis questions with focused checks. Do not shrink below the complete selected-node teachable unit.
 - If Active Chapter Graph Binding or Selected Node Context is provided, Phase A must compose inside that node. Required nodes are prerequisites to cite, not content to reteach.
 
 ### Anti-Duplication Rules
@@ -69,7 +72,7 @@ NN. <知识点中文标题>
 - Do not open a new file for a concept, definition, method, example pattern, misconception, or exercise skill that is already substantially covered in finished outputs.
 - If the source material mentions already-covered foundations, treat them as prerequisites to cite briefly, not as new teachable scope.
 - A new knowledge point is valid only when it adds a clearly new concept, method, misconception, syntax form, debugging skill, or application pattern beyond finished outputs.
-- If the next source content is only a restatement of already-covered material, skip it and search for another incremental point. If none exists in the current chapter, output CHAPTER_COMPLETE.
+- If the selected node appears already covered, explain the duplicate risk in [Writer_Instructions] and keep the exam focused on the planner-selected node delta. Do not emit completion signals.
 - Writer_Instructions must include a "Forbidden spillover" field that names already-covered concepts that the writer may cite but must not reteach.
 
 ### Context Boundary Rules
@@ -93,8 +96,7 @@ Line limit:
 
 Writer_Instructions are writer-facing and must not leak the blind exam. Do not include blind exam wording, answer-key derivations, answer-key numeric results, student-response text, or hidden test conditions. Describe what the writer must teach in abstract instructional terms.
 
-If no meaningful incremental knowledge point can be generated for the current chapter, output exactly:
-CHAPTER_COMPLETE
+Examiner cannot complete a tree, open a new tree, or finish the woods. Completion is controlled only by the deterministic planner. Never output CHAPTER_COMPLETE or PIPELINE_COMPLETE during Phase A.
 
 ## Phase B: Dual Audit & Reporting
 
@@ -159,19 +161,18 @@ PASS requires all answers correct, every step supported by drafts, no unresolved
 
 ## Phase C: Chapter Continuation
 
-After CHAPTER_COMPLETE, compare pipeline-state.json, finished-output coverage, source inventory, candidate nodes, and knowledge graph against all structured source material collections. If uncovered source material exists, compose for the deterministic planner-selected knowledge graph node and output the Phase C sections below. If all source materials are covered, output exactly:
-PIPELINE_COMPLETE
+When the orchestrator asks for Phase C, the deterministic planner has already selected the next graph node. Compose for that planner-selected node and output the Phase C sections below. Do not decide whether the tree or woods are complete; if there is no selected node, the orchestrator will not call Phase C.
 
-Do not start a new chapter that merely renames or repackages finished-output concepts. TREE uses internal tree ids for active chapters. Final human chapter titles are assigned only after the planner opens a new root or the pipeline completes, using all finished outputs from the closed tree.
+Do not start a new chapter that merely renames or repackages finished-output concepts. TREE uses internal tree ids for active chapters. Final human chapter titles are assigned only after the planner opens a new root or the woods complete, using all finished outputs from the closed tree.
 
 Treat the knowledge graph as the primary structure when it is provided:
-- A knowledge point file is a graph node, not just the next item in a line.
+- A knowledge point file is a complete graph node, not just the next item in a line and not a tiny fragment inside the node.
 - The deterministic planner, not the examiner, controls the global direction.
 - If the graph context provides `planner_selected`, compose the exam for that selected node.
 - Treat `Selected Node Context` as the primary allowed scope. The broader graph is supporting trace evidence, not permission to choose another node.
 - Do not choose another node because it seems more interesting; only reject the selected node if it is clearly duplicate, blocked, or too broad.
 - If graph warnings mark a node as duplicate or merge_needed, skip it unless the Selection_Rationale states the new delta clearly.
-- If graph warnings mark a node as split_needed, choose a narrower first knowledge point inside that node instead of trying to cover the whole node at once.
+- If graph warnings mark a node as split_needed, keep the exam on the selected node's strongest coherent subcluster only when the selected node context explicitly identifies that subcluster. Otherwise, report the over-broad risk in Selection_Rationale and still compose for the complete selected node.
 - Preserve prerequisite relationships in Writer_Instructions so the writer can cite required previous files without reteaching them.
 
 Phase C output must include these sections:
@@ -195,13 +196,13 @@ Output a comma-separated list of prerequisite graph node ids required before thi
 Briefly state why this chapter should be next. Mention the selected collection, key core concepts, related collections if any, finished-output overlap, and prerequisite relationship. This section is for tracing only and is not student-visible.
 
 ## [Next_Knowledge_Point]
-Name the first narrow knowledge point inside the chapter.
+Name the selected node-level teachable unit.
 
 ## [Blind_Exam]
 ## [Answer_Key]
 ## [Writer_Instructions]
 
-If outputting CHAPTER_COMPLETE or PIPELINE_COMPLETE, output only that exact signal with no Markdown, explanation, or extra text.
+Examiner must not output CHAPTER_COMPLETE, TREE_COMPLETE, WOODS_COMPLETE, or PIPELINE_COMPLETE. The planner decides branch continuation, new-root tree completion, and woods completion.
 '''.strip()
 
 

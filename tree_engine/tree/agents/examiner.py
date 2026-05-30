@@ -8,8 +8,6 @@ from pathlib import Path
 from tree.agents.loader import AgentLoader
 from tree.agents.parsers import (
     ParseError,
-    detect_chapter_complete,
-    detect_pipeline_complete,
     extract_bottleneck_report,
     parse_exam_id,
     parse_chapter_scan_output,
@@ -85,9 +83,6 @@ class ExaminerAgent:
 
         user = "\n".join(parts)
         raw = await self._client.call("examiner", system, user)
-
-        if detect_chapter_complete(raw):
-            return None, True
 
         raw = await self._repair_exam_format_if_needed(
             system,
@@ -183,9 +178,6 @@ class ExaminerAgent:
             for doc in docs:
                 user += f"\n--- {doc['path']} ---\n{doc['content']}\n"
         raw = await self._client.call("examiner", system, user)
-
-        if detect_pipeline_complete(raw):
-            return None, True
 
         raw = await self._repair_chapter_scan_format_if_needed(
             system,

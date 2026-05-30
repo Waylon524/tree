@@ -49,14 +49,6 @@ def parse_exam_id(text: str) -> str:
     return match.group(1).strip()
 
 
-def detect_chapter_complete(text: str) -> bool:
-    return "CHAPTER_COMPLETE" in text.split("\n")[-5:]
-
-
-def detect_pipeline_complete(text: str) -> bool:
-    return "PIPELINE_COMPLETE" in text.split("\n")[-5:]
-
-
 def detect_exam_too_broad(text: str) -> tuple[bool, str]:
     if "EXAM_TOO_BROAD" not in text:
         return False, ""

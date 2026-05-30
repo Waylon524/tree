@@ -132,8 +132,8 @@ class TreeEngine:
                     state = await self._name_completed_chapters(state)
                     self.state_mgr.save(state)
                     self.tracer.log_pipeline_complete()
-                    self.progress.complete("PIPELINE_COMPLETE — all source materials covered.")
-                    print("PIPELINE_COMPLETE — all source materials covered.")
+                    self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
+                    print("WOODS_COMPLETE — all source nodes covered.")
                     return
                 if scan_result.selection_mode == "branch":
                     continued = self._continue_existing_tree(state, scan_result)
@@ -309,7 +309,7 @@ class TreeEngine:
             print(f"Source ingest: embedded {indexed} source material file(s).")
 
     async def process_chapter(self, chapter_name: str) -> None:
-        """Run Step 0→1→2→3→4 loop for one chapter until CHAPTER_COMPLETE."""
+        """Run Step 0→1→2→3→4 loop for one planner-selected node."""
         while True:
             self._raise_if_stop_requested()
             state = self.state_mgr.load()
@@ -336,19 +336,10 @@ class TreeEngine:
                 duration_ms=int((time.time() - t0) * 1000),
             )
             if is_complete:
-                state = self.state_mgr.complete_chapter(state, chapter_name)
-                self.state_mgr.save(state)
-                self.progress.learning_stage(
-                    stage="chapter_complete",
-                    stage_label="Chapter complete",
-                    stage_index=6,
-                    stage_total=6,
-                    chapter=chapter_name,
-                    file_seq=next_seq,
-                    message=f"CHAPTER_COMPLETE: {chapter_name}",
+                raise RuntimeError(
+                    "Examiner attempted to complete a tree during exam assembly. "
+                    "Tree completion is planner-controlled."
                 )
-                print(f"CHAPTER_COMPLETE: {chapter_name}")
-                return
 
             # Stash exam for iteration loop
             iter_state = IterationState(
@@ -371,6 +362,8 @@ class TreeEngine:
 
             # Step 2→3→4→2 loop
             await self._iteration_loop(iter_state, chapter_name)
+            self._mark_active_node_complete(chapter_name)
+            return
 
     async def _iteration_loop(self, iter_state: IterationState, chapter_name: str) -> None:
         """Step 2→3→4→2 loop until PASS or iteration limit."""
@@ -637,31 +630,49 @@ class TreeEngine:
 
     # --- Handlers ---
 
-    async def _handle_pass(self, iter_state: IterationState, audit: AuditResult) -> None:
+    async def _handle_pass(self, iter_state: IterationState, audit: AuditResult | None) -> Path:
         """Move draft to outputs, update state."""
-        if iter_state.draft_path and iter_state.draft_path.exists():
-            filename = iter_state.draft_path.name
-            dst = file_ops.move_draft_to_finished(
-                self.settings.project_root, iter_state.chapter, filename
+        if not iter_state.draft_path or not iter_state.draft_path.exists():
+            raise RuntimeError(
+                "Cannot PASS without a persisted draft. "
+                "The writer must create a draft before examiner PASS can be accepted."
             )
-            self._index_finished_output_or_raise(iter_state.chapter, dst)
-            git_ops.git_add_commit(
-                dst,
-                f"docs({filename}): PASS — {iter_state.knowledge_point}",
-                cwd=self.settings.project_root,
-            )
-            state = self.state_mgr.load()
-            chapter = next((ch for ch in state.chapters if ch.chapter_name == iter_state.chapter), None)
-            update_finished_record(
-                self.settings.project_root,
-                iter_state.chapter,
-                dst,
-                graph_node_id=getattr(chapter, "graph_node_id", None),
-                required_nodes=getattr(chapter, "required_nodes", None) or [],
-                source_collections=_chapter_source_collections(chapter),
-            )
-            state = self.state_mgr.add_file_completed(state, iter_state.chapter, filename)
-            self.state_mgr.save(state)
+        filename = iter_state.draft_path.name
+        dst = file_ops.move_draft_to_finished(
+            self.settings.project_root, iter_state.chapter, filename
+        )
+        self._index_finished_output_or_raise(iter_state.chapter, dst)
+        git_ops.git_add_commit(
+            dst,
+            f"docs({filename}): PASS — {iter_state.knowledge_point}",
+            cwd=self.settings.project_root,
+        )
+        state = self.state_mgr.load()
+        chapter = next((ch for ch in state.chapters if ch.chapter_name == iter_state.chapter), None)
+        update_finished_record(
+            self.settings.project_root,
+            iter_state.chapter,
+            dst,
+            graph_node_id=getattr(chapter, "graph_node_id", None),
+            required_nodes=getattr(chapter, "required_nodes", None) or [],
+            source_collections=_chapter_source_collections(chapter),
+        )
+        state = self.state_mgr.add_file_completed(state, iter_state.chapter, filename)
+        self.state_mgr.save(state)
+        self._refresh_knowledge_graph_from_ledger()
+        return dst
+
+    def _mark_active_node_complete(self, chapter_name: str) -> None:
+        """Close the active selected node so the planner chooses the next branch/root."""
+        state = self.state_mgr.load()
+        state = self.state_mgr.complete_chapter(state, chapter_name)
+        self.state_mgr.save(state)
+
+    def _refresh_knowledge_graph_from_ledger(self) -> dict[str, Any]:
+        """Refresh the persisted graph without re-running AI candidate extraction."""
+        ledger = reconcile_finished_outputs(self.settings.project_root)
+        candidate_nodes = load_candidate_nodes(self.settings.project_root)
+        return rebuild_knowledge_graph(self.settings.project_root, candidate_nodes, ledger)
 
     def _reconcile_finished_outputs(self, state: PipelineState, chapter_name: str) -> PipelineState:
         """Record finished output files that were saved before a previous crash."""
@@ -723,7 +734,7 @@ class TreeEngine:
                 result["chapter_title"],
                 result.get("reason", ""),
             )
-            print(f"Chapter named: {chapter.chapter_name} -> {result['chapter_title']}")
+            print(f"TREE_COMPLETE: {chapter.chapter_name} -> {result['chapter_title']}")
         return updated
 
     def _continue_existing_tree(
@@ -792,6 +803,8 @@ class TreeEngine:
             candidate_nodes,
             ledger,
         )
+        if not (knowledge_graph.get("planner") or {}).get("selected_node"):
+            return None
         source_payload = self._source_payload_from_rag()
         finished_payload = self._finished_payload_from_rag()
         source_inventory_context = build_inventory_context(
