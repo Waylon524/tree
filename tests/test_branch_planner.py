@@ -302,6 +302,37 @@ def test_noise_and_review_nodes_are_not_schedulable_as_root(tmp_path: Path) -> N
     )
 
 
+def test_auxiliary_only_nodes_are_not_scheduled_as_ready_branches(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _nodes(
+            _candidate(
+                "candidate:aux",
+                ["§"],
+                title_hint="§",
+                core_concepts=[],
+                canonicalization_status="auxiliary_only",
+                schedulable=False,
+                blocked_reason="auxiliary_only",
+            ),
+            _candidate("candidate:foundation", ["基础概念"]),
+        ),
+        _ledger(),
+    )
+
+    plan = rebuild_branch_plan(tmp_path, graph, _ledger())
+
+    aux_branches = [
+        branch for branch in plan["branches"]["branches"] if "candidate:aux" in branch["node_ids"]
+    ]
+    assert aux_branches
+    assert all(branch["status"] == "blocked" for branch in aux_branches)
+    assert any(
+        branch["status"] == "ready" and "candidate:foundation" in branch["node_ids"]
+        for branch in plan["branches"]["branches"]
+    )
+
+
 def test_reconcile_finished_outputs_reads_branch_isolated_paths(tmp_path: Path) -> None:
     draft = file_ops.write_draft(tmp_path, "tree-001/branch-001", "01.根概念.md", "# 根概念\n")
     assert draft.exists()

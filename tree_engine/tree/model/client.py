@@ -41,10 +41,18 @@ class LLMClient:
             )
             self._models[role_name] = config.model
 
-    async def call(self, role: str, system_prompt: str, user_prompt: str) -> str:
+    async def call(
+        self,
+        role: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        timeout_sec: float | None = None,
+    ) -> str:
         """Call LLM for a given role. Examiner uses degradation logic."""
         client = self._clients[role]
         model = self._models[role]
+        effective_timeout = timeout_sec or self._timeout_sec
 
         # Examiner: check if degraded to student model
         if role == "examiner" and self._degradation.is_degraded:
@@ -60,7 +68,7 @@ class LLMClient:
                         {"role": "user", "content": user_prompt},
                     ],
                 ),
-                timeout=self._timeout_sec,
+                timeout=effective_timeout,
             )
             return _extract_chat_content(resp)
 

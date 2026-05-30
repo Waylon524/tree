@@ -38,11 +38,13 @@ def test_llm_client_sets_explicit_timeout_and_disables_sdk_retries(monkeypatch) 
 
 def test_settings_reads_llm_timeout_from_environment(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("LLM_TIMEOUT_SEC", "7.5")
+    monkeypatch.setenv("CANDIDATE_MERGE_TIMEOUT_SEC", "240")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
 
     settings = Settings.from_env(tmp_path)
 
     assert settings.llm_timeout_sec == 7.5
+    assert settings.candidate_merge_timeout_sec == 240
 
 
 def test_llm_client_enforces_outer_timeout(monkeypatch) -> None:
@@ -75,3 +77,47 @@ def test_llm_client_enforces_outer_timeout(monkeypatch) -> None:
 
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(client.call("archivist", "system", "user"))
+
+
+def test_llm_client_call_can_override_timeout(monkeypatch) -> None:
+    seen_timeouts = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            seen_timeouts.append(kwargs)
+
+            class Message:
+                content = "ok"
+
+            class Choice:
+                message = Message()
+
+            class Response:
+                choices = [Choice()]
+
+            return Response()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeAsyncOpenAI:
+        chat = FakeChat()
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("tree.model.client.AsyncOpenAI", FakeAsyncOpenAI)
+    settings = Settings(
+        examiner=_role(),
+        student=_role(),
+        writer=_role(),
+        archivist=_role(),
+        llm_timeout_sec=0.01,
+        max_retries=0,
+    )
+    client = LLMClient(settings)
+
+    assert asyncio.run(client.call("archivist", "system", "user", timeout_sec=240)) == "ok"

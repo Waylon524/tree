@@ -253,6 +253,8 @@ def test_dag_legend_shows_cluster_quality_summary() -> None:
                 "merge_components": 4,
                 "pending_merges": 1,
                 "generic_titles": 31,
+                "compression_ratio": 0.0392,
+                "single_chunk_group_ratio": 0.61,
             },
         },
         {"branches": []},
@@ -267,6 +269,8 @@ def test_dag_legend_shows_cluster_quality_summary() -> None:
     assert "聚类质量" in output
     assert "KnowledgeGroups" in output
     assert "102" in output
+    assert "Compression" in output
+    assert "Single-chunk" in output
     assert "当前树结构不可信" in output
 
 

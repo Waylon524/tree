@@ -412,6 +412,7 @@ def _candidate_node(candidate: dict[str, Any]) -> dict[str, Any]:
         "estimated_output_lines": _candidate_estimated_output_lines(candidate),
         "size_band": str(candidate.get("size_band") or _size_band(_candidate_estimated_output_lines(candidate))),
         "cluster_cohesion": float(candidate.get("cluster_cohesion") or 0.0),
+        "canonicalization_status": str(candidate.get("canonicalization_status") or "canonical"),
     }
 
 
@@ -462,18 +463,28 @@ def _graph_diagnostics(candidate_nodes: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _cluster_quality(candidate_nodes: dict[str, Any], planned_nodes: list[dict[str, Any]]) -> dict[str, Any]:
     diagnostics = _graph_diagnostics(candidate_nodes)
+    candidate_items = _candidate_items(candidate_nodes)
+    group_ids = {
+        group_id
+        for candidate in candidate_items
+        for group_id in _string_list(candidate.get("merged_group_ids"))
+    }
+    knowledge_group_count = len(group_ids)
+    knowledge_node_count = len(planned_nodes)
+    single_chunk_groups = sum(1 for candidate in candidate_items if int(candidate.get("chunk_count") or 0) <= 1)
+    compression_ratio = (
+        (knowledge_group_count - knowledge_node_count) / knowledge_group_count
+        if knowledge_group_count
+        else 0.0
+    )
     return {
-        "knowledge_groups": len(
-            {
-                group_id
-                for candidate in _candidate_items(candidate_nodes)
-                for group_id in _string_list(candidate.get("merged_group_ids"))
-            }
-        ),
-        "knowledge_nodes": len(planned_nodes),
+        "knowledge_groups": knowledge_group_count,
+        "knowledge_nodes": knowledge_node_count,
         "merge_components": len(candidate_nodes.get("merge_review_components", []) or []),
         "pending_merges": sum(1 for item in diagnostics if item.get("kind") == "canonical_merge_pending"),
         "generic_titles": sum(1 for node in planned_nodes if node.get("title_quality") == "generic_or_noise"),
+        "compression_ratio": round(compression_ratio, 4),
+        "single_chunk_group_ratio": round(single_chunk_groups / max(1, len(candidate_items)), 4),
     }
 
 
@@ -483,7 +494,19 @@ def _title_quality(title: str) -> str:
         return "generic_or_noise"
     if re.fullmatch(r"第[一二三四五六七八九十百\d]+章[、.．\s]*(.+)?", stripped):
         return "generic_or_noise"
+    if re.fullmatch(r"§\s*[\d\-–—.]*", stripped):
+        return "generic_or_noise"
+    if re.fullmatch(r"\d{4}年(?:\d{1,2}月\d{1,2}日)?(?:[、,，].*)?", stripped):
+        return "generic_or_noise"
+    if re.fullmatch(r"[一二三四五六七八九十\d]、?", stripped):
+        return "generic_or_noise"
     if re.fullmatch(r"\$?\^\{?\*+\}?\$?[一二三四五六七八九十\d]*", stripped):
+        return "generic_or_noise"
+    if (
+        (stripped.startswith("$") or stripped.startswith("\\") or re.search(r"[_^γθαβ]", stripped))
+        and re.fullmatch(r"\$?\\?[A-Za-zγθαβ]+(?:[_^].*)?\$?", stripped)
+        and len(stripped) <= 8
+    ):
         return "generic_or_noise"
     return "clean"
 
@@ -497,6 +520,8 @@ def _candidate_schedulability(
 ) -> tuple[bool, str]:
     if candidate.get("pending_merge_group_ids"):
         return False, "canonical_merge_pending"
+    if candidate.get("canonicalization_status") in {"auxiliary_only", "blocked_pending"}:
+        return False, str(candidate.get("blocked_reason") or candidate.get("canonicalization_status"))
     roles = set(source_types) | set(teaching_roles)
     if title_quality == "generic_or_noise":
         return False, "generic_or_noise"

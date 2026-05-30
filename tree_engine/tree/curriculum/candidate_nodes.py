@@ -22,12 +22,29 @@ _MIN_ADJACENT_SIGNATURE = 0.12
 _MIN_STRONG_MERGE_CONCEPT = 0.55
 _MIN_STRONG_MERGE_FORMULA = 0.50
 _MIN_STRONG_MERGE_OVERALL = 0.32
+_CANDIDATE_MERGE_BATCH_SIZE = 3
+_CANDIDATE_MERGE_REPAIR_ATTEMPTS = 2
+_CANDIDATE_MERGE_TIMEOUT_SEC = 240.0
+_VALID_MERGE_DECISIONS = {"merged", "rejected", "blocked_pending"}
 _GENERIC_TITLES = {
     "§",
     "光学",
     "机械波、电磁波",
     "机械波和电磁波",
     "温故知新",
+}
+_AUXILIARY_FRAGMENT_ROLES = {
+    "fragment",
+    "partial",
+    "review",
+    "header",
+    "title",
+    "transition",
+    "proof",
+    "example",
+    "exercise",
+    "formula_derivation",
+    "derivation",
 }
 _TERM_RE = re.compile(r"[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_`()+\-]*")
 _SPLIT_RE = re.compile(r"[，,、/；;：:（）()\[\]【】\s的与和及或]+")
@@ -61,6 +78,14 @@ class CandidateNodeBuilder(Protocol):
         completed_collections: list[str],
     ) -> dict[str, Any]:
         """Return AI-generated candidate node JSON."""
+
+    async def review_candidate_merge_components(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout_sec: float | None = None,
+    ) -> dict[str, Any]:
+        """Return mandatory merge decisions for a small component batch."""
 
 
 def load_candidate_nodes(root: Path) -> dict[str, Any]:
@@ -233,21 +258,54 @@ async def rebuild_candidate_nodes_with_ai(
     inventory: dict[str, Any],
     builder: CandidateNodeBuilder | None,
     completed_collections: set[str] | None = None,
+    *,
+    candidate_merge_batch_size: int = _CANDIDATE_MERGE_BATCH_SIZE,
+    candidate_merge_repair_attempts: int = _CANDIDATE_MERGE_REPAIR_ATTEMPTS,
+    candidate_merge_timeout_sec: float = _CANDIDATE_MERGE_TIMEOUT_SEC,
+    progress: Any | None = None,
 ) -> dict[str, Any]:
     """Build candidate nodes with AI enrichment when possible, else use deterministic fallback."""
     fallback = rebuild_candidate_nodes(root, inventory, completed_collections)
     if builder is None:
-        return fallback
+        normalized = _with_merge_review_metadata({}, fallback, fallback.get("chapter_candidates", []))
+        save_candidate_nodes(root, normalized)
+        return normalized
+    merge_review = await _review_merge_components_with_ai(
+        builder,
+        inventory,
+        fallback,
+        sorted(completed_collections or set()),
+        batch_size=candidate_merge_batch_size,
+        repair_attempts=candidate_merge_repair_attempts,
+        timeout_sec=candidate_merge_timeout_sec,
+        progress=progress,
+    )
     try:
+        inventory_summary = _inventory_summary_for_ai(inventory, fallback)
+        inventory_summary["merge_decisions"] = merge_review["merge_decisions"]
+        inventory_summary["merge_review_observability"] = merge_review["observability"]
         ai_map = await builder.build_candidate_nodes(
-            _inventory_summary_for_ai(inventory, fallback),
+            inventory_summary,
             sorted(completed_collections or set()),
         )
+        ai_map["merge_decisions"] = _merge_review_decisions(
+            merge_review["merge_decisions"],
+            ai_map.get("merge_decisions", []),
+        )
+        ai_map["merge_review_observability"] = merge_review["observability"]
         normalized = _normalize_ai_map(ai_map, fallback, completed_collections or set())
+        normalized["merge_review_observability"] = merge_review["observability"]
         save_candidate_nodes(root, normalized)
         return normalized
     except Exception:
-        return fallback
+        normalized = _with_merge_review_metadata(
+            {"merge_decisions": merge_review["merge_decisions"]},
+            fallback,
+            fallback.get("chapter_candidates", []),
+        )
+        normalized["merge_review_observability"] = merge_review["observability"]
+        save_candidate_nodes(root, normalized)
+        return normalized
 
 
 def build_candidate_nodes_context(candidate_nodes: dict[str, Any], limit: int = 10) -> str:
@@ -293,6 +351,241 @@ def build_candidate_nodes_context(candidate_nodes: dict[str, Any], limit: int = 
     if len(candidates) > limit:
         lines.append(f"... {len(candidates) - limit} more candidates omitted")
     return "\n".join(lines).strip()
+
+
+async def _review_merge_components_with_ai(
+    builder: CandidateNodeBuilder,
+    inventory: dict[str, Any],
+    fallback: dict[str, Any],
+    completed_collections: list[str],
+    *,
+    batch_size: int,
+    repair_attempts: int,
+    timeout_sec: float,
+    progress: Any | None,
+) -> dict[str, Any]:
+    components = [item for item in fallback.get("merge_review_components", []) if isinstance(item, dict)]
+    review_method = getattr(builder, "review_candidate_merge_components", None)
+    if not components or not callable(review_method):
+        decisions: list[dict[str, Any]] = []
+        return {"merge_decisions": decisions, "observability": _merge_review_observability(components, decisions)}
+    decisions: list[dict[str, Any]] = []
+    batches = _component_batches(components, max(1, batch_size))
+    for batch_index, batch in enumerate(batches, start=1):
+        batch_id = f"merge-batch-{batch_index:03d}"
+        pending = list(batch)
+        last_error = ""
+        for attempt in range(1, repair_attempts + 2):
+            _mark_merge_review_progress(progress, components, decisions, batch_id, attempt)
+            try:
+                payload = _merge_review_payload(
+                    inventory,
+                    fallback,
+                    pending,
+                    completed_collections,
+                    batch_id=batch_id,
+                    attempt=attempt,
+                    repair=attempt > 1,
+                )
+                raw = await _call_merge_review_method(review_method, payload, timeout_sec)
+                valid, missing, invalid = _validated_batch_decisions(
+                    raw,
+                    pending,
+                    batch_id=batch_id,
+                    attempt=attempt,
+                    source="repair" if attempt > 1 else "ai",
+                )
+                decisions.extend(valid)
+                if not missing and not invalid:
+                    pending = []
+                    break
+                pending = [component for component in pending if component.get("component_id") in set(missing + invalid)]
+                last_error = "invalid_or_missing_decisions"
+            except Exception as exc:
+                last_error = type(exc).__name__
+            if not pending:
+                break
+        if pending:
+            decisions.extend(_fallback_merge_decisions(pending, error_type=last_error or "missing_after_repair"))
+    observability = _merge_review_observability(components, decisions)
+    return {"merge_decisions": decisions, "observability": observability}
+
+
+def _component_batches(components: list[dict[str, Any]], batch_size: int) -> list[list[dict[str, Any]]]:
+    return [components[index : index + batch_size] for index in range(0, len(components), batch_size)]
+
+
+async def _call_merge_review_method(review_method: Any, payload: dict[str, Any], timeout_sec: float) -> dict[str, Any]:
+    try:
+        return await review_method(payload, timeout_sec=timeout_sec)
+    except TypeError as exc:
+        if "timeout_sec" not in str(exc):
+            raise
+        return await review_method(payload)
+
+
+def _merge_review_payload(
+    inventory: dict[str, Any],
+    fallback: dict[str, Any],
+    components: list[dict[str, Any]],
+    completed_collections: list[str],
+    *,
+    batch_id: str,
+    attempt: int,
+    repair: bool,
+) -> dict[str, Any]:
+    group_ids = {
+        group_id
+        for component in components
+        for group_id in _string_list(component.get("group_ids"))
+    }
+    candidate_group_ids = set(group_ids)
+    return {
+        "batch_id": batch_id,
+        "attempt": attempt,
+        "repair": repair,
+        "completed_collections": completed_collections,
+        "merge_review_components": components,
+        "knowledge_groups": [
+            item
+            for item in _inventory_summary_for_ai(inventory, fallback).get("knowledge_groups", [])
+            if item.get("group_id") in group_ids
+        ],
+        "group_pair_metrics": [
+            item
+            for item in fallback.get("group_pair_metrics", [])[:80]
+            if item.get("left_group_id") in group_ids or item.get("right_group_id") in group_ids
+        ],
+        "candidate_nodes": [
+            item
+            for item in fallback.get("chapter_candidates", [])
+            if set(_string_list(item.get("merged_group_ids"))) & candidate_group_ids
+        ],
+    }
+
+
+def _validated_batch_decisions(
+    raw: dict[str, Any],
+    components: list[dict[str, Any]],
+    *,
+    batch_id: str,
+    attempt: int,
+    source: str,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    component_by_id = {str(component.get("component_id") or ""): component for component in components}
+    seen: set[str] = set()
+    valid: list[dict[str, Any]] = []
+    invalid: list[str] = []
+    for item in raw.get("merge_decisions", []) if isinstance(raw, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        component_id = str(item.get("component_id") or "")
+        component = component_by_id.get(component_id)
+        if component is None:
+            invalid.append(component_id)
+            continue
+        expected_groups = set(_string_list(component.get("group_ids")))
+        actual_groups = set(_string_list(item.get("group_ids")))
+        decision = _normalize_merge_decision(item.get("decision"))
+        if not decision or expected_groups != actual_groups:
+            invalid.append(component_id)
+            continue
+        seen.add(component_id)
+        valid.append(
+            {
+                **item,
+                "component_id": component_id,
+                "group_ids": _string_list(component.get("group_ids")),
+                "decision": decision,
+                "decision_source": source,
+                "attempt_count": attempt,
+                "batch_id": batch_id,
+            }
+        )
+    missing = [component_id for component_id in component_by_id if component_id not in seen]
+    return valid, missing, invalid
+
+
+def _normalize_merge_decision(value: Any) -> str:
+    decision = str(value or "").strip()
+    if decision == "uncertain":
+        return "blocked_pending"
+    if decision in _VALID_MERGE_DECISIONS:
+        return decision
+    return ""
+
+
+def _fallback_merge_decisions(components: list[dict[str, Any]], *, error_type: str) -> list[dict[str, Any]]:
+    decisions = []
+    for component in components:
+        deterministic = _component_allows_conservative_merge(component)
+        decisions.append(
+            {
+                "component_id": component.get("component_id"),
+                "group_ids": _string_list(component.get("group_ids")),
+                "decision": "merged" if deterministic else "blocked_pending",
+                "decision_source": "deterministic" if deterministic else "fallback_blocked",
+                "attempt_count": 0,
+                "batch_id": "",
+                "error_type": error_type,
+                "reason": (
+                    "Conservative deterministic merge after AI review did not return a valid decision."
+                    if deterministic
+                    else "AI merge review did not return a valid decision."
+                ),
+            }
+        )
+    return decisions
+
+
+def _merge_review_decisions(reviewed: list[dict[str, Any]], inline: Any) -> list[dict[str, Any]]:
+    by_component = {str(item.get("component_id") or ""): item for item in reviewed if isinstance(item, dict)}
+    for item in inline or []:
+        if not isinstance(item, dict):
+            continue
+        component_id = str(item.get("component_id") or "")
+        if component_id and component_id not in by_component:
+            by_component[component_id] = item
+    return list(by_component.values())
+
+
+def _merge_review_observability(components: list[dict[str, Any]], decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    decided = len({str(item.get("component_id") or "") for item in decisions if item.get("component_id")})
+    return {
+        "components_total": len(components),
+        "components_decided": decided,
+        "repair_attempts": sum(1 for item in decisions if item.get("decision_source") == "repair"),
+        "blocked_pending": sum(1 for item in decisions if item.get("decision") == "blocked_pending"),
+        "auto_merged": sum(1 for item in decisions if item.get("decision_source") == "deterministic"),
+        "missing_component_ids": [
+            str(component.get("component_id") or "")
+            for component in components
+            if str(component.get("component_id") or "")
+            not in {str(item.get("component_id") or "") for item in decisions}
+        ],
+    }
+
+
+def _mark_merge_review_progress(
+    progress: Any | None,
+    components: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    batch_id: str,
+    attempt: int,
+) -> None:
+    planner_stage = getattr(progress, "planner_stage", None)
+    if not callable(planner_stage):
+        return
+    planner_stage(
+        stage="merge_review",
+        stage_label="Reviewing merge components",
+        stage_index=3,
+        details={
+            **_merge_review_observability(components, decisions),
+            "current_batch_id": batch_id,
+            "attempt": attempt,
+        },
+    )
 
 
 def _meaningful_related(items: Any, threshold: float = 0.18) -> list[str]:
@@ -377,6 +670,9 @@ def _inventory_groups(inventory: dict[str, Any]) -> list[dict[str, Any]]:
             "teaching_role": str(raw.get("teaching_role") or ""),
             "source_type": str(raw.get("source_type") or ""),
             "completeness": str(raw.get("completeness") or ""),
+            "fragment_role": str(raw.get("fragment_role") or ""),
+            "auxiliary_only": bool(raw.get("auxiliary_only")),
+            "auxiliary_group_ids": _string_list(raw.get("auxiliary_group_ids")),
             "representative_chunks": _group_representative_chunks(raw),
             "length_stats": raw.get("length_stats") if isinstance(raw.get("length_stats"), dict) else {},
         }
@@ -434,7 +730,8 @@ def _candidate_from_group(group: dict[str, Any], completed_collections: set[str]
     title = str(group.get("title_hint") or "") or _title_hint(concepts or weak_concepts, primary)
     low_confidence_terms = _string_list(group.get("low_confidence_section_terms"))
     title = _clean_title_hint(title, low_confidence_terms, primary)
-    return {
+    auxiliary_only = bool(group.get("auxiliary_only")) or _is_auxiliary_group(group)
+    candidate = {
         "candidate_id": f"candidate:{primary}:{_stable_group_suffix(group)}",
         "status": status,
         "title_hint": title,
@@ -462,8 +759,15 @@ def _candidate_from_group(group: dict[str, Any], completed_collections: set[str]
         "selection_priority": _group_selection_priority(group, concepts, status),
         "coverage_evidence": _string_list(group.get("evidence_spans")),
         "root_features": {},
+        "canonicalization_status": "auxiliary_only" if auxiliary_only else "canonical",
+        "auxiliary_group_ids": _string_list(group.get("auxiliary_group_ids")),
+        "merge_decision_source": "deterministic",
         "reason": _group_reason(group, concepts, status),
     }
+    if auxiliary_only:
+        candidate["schedulable"] = False
+        candidate["blocked_reason"] = "auxiliary_only"
+    return candidate
 
 
 def _ranked_group_pair_metrics(groups: list[dict[str, Any]], limit: int = 60) -> list[dict[str, Any]]:
@@ -684,13 +988,21 @@ def _merge_decisions(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     explicit = [
-        item
+        {**item, "decision": _normalize_merge_decision(item.get("decision")) or str(item.get("decision") or "")}
         for item in ai_map.get("merge_decisions", [])
         if isinstance(item, dict) and _string_list(item.get("group_ids"))
     ]
     decisions = []
     for component in components:
         decision = _component_decision(component, explicit, candidates)
+        if not any(
+            set(_string_list(component.get("group_ids"))).issubset(set(_string_list(item.get("group_ids"))))
+            for item in explicit
+        ) and decision.get("decision") == "uncertain":
+            decision["decision_source"] = "omitted"
+        else:
+            decision.setdefault("decision_source", "ai")
+        decision.setdefault("attempt_count", 1)
         decisions.append(decision)
     return decisions
 
@@ -714,6 +1026,174 @@ def _mark_pending_merge_candidates(candidates: list[dict[str, Any]], diagnostics
             candidate["blocked_reason"] = "canonical_merge_pending"
 
 
+def _canonicalize_merge_components(
+    fallback: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    merge_decisions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    components = [item for item in fallback.get("merge_review_components", []) if isinstance(item, dict)]
+    if not components:
+        return candidates
+    by_group = _candidate_lookup_by_group(candidates)
+    fallback_by_group = _candidate_lookup_by_group(fallback.get("chapter_candidates", []))
+    result = list(candidates)
+    used_groups: set[str] = set()
+    for component in components:
+        group_ids = _string_list(component.get("group_ids"))
+        if not group_ids or used_groups & set(group_ids):
+            continue
+        decision = _decision_for_component(component, merge_decisions)
+        if decision.get("decision") == "rejected":
+            if _component_already_merged(result, group_ids):
+                result = [
+                    item
+                    for item in result
+                    if not (set(_string_list(item.get("merged_group_ids"))) & set(group_ids))
+                ]
+                result.extend(_unique_candidates_for_groups(fallback_by_group, group_ids))
+            continue
+        component_items = _unique_candidates_for_groups(by_group, group_ids)
+        if len(component_items) < 2:
+            component_items = _unique_candidates_for_groups(fallback_by_group, group_ids)
+        if len(component_items) < 2:
+            continue
+        if decision.get("decision") == "merged" and _component_already_merged(result, group_ids):
+            continue
+        result = [
+            item
+            for item in result
+            if not (set(_string_list(item.get("merged_group_ids"))) & set(group_ids))
+        ]
+        if decision.get("decision") == "merged":
+            merged = _canonical_component_candidate(component, component_items)
+            source = str(decision.get("decision_source") or "ai")
+            merged["canonicalization_status"] = "auto_merged" if source == "deterministic" else "canonical"
+            merged["merge_decision_source"] = source
+            result.append(merged)
+            decision["candidate_id"] = merged.get("candidate_id")
+        elif decision.get("decision_source") == "omitted" and _component_allows_conservative_merge(component):
+            merged = _canonical_component_candidate(component, component_items)
+            merged["canonicalization_status"] = "auto_merged"
+            merged["merge_decision_source"] = "deterministic"
+            result.append(merged)
+            decision["decision"] = "merged"
+            decision["decision_source"] = "deterministic"
+            decision["candidate_id"] = merged.get("candidate_id")
+            decision["reason"] = "Conservative deterministic merge for an omitted strong component."
+        else:
+            blocked = _canonical_component_candidate(component, component_items)
+            blocked["canonicalization_status"] = "blocked_pending"
+            blocked["merge_decision_source"] = "fallback_blocked"
+            blocked["schedulable"] = False
+            blocked["blocked_reason"] = "canonical_merge_pending"
+            blocked["pending_merge_group_ids"] = group_ids
+            result.append(blocked)
+            decision["decision"] = "blocked_pending"
+            decision["decision_source"] = "fallback_blocked"
+            decision["candidate_id"] = blocked.get("candidate_id")
+        used_groups.update(group_ids)
+    return _sort_candidates_by_prerequisites(_dedupe_candidates(result))
+
+
+def _component_already_merged(candidates: list[dict[str, Any]], group_ids: list[str]) -> bool:
+    expected = set(group_ids)
+    return any(expected.issubset(set(_string_list(candidate.get("merged_group_ids")))) for candidate in candidates)
+
+
+def _candidate_lookup_by_group(candidates: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_group: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        for group_id in _string_list(candidate.get("merged_group_ids")):
+            by_group[group_id].append(candidate)
+    return by_group
+
+
+def _unique_candidates_for_groups(
+    by_group: dict[str, list[dict[str, Any]]],
+    group_ids: list[str],
+) -> list[dict[str, Any]]:
+    seen = set()
+    items = []
+    for group_id in group_ids:
+        for candidate in by_group.get(group_id, []):
+            candidate_id = str(candidate.get("candidate_id") or "")
+            if not candidate_id or candidate_id in seen:
+                continue
+            seen.add(candidate_id)
+            items.append(candidate)
+    return items
+
+
+def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen = set()
+    result = []
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if not candidate_id or candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        result.append(candidate)
+    return result
+
+
+def _decision_for_component(
+    component: dict[str, Any],
+    decisions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    group_ids = set(_string_list(component.get("group_ids")))
+    for decision in decisions:
+        decision_groups = set(_string_list(decision.get("group_ids")))
+        if group_ids and group_ids.issubset(decision_groups):
+            return decision
+    return {"decision": "uncertain", "decision_source": "omitted", "group_ids": sorted(group_ids)}
+
+
+def _component_allows_conservative_merge(component: dict[str, Any]) -> bool:
+    reasons = set(_string_list(component.get("reasons")) or _string_list(component.get("reason")))
+    if reasons & {"clean_title_match", "adjacent_strong_signal", "concept_overlap"}:
+        return True
+    for pair in component.get("pairs", []) or []:
+        if not isinstance(pair, dict):
+            continue
+        if str(pair.get("reason") or "") in {"clean_title_match", "adjacent_strong_signal"}:
+            return True
+        if float(pair.get("concept_overlap") or 0) >= _MIN_STRONG_MERGE_CONCEPT:
+            return True
+    return False
+
+
+def _canonical_component_candidate(
+    component: dict[str, Any],
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    combined = _combine_fallback_items(items)
+    group_ids = _string_list(component.get("group_ids")) or _unique(
+        group_id for item in items for group_id in _string_list(item.get("merged_group_ids"))
+    )
+    suffix = hashlib.sha1("|".join(group_ids).encode("utf-8")).hexdigest()[:10]
+    combined["candidate_id"] = f"candidate:canonical:{suffix}"
+    combined["merged_group_ids"] = group_ids
+    combined["canonical_title"] = combined.get("title_hint", "")
+    combined.pop("pending_merge_group_ids", None)
+    if combined.get("blocked_reason") == "canonical_merge_pending":
+        combined.pop("blocked_reason", None)
+    combined.pop("schedulable", None)
+    combined["coverage_evidence"] = _unique(
+        [
+            *[
+                evidence
+                for item in items
+                for evidence in _string_list(item.get("coverage_evidence"))
+            ],
+            f"Canonical merge component {component.get('component_id')}.",
+        ]
+    )[:16]
+    combined["auxiliary_group_ids"] = _unique(
+        group_id for item in items for group_id in _string_list(item.get("auxiliary_group_ids"))
+    )
+    return combined
+
+
 def _clean_merge_title(value: Any) -> str:
     title = str(value or "").strip()
     title = re.sub(r"^§\s*[\d\-–—.]*\s*", "", title).strip()
@@ -724,6 +1204,18 @@ def _clean_merge_title(value: Any) -> str:
     if re.fullmatch(r"\$?\^\{?\*+\}?\$?[一二三四五六七八九十\d]*", title):
         return ""
     return title
+
+
+def _is_auxiliary_group(group: dict[str, Any]) -> bool:
+    if group.get("auxiliary_only"):
+        return True
+    title = str(group.get("title_hint") or "").strip()
+    role = str(group.get("fragment_role") or group.get("teaching_role") or group.get("completeness") or "").lower()
+    if _clean_merge_title(title) == "" and (not _string_list(group.get("core_concepts")) or title in _GENERIC_TITLES):
+        return True
+    if role in _AUXILIARY_FRAGMENT_ROLES and not _string_list(group.get("core_concepts")):
+        return True
+    return False
 
 
 def _group_chunk_distance(left: dict[str, Any], right: dict[str, Any]) -> int | None:
@@ -1346,6 +1838,7 @@ def _with_merge_review_metadata(
 ) -> dict[str, Any]:
     merge_components = fallback.get("merge_review_components", [])
     merge_decisions = _merge_decisions(ai_map, merge_components, candidates)
+    candidates = _canonicalize_merge_components(fallback, candidates, merge_decisions)
     diagnostics = [
         *[
             item

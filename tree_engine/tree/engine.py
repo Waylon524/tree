@@ -927,6 +927,8 @@ class TreeEngine:
             inventory,
             self.archivist,
             completed_collections=_completed_source_collections(s),
+            candidate_merge_timeout_sec=getattr(self.settings, "candidate_merge_timeout_sec", 240.0),
+            progress=getattr(self, "progress", None),
         )
         _mark_planner_progress(
             getattr(self, "progress", None),
@@ -1365,11 +1367,15 @@ def _candidate_planner_details(candidate_nodes: dict[str, Any]) -> dict[str, Any
         for item in candidate_nodes.get("diagnostics", [])
         if isinstance(item, dict) and str(item.get("type")) == "canonical_merge_pending"
     ]
-    return {
+    details = {
         "knowledge_nodes": len(candidates),
         "merge_components": len(components),
         "pending_merges": len(pending),
     }
+    observability = candidate_nodes.get("merge_review_observability")
+    if isinstance(observability, dict):
+        details.update(observability)
+    return details
 
 
 def _graph_planner_details(knowledge_graph: dict[str, Any]) -> dict[str, Any]:

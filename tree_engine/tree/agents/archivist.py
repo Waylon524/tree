@@ -75,6 +75,9 @@ class ArchivistAgent:
             '  "source_type": "lecture|exercise|reference|mixed|unknown",\n'
             '  "teaching_role": "foundation|concept|method|example|application|review|assessment",\n'
             '  "completeness": "fragment|partial|complete",\n'
+            '  "fragment_role": "complete|concept|proof|example|formula_derivation|review|header|transition|fragment",\n'
+            '  "merge_confidence": "low|medium|high",\n'
+            '  "new_topic_reason": "why this opens a new teachable topic, or empty if it extends the active group",\n'
             '  "evidence_spans": ["short source evidence"],\n'
             '  "summary": "one concise sentence"\n'
             "}\n\n"
@@ -82,6 +85,9 @@ class ArchivistAgent:
             "- The program-provided section_id, weak_concepts, and formula signatures are weak signals only.\n"
             "- Use the chunk text as the semantic source of truth.\n"
             "- merge_with_previous may be true only when the current chunk extends the active KnowledgeGroup.\n"
+            "- Adjacent proofs, worked examples, formula derivations, review prompts, title fragments, date/page headers, and chapter transitions normally extend the active KnowledgeGroup unless the chunk clearly starts a new teachable subject.\n"
+            "- If the current chunk is a fragment, header, review prompt, proof, example, or derivation, set fragment_role accordingly and strongly prefer merge_with_previous when an active group exists.\n"
+            "- new_topic_reason must explain a clear new subject boundary; leave it empty for fragments or continuations.\n"
             "- Prefer teaching groups that would become a coherent 300-1000 line output, but this is guidance, not a hard cap.\n"
             "- Preserve prerequisite signals from the text; never clear a prerequisite merely because the current chunk is short.\n\n"
             f"Payload:\n{json.dumps(payload, ensure_ascii=False)[:18000]}"
@@ -105,7 +111,7 @@ class ArchivistAgent:
             "same teachable KnowledgeNode. Keep the compatibility JSON keys "
             "`chapter_candidates` and `candidate_id`, but semantically each item is a final KnowledgeNode. "
             "Every input `merge_review_components` item must receive an explicit merge decision: "
-            "`merged`, `rejected`, or `uncertain`. "
+            "`merged`, `rejected`, or `blocked_pending`. "
             "This step does not choose curriculum order; "
             "the graph planner and root selector will choose roots, branches, and frontier nodes.\n\n"
             "Schema:\n"
@@ -114,7 +120,7 @@ class ArchivistAgent:
             "    {\n"
             '      "component_id": "merge component id from input",\n'
             '      "group_ids": ["kg ids reviewed"],\n'
-            '      "decision": "merged|rejected|uncertain",\n'
+            '      "decision": "merged|rejected|blocked_pending",\n'
             '      "reason": "brief semantic rationale"\n'
             "    }\n"
             "  ],\n"
@@ -142,8 +148,9 @@ class ArchivistAgent:
             "- Do not encode domain-specific fixed ranks. Infer prerequisites from concepts.\n"
             "- If a source collection is mostly application/review, place its prerequisite concepts clearly.\n"
             "- AI may supplement and order prerequisites, but must not clear existing group prerequisites.\n"
-            "- Strong merge review components are mandatory: merge them, reject them, or mark uncertain with a reason.\n"
-            "- If a component is uncertain, do not silently split it without a merge_decision.\n"
+            "- Strong merge review components are mandatory: merge them, reject them, or mark blocked_pending with a reason.\n"
+            "- If a component is semantically uncertain, use blocked_pending; do not silently split it into separate KnowledgeNodes.\n"
+            "- Review/header/title/date/formula-fragment groups should become auxiliary evidence for nearby canonical nodes unless they clearly contain a standalone teachable subject.\n"
             "- Candidate cross-file merge has no output-length cap; use estimated length only as a risk signal.\n"
             "- Do not choose roots, sequence, or next branch. Only generate canonical KnowledgeNodes.\n"
             "- Do not mark a KnowledgeNode completed; the engine will do that.\n"
@@ -152,6 +159,41 @@ class ArchivistAgent:
             f"Inventory summary:\n{json.dumps(inventory_summary, ensure_ascii=False)[:18000]}"
         )
         raw = await self._client.call("archivist", system, user)
+        return _extract_json_object(raw)
+
+    async def review_candidate_merge_components(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout_sec: float | None = None,
+    ) -> dict[str, Any]:
+        """Review a small batch of strong KnowledgeGroup merge components."""
+        system = self._loader.load("archivist")
+        user = (
+            "## Task: Review KnowledgeGroup Merge Components\n\n"
+            "Return strict JSON only. Do not wrap it in Markdown.\n\n"
+            "Each input merge component is a strong candidate for canonical KnowledgeNode merging. "
+            "You must return one decision for every provided component_id. Do not omit any component.\n\n"
+            "Schema:\n"
+            "{\n"
+            '  "merge_decisions": [\n'
+            "    {\n"
+            '      "component_id": "component id from input",\n'
+            '      "group_ids": ["exact group ids from that component"],\n'
+            '      "decision": "merged|rejected|blocked_pending",\n'
+            '      "reason": "brief rationale"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Use merged only when the groups are the same teachable KnowledgeNode.\n"
+            "- Use rejected when they are related but should remain separate teachable KnowledgeNodes.\n"
+            "- Use blocked_pending when the evidence is insufficient or ambiguous.\n"
+            "- Preserve prerequisites in later canonicalization; do not reject only because one source has empty prerequisites.\n"
+            "- Return decisions only for the provided component ids and use exact group_ids.\n\n"
+            f"Merge review payload:\n{json.dumps(payload, ensure_ascii=False)[:18000]}"
+        )
+        raw = await self._client.call("archivist", system, user, timeout_sec=timeout_sec)
         return _extract_json_object(raw)
 
     async def select_root_candidate(self, payload: dict[str, Any]) -> dict[str, Any]:

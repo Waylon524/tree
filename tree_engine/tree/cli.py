@@ -1436,6 +1436,13 @@ def render_dag_legend(model: dict[str, Any]) -> Group:
         quality_table.add_row("Merge components", str(cluster_quality.get("merge_components") or 0))
         quality_table.add_row("Pending merges", str(cluster_quality.get("pending_merges") or 0))
         quality_table.add_row("Generic titles", str(cluster_quality.get("generic_titles") or 0))
+        if "compression_ratio" in cluster_quality:
+            quality_table.add_row("Compression", f"{float(cluster_quality.get('compression_ratio') or 0):.1%}")
+        if "single_chunk_group_ratio" in cluster_quality:
+            quality_table.add_row(
+                "Single-chunk groups",
+                f"{float(cluster_quality.get('single_chunk_group_ratio') or 0):.1%}",
+            )
         if _int_value(cluster_quality.get("pending_merges")):
             quality_table.add_row(
                 "诊断",

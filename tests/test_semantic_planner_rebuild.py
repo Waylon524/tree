@@ -19,6 +19,31 @@ class _FakeEmbedder:
         return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 
 
+def _merge_group(group_id: str, title: str, index: int, *, concept: str | None = None) -> dict:
+    concept = concept or title
+    return {
+        "group_id": group_id,
+        "title_hint": title,
+        "source_chunks": [f"physics/{group_id}#000"],
+        "source_paths": [f"{group_id}.md"],
+        "source_collection": "physics",
+        "chunk_range": {"start": index, "end": index},
+        "core_concepts": [concept],
+        "formula_signatures": [],
+        "teaching_role": "concept",
+        "length_stats": {"token_estimate": 120, "estimated_output_lines": 300},
+    }
+
+
+def _paired_merge_inventory(pair_count: int) -> dict:
+    groups = []
+    for index in range(pair_count):
+        title = f"主题{index}"
+        groups.append(_merge_group(f"kg:{index}:a", title, index * 2))
+        groups.append(_merge_group(f"kg:{index}:b", title, index * 2 + 1))
+    return {"version": 2, "knowledge_groups": groups}
+
+
 def test_chunk_metadata_exposes_weak_signals_and_formula_signatures(tmp_path: Path) -> None:
     text = "## 划重奖\n\n正文讲解折射率，公式为 $n = c / v$。\n\n**折射率** 表示光速关系。"
 
@@ -439,6 +464,85 @@ def test_inventory_merge_preserves_weak_group_metrics(tmp_path: Path) -> None:
     assert group["formula_signatures"] == ["n_1sintheta_1=n_2sintheta_2"]
 
 
+def test_inventory_postprocess_merges_review_header_fragment_into_adjacent_group(tmp_path: Path) -> None:
+    class FragmentAnalyzer:
+        async def analyze_inventory_chunk(self, payload: dict) -> dict:
+            chunk_index = payload["chunk"]["metadata"]["chunk_index"]
+            if chunk_index == 0:
+                return {
+                    "merge_with_previous": False,
+                    "title_hint": "折射定律",
+                    "core_concepts": ["折射定律"],
+                    "methods": [],
+                    "misconceptions": [],
+                    "prerequisites": ["几何光学"],
+                    "formula_roles": [],
+                    "source_type": "lecture",
+                    "teaching_role": "foundation",
+                    "completeness": "complete",
+                    "fragment_role": "complete",
+                    "merge_confidence": "high",
+                    "new_topic_reason": "明确介绍一个可教学主题。",
+                    "evidence_spans": ["折射定律描述角度关系"],
+                    "summary": "折射定律。",
+                }
+            return {
+                "merge_with_previous": False,
+                "title_hint": "温故知新",
+                "core_concepts": [],
+                "methods": [],
+                "misconceptions": [],
+                "prerequisites": [],
+                "formula_roles": [],
+                "source_type": "lecture",
+                "teaching_role": "review",
+                "completeness": "fragment",
+                "fragment_role": "review",
+                "merge_confidence": "low",
+                "new_topic_reason": "",
+                "evidence_spans": ["温故知新"],
+                "summary": "复习提示。",
+            }
+
+    inventory = asyncio.run(
+        rebuild_source_inventory_with_ai(
+            tmp_path,
+            [
+                {
+                    "chunk_id": "physics-000",
+                    "text": "折射定律描述角度关系。",
+                    "metadata": {
+                        "source_collection": "physics",
+                        "filename": "optics.md",
+                        "path": "optics.md",
+                        "chunk_index": 0,
+                        "section_id": "折射定律",
+                    },
+                },
+                {
+                    "chunk_id": "physics-001",
+                    "text": "温故知新",
+                    "metadata": {
+                        "source_collection": "physics",
+                        "filename": "optics.md",
+                        "path": "optics.md",
+                        "chunk_index": 1,
+                        "section_id": "温故知新",
+                    },
+                },
+            ],
+            FragmentAnalyzer(),
+        )
+    )
+
+    assert len(inventory["knowledge_groups"]) == 1
+    group = inventory["knowledge_groups"][0]
+    assert group["title_hint"] == "折射定律"
+    assert group["source_chunks"] == ["physics/optics#000", "physics/optics#001"]
+    assert group["auxiliary_group_ids"]
+    assert group["representative_chunks"][1]["fragment_role"] == "review"
+
+
 def test_candidate_ai_merges_cross_file_groups_without_output_line_cap(tmp_path: Path) -> None:
     inventory = {
         "version": 2,
@@ -517,6 +621,155 @@ def test_candidate_ai_merges_cross_file_groups_without_output_line_cap(tmp_path:
     }
 
 
+def test_candidate_merge_review_is_batched_and_validated(tmp_path: Path) -> None:
+    inventory = _paired_merge_inventory(7)
+    batches: list[list[str]] = []
+
+    class BatchReviewBuilder:
+        async def review_candidate_merge_components(self, payload: dict) -> dict:
+            component_ids = [item["component_id"] for item in payload["merge_review_components"]]
+            batches.append(component_ids)
+            return {
+                "merge_decisions": [
+                    {
+                        "component_id": item["component_id"],
+                        "group_ids": item["group_ids"],
+                        "decision": "rejected",
+                        "reason": "测试保留分开。",
+                    }
+                    for item in payload["merge_review_components"]
+                ]
+            }
+
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            assert len(inventory_summary["merge_decisions"]) == 7
+            return {"chapter_candidates": []}
+
+    nodes = asyncio.run(
+        rebuild_candidate_nodes_with_ai(
+            tmp_path,
+            inventory,
+            BatchReviewBuilder(),
+            candidate_merge_batch_size=3,
+        )
+    )
+
+    assert [len(batch) for batch in batches] == [3, 3, 1]
+    assert len(nodes["merge_decisions"]) == 7
+    assert {decision["decision_source"] for decision in nodes["merge_decisions"]} == {"ai"}
+    assert all(decision["attempt_count"] == 1 for decision in nodes["merge_decisions"])
+
+
+def test_candidate_merge_review_repairs_only_missing_components(tmp_path: Path) -> None:
+    inventory = _paired_merge_inventory(2)
+    payload_sizes: list[int] = []
+
+    class MissingThenRepairBuilder:
+        async def review_candidate_merge_components(self, payload: dict) -> dict:
+            payload_sizes.append(len(payload["merge_review_components"]))
+            components = payload["merge_review_components"]
+            if len(payload_sizes) == 1:
+                components = components[:1]
+            return {
+                "merge_decisions": [
+                    {
+                        "component_id": item["component_id"],
+                        "group_ids": item["group_ids"],
+                        "decision": "rejected",
+                        "reason": "测试判定。",
+                    }
+                    for item in components
+                ]
+            }
+
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            return {"chapter_candidates": []}
+
+    nodes = asyncio.run(
+        rebuild_candidate_nodes_with_ai(
+            tmp_path,
+            inventory,
+            MissingThenRepairBuilder(),
+            candidate_merge_batch_size=3,
+            candidate_merge_repair_attempts=2,
+        )
+    )
+
+    assert payload_sizes == [2, 1]
+    assert [decision["decision_source"] for decision in nodes["merge_decisions"]] == ["ai", "repair"]
+    assert [decision["attempt_count"] for decision in nodes["merge_decisions"]] == [1, 2]
+    assert nodes["merge_review_observability"]["repair_attempts"] == 1
+
+
+def test_candidate_merge_review_failure_auto_merges_strong_component_without_fragment_leak(tmp_path: Path) -> None:
+    inventory = _paired_merge_inventory(1)
+
+    class FailingReviewBuilder:
+        async def review_candidate_merge_components(self, payload: dict) -> dict:
+            raise TimeoutError("merge review timed out")
+
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            return {"chapter_candidates": []}
+
+    nodes = asyncio.run(
+        rebuild_candidate_nodes_with_ai(
+            tmp_path,
+            inventory,
+            FailingReviewBuilder(),
+            candidate_merge_batch_size=3,
+            candidate_merge_repair_attempts=2,
+        )
+    )
+
+    assert len(nodes["chapter_candidates"]) == 1
+    candidate = nodes["chapter_candidates"][0]
+    assert candidate["canonicalization_status"] == "auto_merged"
+    assert candidate["merge_decision_source"] == "deterministic"
+    assert candidate["merged_group_ids"] == ["kg:0:a", "kg:0:b"]
+    assert nodes["merge_decisions"][0]["decision_source"] == "deterministic"
+    assert nodes["merge_decisions"][0]["error_type"] == "TimeoutError"
+
+
+def test_candidate_merge_review_reject_overrides_later_merged_candidate(tmp_path: Path) -> None:
+    inventory = _paired_merge_inventory(1)
+
+    class RejectThenMergeBuilder:
+        async def review_candidate_merge_components(self, payload: dict) -> dict:
+            component = payload["merge_review_components"][0]
+            return {
+                "merge_decisions": [
+                    {
+                        "component_id": component["component_id"],
+                        "group_ids": component["group_ids"],
+                        "decision": "rejected",
+                        "reason": "不是同一教学节点。",
+                    }
+                ]
+            }
+
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            return {
+                "chapter_candidates": [
+                    {
+                        "candidate_id": "candidate:wrong-merge",
+                        "merged_group_ids": ["kg:0:a", "kg:0:b"],
+                        "canonical_title": "错误合并",
+                        "primary_source_collection": "physics",
+                        "source_collections": ["physics"],
+                        "core_concepts": ["主题0"],
+                        "prerequisite_concepts": [],
+                        "representative_chunks": ["physics/kg:0:a#000", "physics/kg:0:b#000"],
+                    }
+                ]
+            }
+
+    nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, RejectThenMergeBuilder()))
+
+    assert len(nodes["chapter_candidates"]) == 2
+    assert "candidate:wrong-merge" not in {item["candidate_id"] for item in nodes["chapter_candidates"]}
+    assert all(len(item["merged_group_ids"]) == 1 for item in nodes["chapter_candidates"])
+
+
 def test_candidate_strict_merge_review_records_pending_when_ai_omits_strong_component(tmp_path: Path) -> None:
     inventory = {
         "version": 2,
@@ -558,13 +811,97 @@ def test_candidate_strict_merge_review_records_pending_when_ai_omits_strong_comp
 
     nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, OmitMergeBuilder()))
 
-    pending = [item for item in nodes["diagnostics"] if item["kind"] == "canonical_merge_pending"]
-    assert pending
-    assert pending[0]["group_ids"] == ["kg:forced:intro", "kg:forced:detail"]
-    assert any(
-        "kg:forced:intro" in item.get("pending_merge_group_ids", [])
-        for item in nodes["chapter_candidates"]
-    )
+    assert not [item for item in nodes["diagnostics"] if item["kind"] == "canonical_merge_pending"]
+    assert len(nodes["chapter_candidates"]) == 1
+    candidate = nodes["chapter_candidates"][0]
+    assert candidate["canonicalization_status"] == "auto_merged"
+    assert candidate["merge_decision_source"] == "deterministic"
+    assert candidate["merged_group_ids"] == ["kg:forced:intro", "kg:forced:detail"]
+
+
+def test_candidate_uncertain_merge_component_becomes_single_blocked_pending_node(tmp_path: Path) -> None:
+    inventory = {
+        "version": 2,
+        "knowledge_groups": [
+            {
+                "group_id": "kg:uncertain:a",
+                "title_hint": "同名主题",
+                "source_chunks": ["physics/a#000"],
+                "source_paths": ["a.md"],
+                "source_collection": "physics",
+                "chunk_range": {"start": 1, "end": 1},
+                "core_concepts": ["主题概念"],
+                "prerequisites": ["前置概念"],
+                "formula_signatures": [],
+                "teaching_role": "concept",
+                "length_stats": {"token_estimate": 220, "estimated_output_lines": 320},
+            },
+            {
+                "group_id": "kg:uncertain:b",
+                "title_hint": "同名主题",
+                "source_chunks": ["physics/b#000"],
+                "source_paths": ["b.md"],
+                "source_collection": "physics",
+                "chunk_range": {"start": 9, "end": 9},
+                "core_concepts": ["主题概念", "另一个侧面"],
+                "formula_signatures": [],
+                "teaching_role": "concept",
+                "length_stats": {"token_estimate": 260, "estimated_output_lines": 360},
+            },
+        ],
+    }
+
+    class UncertainBuilder:
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            component = inventory_summary["merge_review_components"][0]
+            return {
+                "merge_decisions": [
+                    {
+                        "component_id": component["component_id"],
+                        "group_ids": component["group_ids"],
+                        "decision": "uncertain",
+                        "reason": "语义边界仍不确定。",
+                    }
+                ],
+                "chapter_candidates": [],
+            }
+
+    nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, UncertainBuilder()))
+
+    assert len(nodes["chapter_candidates"]) == 1
+    candidate = nodes["chapter_candidates"][0]
+    assert candidate["canonicalization_status"] == "blocked_pending"
+    assert candidate["merge_decision_source"] == "fallback_blocked"
+    assert candidate["schedulable"] is False
+    assert candidate["blocked_reason"] == "canonical_merge_pending"
+    assert candidate["merged_group_ids"] == ["kg:uncertain:a", "kg:uncertain:b"]
+    assert "前置概念" in candidate["prerequisite_concepts"]
+
+
+def test_auxiliary_only_inventory_group_does_not_create_schedulable_candidate(tmp_path: Path) -> None:
+    inventory = {
+        "version": 2,
+        "knowledge_groups": [
+            {
+                "group_id": "kg:noise",
+                "title_hint": "§",
+                "source_chunks": ["physics/a#000"],
+                "source_paths": ["a.md"],
+                "source_collection": "physics",
+                "chunk_range": {"start": 0, "end": 0},
+                "core_concepts": [],
+                "teaching_role": "review",
+                "fragment_role": "header",
+                "auxiliary_only": True,
+                "length_stats": {"token_estimate": 30, "estimated_output_lines": 150},
+            }
+        ],
+    }
+
+    nodes = rebuild_knowledge_nodes(tmp_path, inventory)
+
+    assert nodes["chapter_candidates"][0]["canonicalization_status"] == "auxiliary_only"
+    assert nodes["chapter_candidates"][0]["schedulable"] is False
 
 
 def test_candidate_clean_title_match_builds_merge_review_component(tmp_path: Path) -> None:

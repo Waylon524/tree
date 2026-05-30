@@ -104,6 +104,26 @@ _STOPWORDS = {
     "Hello",
 }
 _LATIN_CONCEPT_ALLOWLIST = {"AI", "IPO", "Python"}
+_AUXILIARY_FRAGMENT_ROLES = {
+    "fragment",
+    "partial",
+    "review",
+    "header",
+    "title",
+    "transition",
+    "proof",
+    "example",
+    "exercise",
+    "formula_derivation",
+    "derivation",
+}
+_NOISE_TITLES = {
+    "§",
+    "温故知新",
+    "光学",
+    "机械波、电磁波",
+    "机械波和电磁波",
+}
 
 
 class SourceChunkAnalyzer(Protocol):
@@ -244,7 +264,7 @@ async def rebuild_source_inventory_with_ai(
 
     await asyncio.gather(*(process_file(file_key, hits) for file_key, hits in file_batches))
     records = list(records_by_ref.values())
-    groups = _groups_from_file_state(file_batches, file_groups, file_active_groups)
+    groups = _compress_inventory_groups(_groups_from_file_state(file_batches, file_groups, file_active_groups))
     records = sorted(
         records,
         key=lambda item: (
@@ -282,7 +302,7 @@ def _save_partial_inventory(
                     item.get("chunk_index", 0),
                 ),
             ),
-            "knowledge_groups": groups,
+            "knowledge_groups": _compress_inventory_groups(groups),
             "collections": _collection_summaries(groups),
         },
     )
@@ -317,6 +337,158 @@ def _groups_from_file_state(
         if active_group is not None:
             groups.append(active_group)
     return groups
+
+
+def _compress_inventory_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold obvious file-local fragments into adjacent teachable groups."""
+    if not groups:
+        return []
+    ordered = sorted((dict(group) for group in groups), key=_inventory_group_sort_key)
+    skipped: set[int] = set()
+    for index, group in enumerate(ordered):
+        if index in skipped or not _is_auxiliary_group(group):
+            continue
+        target_index = _adjacent_teachable_group_index(ordered, index, skipped)
+        if target_index is None:
+            group["auxiliary_only"] = True
+            group.setdefault("canonicalization_status", "auxiliary_only")
+            continue
+        ordered[target_index] = _merge_auxiliary_group(ordered[target_index], group)
+        skipped.add(index)
+    return [group for index, group in enumerate(ordered) if index not in skipped]
+
+
+def _adjacent_teachable_group_index(
+    groups: list[dict[str, Any]],
+    index: int,
+    skipped: set[int],
+) -> int | None:
+    group = groups[index]
+    for direction in (-1, 1):
+        cursor = index + direction
+        while 0 <= cursor < len(groups):
+            candidate = groups[cursor]
+            if cursor not in skipped and _same_source_file(group, candidate) and not _is_auxiliary_group(candidate):
+                return cursor
+            if not _same_source_file(group, candidate):
+                break
+            cursor += direction
+    return None
+
+
+def _same_source_file(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return bool(set(left.get("source_paths", []) or []) & set(right.get("source_paths", []) or []))
+
+
+def _inventory_group_sort_key(group: dict[str, Any]) -> tuple[Any, ...]:
+    source_paths = group.get("source_paths", []) or [""]
+    chunk_range = group.get("chunk_range", {}) if isinstance(group.get("chunk_range"), dict) else {}
+    return (
+        str(group.get("source_collection") or ""),
+        str(source_paths[0]),
+        _int(chunk_range.get("start")),
+        str(group.get("group_id") or ""),
+    )
+
+
+def _is_auxiliary_group(group: dict[str, Any]) -> bool:
+    if group.get("auxiliary_only"):
+        return True
+    chunk_count = int((group.get("length_stats") or {}).get("chunk_count") or len(group.get("source_chunks", []) or []))
+    title = str(group.get("title_hint") or "")
+    role = str(group.get("fragment_role") or group.get("teaching_role") or group.get("completeness") or "").lower()
+    core_concepts = _string_list(group.get("core_concepts"))
+    if chunk_count > 1 and core_concepts:
+        return False
+    if _is_noise_title(title):
+        return True
+    if role in _AUXILIARY_FRAGMENT_ROLES and (chunk_count <= 1 or not core_concepts):
+        return True
+    if not core_concepts and str(group.get("teaching_role") or "").lower() in {"review", "example", "exercise"}:
+        return True
+    return False
+
+
+def _is_noise_title(title: str) -> bool:
+    stripped = title.strip()
+    if not stripped or stripped in _NOISE_TITLES:
+        return True
+    if re.fullmatch(r"§\s*[\d\-–—.]*", stripped):
+        return True
+    if re.fullmatch(r"\d{4}年(?:\d{1,2}月\d{1,2}日)?(?:[、,，].*)?", stripped):
+        return True
+    if re.fullmatch(r"[一二三四五六七八九十\d]、?", stripped):
+        return True
+    if (
+        (stripped.startswith("$") or stripped.startswith("\\") or re.search(r"[_^γθαβ]", stripped))
+        and re.fullmatch(r"\$?\\?[A-Za-zγθαβ]+(?:[_^].*)?\$?", stripped)
+        and len(stripped) <= 8
+    ):
+        return True
+    return False
+
+
+def _merge_auxiliary_group(target: dict[str, Any], auxiliary: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(target)
+    merged["source_chunks"] = _unique([*target.get("source_chunks", []), *auxiliary.get("source_chunks", [])])
+    merged["source_paths"] = _unique([*target.get("source_paths", []), *auxiliary.get("source_paths", [])])
+    merged["section_ids"] = _unique([*target.get("section_ids", []), *auxiliary.get("section_ids", [])])
+    merged["heading_path"] = _unique([*target.get("heading_path", []), *auxiliary.get("heading_path", [])])
+    for key, limit in (
+        ("weak_concepts", 18),
+        ("methods", 12),
+        ("misconceptions", 12),
+        ("prerequisites", 12),
+        ("low_confidence_section_terms", 12),
+        ("raw_formulas", 12),
+        ("formula_signatures", 12),
+        ("evidence_spans", 12),
+    ):
+        merged[key] = _unique([*target.get(key, []), *auxiliary.get(key, [])])[:limit]
+    if auxiliary.get("core_concepts"):
+        merged["core_concepts"] = _unique([*target.get("core_concepts", []), *auxiliary.get("core_concepts", [])])[:18]
+    merged["formula_roles"] = [
+        *target.get("formula_roles", []),
+        *[
+            item
+            for item in auxiliary.get("formula_roles", []) or []
+            if item not in target.get("formula_roles", [])
+        ],
+    ][:12]
+    merged["representative_chunks"] = [
+        *target.get("representative_chunks", []),
+        *auxiliary.get("representative_chunks", []),
+    ][:8]
+    merged["chunk_range"] = {
+        "start": min(
+            _int((target.get("chunk_range") or {}).get("start")),
+            _int((auxiliary.get("chunk_range") or {}).get("start")),
+        ),
+        "end": max(
+            _int((target.get("chunk_range") or {}).get("end")),
+            _int((auxiliary.get("chunk_range") or {}).get("end")),
+        ),
+    }
+    merged["length_stats"] = {
+        "token_estimate": _int((target.get("length_stats") or {}).get("token_estimate"))
+        + _int((auxiliary.get("length_stats") or {}).get("token_estimate")),
+        "chunk_count": len(merged["source_chunks"]),
+        "estimated_output_lines": _int((target.get("length_stats") or {}).get("estimated_output_lines"))
+        + _int((auxiliary.get("length_stats") or {}).get("estimated_output_lines")),
+    }
+    aux_id = str(auxiliary.get("group_id") or "")
+    if aux_id:
+        merged["auxiliary_group_ids"] = _unique([*target.get("auxiliary_group_ids", []), aux_id])
+    merged["auxiliary_evidence"] = [
+        *target.get("auxiliary_evidence", []),
+        {
+            "group_id": aux_id,
+            "title_hint": auxiliary.get("title_hint", ""),
+            "fragment_role": auxiliary.get("fragment_role", ""),
+            "source_chunks": auxiliary.get("source_chunks", []),
+        },
+    ]
+    return merged
 
 
 def _mark_inventory_chunk_progress(
@@ -653,6 +825,9 @@ def _group_from_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "source_type": str(first.get("source_type") or ""),
         "teaching_role": str(first.get("teaching_role") or ""),
         "completeness": str(first.get("completeness") or ""),
+        "fragment_role": str(first.get("fragment_role") or ""),
+        "merge_confidence": str(first.get("merge_confidence") or ""),
+        "new_topic_reason": str(first.get("new_topic_reason") or ""),
         "evidence_spans": _ranked_terms((record.get("evidence_spans", []) for record in records), 12),
         "summary": str(first.get("summary") or ""),
         "representative_chunks": [_representative_chunk(record) for record in records[:8]],
@@ -682,6 +857,9 @@ def _merge_group_record(group: dict[str, Any], record: dict[str, Any]) -> dict[s
                 "low_confidence_section_terms": chunk.get("low_confidence_section_terms", []),
                 "heading_path": chunk.get("heading_path", []),
                 "summary": chunk.get("summary", ""),
+                "fragment_role": chunk.get("fragment_role", ""),
+                "merge_confidence": chunk.get("merge_confidence", ""),
+                "new_topic_reason": chunk.get("new_topic_reason", ""),
                 "analysis_mode": group.get("analysis_mode"),
             }
             for chunk in group.get("representative_chunks", [])
@@ -691,7 +869,16 @@ def _merge_group_record(group: dict[str, Any], record: dict[str, Any]) -> dict[s
     ]
     merged = _group_from_records(records)
     merged["group_id"] = group.get("group_id") or merged["group_id"]
-    for key in ("title_hint", "source_type", "teaching_role", "completeness", "summary"):
+    for key in (
+        "title_hint",
+        "source_type",
+        "teaching_role",
+        "completeness",
+        "fragment_role",
+        "merge_confidence",
+        "new_topic_reason",
+        "summary",
+    ):
         if record.get(key):
             merged[key] = record[key]
     merged["source_chunks"] = _unique([*group.get("source_chunks", []), _chunk_ref(record)])
@@ -736,6 +923,9 @@ def _representative_chunk(record: dict[str, Any]) -> dict[str, Any]:
         "formula_signatures": record.get("formula_signatures", [])[:8],
         "low_confidence_section_terms": record.get("low_confidence_section_terms", [])[:8],
         "summary": record.get("summary", ""),
+        "fragment_role": record.get("fragment_role", ""),
+        "merge_confidence": record.get("merge_confidence", ""),
+        "new_topic_reason": record.get("new_topic_reason", ""),
     }
 
 
@@ -797,7 +987,16 @@ def _merge_ai_analysis(base: dict[str, Any], ai: dict[str, Any]) -> dict[str, An
                     str(ai.get("summary") or ""),
                 )
             merged[key] = cleaned[:18 if key == "core_concepts" else 10]
-    for key in ("source_type", "teaching_role", "summary", "title_hint", "completeness"):
+    for key in (
+        "source_type",
+        "teaching_role",
+        "summary",
+        "title_hint",
+        "completeness",
+        "fragment_role",
+        "merge_confidence",
+        "new_topic_reason",
+    ):
         value = ai.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = _clean_sentence(value) if key == "summary" else value.strip()[:80]
@@ -825,7 +1024,16 @@ def _merge_cached_ai_analysis(base: dict[str, Any], cached: dict[str, Any]) -> d
         value = cached.get(key)
         if isinstance(value, list):
             merged[key] = list(value)
-    for key in ("source_type", "teaching_role", "summary", "title_hint", "completeness"):
+    for key in (
+        "source_type",
+        "teaching_role",
+        "summary",
+        "title_hint",
+        "completeness",
+        "fragment_role",
+        "merge_confidence",
+        "new_topic_reason",
+    ):
         value = cached.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = value
