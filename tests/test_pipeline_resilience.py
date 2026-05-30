@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 import tree.engine as engine_module
-from tree.curriculum.candidate_nodes import save_candidate_nodes
-from tree.curriculum.graph import load_knowledge_graph
+from tree.curriculum.candidate_nodes import rebuild_candidate_nodes, save_candidate_nodes
+from tree.curriculum.graph import build_selected_node_context, load_knowledge_graph, rebuild_knowledge_graph
 from tree.engine import TreeEngine, _attach_graph_selection, _pending_materials
 from tree.io import paths
 from tree.rag.client import RAGClient
@@ -22,6 +22,79 @@ class _Point:
             "content_kind": "source",
             "is_draft": False,
         }
+
+
+def _planning_chunk(
+    chunk_ref: str,
+    collection: str,
+    concepts: list[str],
+    *,
+    methods: list[str] | None = None,
+    formulas: list[str] | None = None,
+    section_id: str = "",
+) -> dict:
+    return {
+        "chunk_ref": chunk_ref,
+        "chunk_id": chunk_ref,
+        "chunk_index": int(chunk_ref.rsplit("#", 1)[-1]),
+        "source_collection": collection,
+        "path": f"{collection}.md",
+        "section_id": section_id,
+        "core_concepts": concepts,
+        "prerequisites": [],
+        "methods": methods or [],
+        "formulas": formulas or [],
+        "summary": " ".join(concepts),
+    }
+
+
+def _planning_candidate(
+    candidate_id: str,
+    concepts: list[str],
+    *,
+    chunks: list[str],
+    sources: list[str] | None = None,
+    priority: float = 0.5,
+    estimated_output_lines: int | None = None,
+) -> dict:
+    candidate = {
+        "candidate_id": candidate_id,
+        "status": "pending",
+        "title_hint": candidate_id.rsplit(":", 1)[-1],
+        "primary_source_collection": (sources or ["source"])[0],
+        "source_collections": sources or ["source"],
+        "core_concepts": concepts,
+        "prerequisite_concepts": [],
+        "prerequisite_candidates": [],
+        "representative_chunks": [
+            {"chunk_ref": chunk, "core_concepts": concepts, "summary": " ".join(concepts)}
+            for chunk in chunks
+        ],
+        "selection_priority": priority,
+    }
+    if estimated_output_lines is not None:
+        candidate["estimated_output_lines"] = estimated_output_lines
+    return candidate
+
+
+def _planning_candidate_nodes(*candidates: dict) -> dict:
+    return {"version": 1, "kind": "candidate_nodes", "chapter_candidates": list(candidates)}
+
+
+def _planning_ledger_record(path: str, concepts: list[str], *, chunks: list[str], sources: list[str]) -> dict:
+    return {
+        "chapter": "chapter",
+        "file_seq": path.split("/")[-1].split(".", 1)[0],
+        "filename": path.split("/")[-1],
+        "path": path,
+        "knowledge_point": concepts[0],
+        "covered_concepts": concepts,
+        "prerequisites": [],
+        "hit_chunks": chunks,
+        "source_collections": sources,
+        "graph_node_id": None,
+        "required_nodes": [],
+    }
 
 
 def test_scroll_chunks_reads_all_qdrant_pages() -> None:
@@ -44,6 +117,141 @@ def test_scroll_chunks_reads_all_qdrant_pages() -> None:
 
     assert [chunk["chunk_id"] for chunk in chunks] == ["doc-000", "doc-001"]
     assert rag._client.calls == [None, "next-page"]
+
+
+def test_writeable_chunk_cluster_merges_thin_same_section_chunks(tmp_path: Path) -> None:
+    inventory = {
+        "version": 1,
+        "chunks": [
+            _planning_chunk(
+                "8/a#001",
+                "8. 沉淀溶解平衡",
+                ["溶解度阈值"],
+                methods=["沉淀分离判据"],
+                formulas=["c < threshold"],
+                section_id="沉淀分离阈值",
+            ),
+            _planning_chunk(
+                "8/a#002",
+                "8. 沉淀溶解平衡",
+                ["相对溶解度"],
+                methods=["分离效果比较"],
+                formulas=["S1 / S2"],
+                section_id="沉淀分离阈值",
+            ),
+            _planning_chunk(
+                "8/a#003",
+                "8. 沉淀溶解平衡",
+                ["分离完全条件"],
+                methods=["定量分离判据"],
+                formulas=["99.9%"],
+                section_id="沉淀分离阈值",
+            ),
+            _planning_chunk("8/a#004", "8. 沉淀溶解平衡", ["晶格能"], section_id="晶体结构"),
+        ],
+        "collections": [
+            {
+                "source_collection": "8. 沉淀溶解平衡",
+                "core_concepts": ["溶解度阈值", "相对溶解度", "分离完全条件", "晶格能"],
+                "related_collections": [],
+            }
+        ],
+    }
+
+    nodes = rebuild_candidate_nodes(tmp_path, inventory)
+
+    merged = next(
+        item
+        for item in nodes["chapter_candidates"]
+        if {"8/a#001", "8/a#002", "8/a#003"}.issubset(
+            {chunk["chunk_ref"] for chunk in item["representative_chunks"]}
+        )
+    )
+
+    assert "8/a#004" not in {chunk["chunk_ref"] for chunk in merged["representative_chunks"]}
+    assert merged["chunk_count"] == 3
+    assert merged["estimated_output_lines"] >= 300
+    assert merged["size_band"] == "fit"
+
+
+def test_finished_trunk_absorbs_candidate_covered_by_multiple_outputs(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _planning_candidate_nodes(
+            _planning_candidate(
+                "candidate:covered-threshold",
+                ["溶解度阈值", "相对溶解度"],
+                chunks=["source#001", "source#002"],
+                sources=["8. 沉淀溶解平衡"],
+            ),
+            _planning_candidate(
+                "candidate:new-complex",
+                ["配位解离平衡"],
+                chunks=["source#003"],
+                sources=["9. 配位解离平衡"],
+            ),
+        ),
+        {
+            "version": 1,
+            "records": [
+                _planning_ledger_record(
+                    "outputs/tree-001/01.threshold.md",
+                    ["溶解度阈值"],
+                    chunks=["source#001"],
+                    sources=["8. 沉淀溶解平衡"],
+                ),
+                _planning_ledger_record(
+                    "outputs/tree-001/02.relative.md",
+                    ["相对溶解度"],
+                    chunks=["source#002"],
+                    sources=["8. 沉淀溶解平衡"],
+                ),
+            ],
+        },
+    )
+
+    covered = next(node for node in graph["nodes"] if node["node_id"] == "candidate:covered-threshold")
+    selected = next(node for node in graph["nodes"] if node["planner_selected"])
+
+    assert covered["status"] == "covered"
+    assert covered["coverage_reason"] == "absorbed by finished trunk solvability"
+    assert covered["finished_solvability"] >= 0.8
+    assert set(covered["covered_by_outputs"]) == {
+        "finished:outputs/tree-001/01.threshold.md",
+        "finished:outputs/tree-001/02.relative.md",
+    }
+    assert selected["node_id"] == "candidate:new-complex"
+
+
+def test_planner_prefers_writeable_size_candidate_and_exposes_scope_context(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _planning_candidate_nodes(
+            _planning_candidate(
+                "candidate:thin",
+                ["术语碎片"],
+                chunks=["source#001"],
+                priority=0.95,
+                estimated_output_lines=150,
+            ),
+            _planning_candidate(
+                "candidate:writeable",
+                ["完整方法组"],
+                chunks=["source#002", "source#003", "source#004"],
+                priority=0.50,
+                estimated_output_lines=360,
+            ),
+        ),
+        {"version": 1, "records": []},
+    )
+
+    selected = next(node for node in graph["nodes"] if node["planner_selected"])
+    context = build_selected_node_context(graph)
+
+    assert selected["node_id"] == "candidate:writeable"
+    assert selected["size_fit"] > 0.9
+    assert "Expected output size: 360 lines" in context
+    assert "Chunk cluster size: 3 chunks" in context
 
 
 def test_manifest_embedded_flag_is_cleared_when_source_vectors_are_missing(tmp_path: Path) -> None:

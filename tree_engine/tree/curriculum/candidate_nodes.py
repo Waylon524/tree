@@ -328,6 +328,8 @@ def _chunk_cluster_node(chunk: dict[str, Any]) -> dict[str, Any]:
         "core_concepts": chunk.get("core_concepts", []),
         "prerequisites": chunk.get("prerequisites", []),
         "methods": chunk.get("methods", []),
+        "formulas": chunk.get("formulas", []),
+        "section_id": chunk.get("section_id", ""),
         "signature_terms": chunk.get("signature_terms", []),
         "hit_chunks": [chunk.get("chunk_ref", "")],
         "source_collections": [chunk.get("source_collection", "")],
@@ -347,6 +349,7 @@ def _candidate_pair_scores(left: dict[str, Any], right: dict[str, Any]) -> dict[
         set(right.get("signature_terms", [])),
     )
     scores["adjacent"] = 1.0 if _same_path_adjacent(left, right) else 0.0
+    scores["section"] = 1.0 if _same_section_adjacent(left, right) else 0.0
     return scores
 
 
@@ -367,6 +370,8 @@ def _should_cluster(scores: dict[str, float]) -> bool:
         or scores.get("signature", 0.0) >= _MIN_ADJACENT_SIGNATURE
     ):
         return True
+    if scores.get("section", 0.0) and scores.get("adjacent", 0.0):
+        return True
     return relation_affinity(scores) >= _MIN_CLUSTER_AFFINITY and (
         scores["concept"] > 0 or prerequisite > 0
     )
@@ -378,6 +383,14 @@ def _same_path_adjacent(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if str(left.get("path") or "") != str(right.get("path") or ""):
         return False
     return abs(_int(left.get("chunk_index")) - _int(right.get("chunk_index"))) <= 1
+
+
+def _same_section_adjacent(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_section = str(left.get("section_id") or "")
+    right_section = str(right.get("section_id") or "")
+    if not left_section or left_section != right_section:
+        return False
+    return _same_path_adjacent(left, right)
 
 
 def _knowledge_signature_terms(chunk: dict[str, Any]) -> list[str]:
@@ -437,6 +450,8 @@ def _candidate_from_cluster(
     )
     concepts = _ranked_terms((chunk.get("core_concepts", []) for chunk in cluster), limit=24)
     prerequisites = _ranked_terms((chunk.get("prerequisites", []) for chunk in cluster), limit=16)
+    methods = _ranked_terms((chunk.get("methods", []) for chunk in cluster), limit=16)
+    formulas = _ranked_terms((chunk.get("formulas", []) for chunk in cluster), limit=12)
     section_ids = _unique(chunk.get("section_id", "") for chunk in cluster)[:16]
     representative_chunks = [_representative_chunk(chunk) for chunk in cluster[:8]]
     related_collections = _cluster_related_collections(
@@ -452,9 +467,15 @@ def _candidate_from_cluster(
         "source_collections": source_collections,
         "core_concepts": concepts,
         "prerequisite_concepts": prerequisites,
+        "methods": methods,
+        "formulas": formulas,
         "prerequisite_candidates": [],
         "section_ids": section_ids,
         "representative_chunks": representative_chunks,
+        "chunk_count": len(cluster),
+        "estimated_output_lines": _estimated_output_lines(cluster, concepts, methods, formulas),
+        "size_band": _size_band(_estimated_output_lines(cluster, concepts, methods, formulas)),
+        "cluster_cohesion": _cluster_cohesion(cluster),
         "related_collections": related_collections,
         "selection_priority": _cluster_selection_priority(cluster, concepts, related_collections, status),
         "reason": _cluster_reason(cluster, source_collections, concepts, prerequisites, status),
@@ -507,6 +528,50 @@ def _cluster_selection_priority(
         + len(cluster) / 8 * 0.40
         + len(related_collections) / 5 * 0.15,
     )
+
+
+def _estimated_output_lines(
+    cluster: list[dict[str, Any]],
+    concepts: list[str],
+    methods: list[str],
+    formulas: list[str],
+) -> int:
+    return int(
+        130
+        + len(cluster) * 45
+        + min(len(concepts), 12) * 20
+        + min(len(methods), 8) * 15
+        + min(len(formulas), 8) * 10
+    )
+
+
+def _size_band(estimated_lines: int) -> str:
+    if estimated_lines < 260:
+        return "thin"
+    if estimated_lines > 560:
+        return "broad"
+    return "fit"
+
+
+def _cluster_cohesion(cluster: list[dict[str, Any]]) -> float:
+    if len(cluster) <= 1:
+        return 1.0
+    scores = []
+    nodes = [_chunk_cluster_node(chunk) for chunk in cluster]
+    for index, left in enumerate(nodes):
+        for right in nodes[index + 1 :]:
+            pair_scores = _candidate_pair_scores(left, right)
+            scores.append(
+                max(
+                    relation_affinity(pair_scores),
+                    pair_scores.get("method", 0.0),
+                    pair_scores.get("signature", 0.0),
+                    pair_scores.get("section", 0.0) * 0.85,
+                )
+            )
+    if not scores:
+        return 1.0
+    return round(sum(scores) / len(scores), 4)
 
 
 def _cluster_reason(

@@ -24,6 +24,7 @@ _MULTI_PARENT_PREREQ_THRESHOLD = 0.25
 _MAX_SUPPORTING_PARENTS = 4
 _STRONG_PARENT_SOURCE = 0.50
 _STRONG_PARENT_CHUNK = 0.45
+_FINISHED_TRUNK_SOLVABILITY = 0.82
 
 
 def load_knowledge_graph(root: Path) -> dict[str, Any]:
@@ -137,6 +138,9 @@ def build_selected_node_context(graph: dict[str, Any], node_id: str | None = Non
             f"Support score: {selected.get('support_score', 0):.2f}",
             f"Tree distance: {selected.get('tree_distance', 0):.2f}",
             f"Tree depth: {selected.get('tree_depth', 0)}",
+            f"Expected output size: {int(selected.get('estimated_output_lines') or 0)} lines",
+            f"Size fit: {float(selected.get('size_fit') or 0):.2f}",
+            f"Chunk cluster size: {int(selected.get('chunk_count') or len(selected.get('hit_chunks', [])))} chunks",
             f"Why selected: {selected.get('why_selected') or 'n/a'}",
             "",
             "Allowed scope:",
@@ -282,10 +286,16 @@ def _candidate_node(candidate: dict[str, Any]) -> dict[str, Any]:
         "core_concepts": _string_list(candidate.get("core_concepts")),
         "prerequisites": _string_list(candidate.get("prerequisite_concepts")),
         "hit_chunks": _chunk_refs(candidate.get("representative_chunks")),
+        "methods": _string_list(candidate.get("methods")),
+        "formulas": _string_list(candidate.get("formulas")),
         "required_nodes": _string_list(candidate.get("prerequisite_candidates")),
         "related_nodes": [],
         "reason": str(candidate.get("reason") or ""),
         "selection_priority": float(candidate.get("selection_priority") or 0),
+        "chunk_count": int(candidate.get("chunk_count") or len(candidate.get("representative_chunks", []) or [])),
+        "estimated_output_lines": _candidate_estimated_output_lines(candidate),
+        "size_band": str(candidate.get("size_band") or _size_band(_candidate_estimated_output_lines(candidate))),
+        "cluster_cohesion": float(candidate.get("cluster_cohesion") or 0.0),
     }
 
 
@@ -400,6 +410,7 @@ def _needs_split(node: dict[str, Any]) -> bool:
 
 def _resolve_finished_coverage(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
     by_id = {node.get("node_id"): node for node in nodes}
+    finished = [node for node in nodes if node.get("kind") == "finished"]
     finished_by_graph_id = {
         node.get("graph_node_id"): node
         for node in nodes
@@ -411,6 +422,18 @@ def _resolve_finished_coverage(nodes: list[dict[str, Any]], edges: list[dict[str
         source = finished_by_graph_id.get(node.get("node_id"))
         if source:
             _mark_candidate_covered(node, source, "covered by finished output graph_node_id")
+    for node in nodes:
+        if node.get("kind") != "candidate" or node.get("status") != "planned":
+            continue
+        solvability, supporting_outputs = _finished_trunk_solvability(node, finished)
+        node["finished_solvability"] = round(solvability, 4)
+        if solvability >= _FINISHED_TRUNK_SOLVABILITY:
+            _mark_candidate_covered(
+                node,
+                supporting_outputs[0] if supporting_outputs else {},
+                "absorbed by finished trunk solvability",
+                supporting_outputs=supporting_outputs,
+            )
     for edge in edges:
         if edge.get("relation") != "duplicate":
             continue
@@ -418,15 +441,64 @@ def _resolve_finished_coverage(nodes: list[dict[str, Any]], edges: list[dict[str
         right = by_id.get(edge.get("to"))
         if not left or not right:
             continue
+        if left.get("status") == "covered" or right.get("status") == "covered":
+            continue
         if left.get("kind") == "finished" and right.get("kind") == "candidate":
             _mark_candidate_covered(right, left, "covered by finished output duplicate relation")
         elif right.get("kind") == "finished" and left.get("kind") == "candidate":
             _mark_candidate_covered(left, right, "covered by finished output duplicate relation")
 
 
-def _mark_candidate_covered(candidate: dict[str, Any], finished: dict[str, Any], reason: str) -> None:
+def _finished_trunk_solvability(
+    candidate: dict[str, Any],
+    finished: list[dict[str, Any]],
+) -> tuple[float, list[dict[str, Any]]]:
+    if not finished:
+        return 0.0, []
+    candidate_concepts = _term_set(candidate.get("core_concepts", []))
+    candidate_chunks = set(candidate.get("hit_chunks", []))
+    candidate_sources = set(candidate.get("source_collections", []))
+    finished_concepts: set[str] = set()
+    finished_chunks: set[str] = set()
+    finished_sources: set[str] = set()
+    supporting = []
+    for node in finished:
+        node_concepts = _term_set(node.get("core_concepts", []))
+        node_chunks = set(node.get("hit_chunks", []))
+        node_sources = set(node.get("source_collections", []))
+        finished_concepts.update(node_concepts)
+        finished_chunks.update(node_chunks)
+        finished_sources.update(node_sources)
+        if (
+            node_concepts & candidate_concepts
+            or node_chunks & candidate_chunks
+            or node_sources & candidate_sources
+        ):
+            supporting.append(node)
+    concept_coverage = _overlap_score(finished_concepts, candidate_concepts)
+    chunk_coverage = _overlap_score(finished_chunks, candidate_chunks)
+    source_coverage = _overlap_score(finished_sources, candidate_sources)
+    solvability = max(
+        concept_coverage,
+        chunk_coverage,
+        concept_coverage * 0.50 + chunk_coverage * 0.30 + source_coverage * 0.20,
+    )
+    return min(1.0, solvability), supporting
+
+
+def _mark_candidate_covered(
+    candidate: dict[str, Any],
+    finished: dict[str, Any],
+    reason: str,
+    *,
+    supporting_outputs: list[dict[str, Any]] | None = None,
+) -> None:
     candidate["status"] = "covered"
     candidate["covered_by_output"] = finished.get("node_id")
+    if supporting_outputs is not None:
+        candidate["covered_by_outputs"] = [
+            node.get("node_id") for node in supporting_outputs if node.get("node_id")
+        ]
     candidate["coverage_reason"] = reason
     candidate["eligible"] = False
 
@@ -453,6 +525,7 @@ def _apply_incremental_forest_planner(nodes: list[dict[str, Any]], edges: list[d
         node["tree_distance"] = 1.0
         node["distance_components"] = _empty_distance_components()
         node["supporting_parents"] = []
+        node["size_fit"] = round(_size_fit(node), 4)
         node["evidence_strength"] = round(_evidence_strength(node), 4)
         node.setdefault("tree_depth", 0)
 
@@ -665,6 +738,7 @@ def _branch_sort_key(node: dict[str, Any], edges: list[dict[str, Any]]) -> tuple
         -float(node.get("branch_score") or 0),
         -float(node.get("combined_prerequisite_coverage") or 0),
         -float(node.get("prerequisite_coverage") or 0),
+        -_size_fit(node),
         -float(node.get("best_parent_affinity") or 0),
         -float(node.get("evidence_strength") or 0),
         str(node.get("node_id", "")),
@@ -970,7 +1044,8 @@ def _root_score(node: dict[str, Any], candidates: list[dict[str, Any]], edges: l
             1.0,
             low_prerequisite * 0.35
             + outgoing_support * 0.30
-            + _evidence_strength(node) * 0.25
+            + _evidence_strength(node) * 0.20
+            + _size_fit(node) * 0.15
             + float(node.get("selection_priority") or 0) * 0.10
             - duplicate_penalty,
         ),
@@ -996,6 +1071,47 @@ def _evidence_strength(node: dict[str, Any]) -> float:
         len(node.get("core_concepts", [])) / 12 * 0.45
         + len(node.get("hit_chunks", [])) / 6 * 0.35
         + len(node.get("source_collections", [])) / 3 * 0.20,
+    )
+
+
+def _size_fit(node: dict[str, Any]) -> float:
+    lines = int(node.get("estimated_output_lines") or 0)
+    if lines <= 0:
+        lines = (
+            130
+            + len(node.get("hit_chunks", [])) * 45
+            + min(len(node.get("core_concepts", [])), 12) * 20
+            + min(len(node.get("methods", [])), 8) * 15
+            + min(len(node.get("formulas", [])), 8) * 10
+        )
+    if 300 <= lines <= 500:
+        return 1.0
+    if lines < 300:
+        return max(0.0, round(lines / 300, 4))
+    return max(0.0, round(1 - (lines - 500) / 500, 4))
+
+
+def _size_band(estimated_lines: int) -> str:
+    if estimated_lines < 260:
+        return "thin"
+    if estimated_lines > 560:
+        return "broad"
+    return "fit"
+
+
+def _candidate_estimated_output_lines(candidate: dict[str, Any]) -> int:
+    explicit = candidate.get("estimated_output_lines")
+    if explicit is not None:
+        try:
+            return int(explicit)
+        except (TypeError, ValueError):
+            pass
+    return int(
+        130
+        + len(candidate.get("representative_chunks", []) or []) * 45
+        + min(len(candidate.get("core_concepts", []) or []), 12) * 20
+        + min(len(candidate.get("methods", []) or []), 8) * 15
+        + min(len(candidate.get("formulas", []) or []), 8) * 10
     )
 
 

@@ -55,6 +55,8 @@ NN. <知识点中文标题>
 - The exam must target exactly the selected node, not a whole source section, sibling node, future branch, or only a sub-rule inside the selected node.
 - Treat a valid file as a complete learning unit: concept boundary, method/procedure, representative examples, common misconceptions, and self-checkable applications should fit together.
 - Local notation rules, naming separators, prefixes, formula-writing conventions, and small exception cases that serve the same procedure must be merged into the same node-level file unless the planner explicitly selected different nodes for them.
+- Exam design should include a prerequisite bridge, but must primarily test the selected node delta. Q1 may verify prerequisite linkage, Q2 should test the selected node's core method, and Q3 should test application, comparison, or misconception diagnosis.
+- The first iteration should expose precise missing current-node knowledge, not fail because of unrelated future knowledge or sibling-node material.
 - Use exactly 3 top-level questions.
 - Each top-level question may contain at most 3 subquestions.
 - Prefer this coverage pattern:
@@ -240,7 +242,10 @@ For each question, answer with:
 Every step must cite [Evidence N]. If using a prior draft, first extract the exact passage as [Evidence N] with its filename, then cite that evidence. Stop immediately when a needed concept is missing.
 
 ### Part C: Statement of Missing Logic
-Use [!! Logic Gap] with the exact missing concept/formula/method and where the deduction stopped.
+Use one of these labels with the exact missing concept/formula/method and where the deduction stopped:
+- [!! Current Draft Gap]: the concept, formula, method, symbol meaning, or example pattern is absent from the current draft but may belong to the selected node.
+- [!! Prerequisite Gap]: the concept is absent from both the current draft and all prior finished outputs; this may mean the planner prerequisite relation may be incomplete.
+- [!! No Evidence Found]: no supplied current draft, prior file, or Learned RAG Hit supports the required step.
 
 ### Part D: Subjective Feedback
 Append 教材学习反馈: concise, specific, and tied to missing evidence, ambiguous wording, missing support, or confusing terminology.
@@ -258,6 +263,8 @@ OPTIMIZE: a draft exists. Repair only the defects identified by the latest Bottl
 
 In OPTIMIZE mode, be conservative: do not rewrite the whole draft, reorder correct sections, or expand unrelated content. Patch the smallest set of sections needed to repair the reported defects.
 
+If a defect exposes a broken reasoning chain, repair the smallest coherent logic block, not merely one isolated sentence. Rebuild the local paragraph or subsection so prerequisite, definition, formula choice, substitution, interpretation, and conclusion connect naturally.
+
 ## Examiner Instruction Precedence
 The supplied [Writer_Instructions] override defaults here. Respect its scope, required defects, forbidden topics, citation constraints, and line-count limit.
 
@@ -271,11 +278,21 @@ When graph context is provided, write only the incremental delta for the selecte
 
 If the selected node contains multiple source chunks, exercise prompts, worked examples, or note fragments, integrate all source chunks that belong to the selected node into one coherent teachable unit. Do not split the selected node by chunk, exercise number, example variant, local notation rule, or source-document boundary unless the planner selected separate nodes.
 
+## Pre-Write Protocol
+Before writing, silently perform this quality planning pass:
+1. Unpack: identify prior prerequisite concepts, current-node concepts, formulas, methods, misconceptions, and concepts that must only be cited from finished outputs.
+2. Match Format: follow the style and LaTeX conventions of prior finished outputs where they are good, but never output YAML front matter or metadata labels.
+3. Deduce: locate every skipped "obvious" step. Define terms before use, explain formula choice, show substitutions, and state boundary conditions.
+4. Reflect: check whether a zero-baseline learner can follow the explanation, examples, and self-checks without importing outside knowledge.
+5. Size Check: Target length: 300-500 lines. Below 300 lines usually means the node is under-explained; above 500 lines usually means the node is too broad or contains sibling/future material.
+
 ## Hard Constraints
 - No placeholder text, ellipses, "etc.", "similarly", or skipped derivations.
 - Do not pre-write future knowledge points.
 - Use Markdown + LaTeX. Inline math: $...$; display math: $$...$$.
 - Every inference step, assumption, substitution, and boundary condition must be explicit.
+- Every prerequisite must either be taught in this file or explicitly cited from prior finished outputs.
+- Every formula must have local symbol explanations before it is used in calculation.
 - Reference prior concepts as [概念名](filename.md#section) when possible.
 - Define every new concept before using it.
 - Explain every formula's symbols before substitution.
@@ -293,10 +310,13 @@ followed by a note that the requested scope duplicates finished outputs and shou
 - Do not include source material outside the current knowledge point just because it appears in retrieval.
 - Do not introduce future knowledge unless [Writer_Instructions] explicitly marks it as prerequisite repair.
 
-## Example and Self-Test Requirements
+## Example Requirements
 - Examples must cover the reported defects without copying hidden exam wording.
-- Self-test questions must check the current knowledge point, but must not reproduce blind exam questions or their numeric setups.
-- Every example solution must show definitions, formula choice, substitutions, intermediate steps, and final interpretation.
+- Worked examples must be complete, but not locked to one rigid solution template.
+- For quantitative or procedural examples, include the natural full chain: problem framing/known quantities, model or principle selection, formula or procedure setup, substitution or execution, intermediate steps, result interpretation, and a boundary/check step.
+- For proof, concept discrimination, experiment design, humanities, or case-analysis examples, use the structure that fits the discipline, but still make the task premise, governing concepts, reasoning chain, conclusion, and boundary/exception checks explicit.
+- Do not add a separate self-test, exercises, practice questions, or homework section. Use worked examples as the only problem-based teaching form.
+- Every example solution must show the definitions or criteria being used, why they apply, the intermediate reasoning steps, and the final interpretation. Do not skip steps by saying "obvious", "similar", or "by analogy" without explanation.
 
 ## LaTeX Rendering Contract
 The final Markdown must render in a standard Markdown + KaTeX/MathJax renderer.
@@ -314,7 +334,7 @@ The final Markdown must render in a standard Markdown + KaTeX/MathJax renderer.
 - Before returning, scan the draft for math delimiters. If any `\\(`, `\\)`, `\\[`, or `\\]` remains, rewrite it to `$...$` or `$$...$$`.
 
 ## Size Check
-Before writing, estimate output length. If covering all listed defects would exceed the limit in [Writer_Instructions] (default 500 lines), output:
+Before writing, estimate output length. The normal target is 300-500 lines. If the result would be shorter than 300 lines, expand the explanation with definitions, symbol conventions, examples, checks, and misconceptions until the selected node is genuinely taught. If covering all listed defects would exceed the limit in [Writer_Instructions] (default 500 lines), output:
 EXAM_TOO_BROAD
 followed by the specific bloating defects. Do not write draft content.
 
@@ -325,18 +345,27 @@ Before returning, silently verify:
 - no future knowledge point was pre-written
 - no YAML front matter, metadata block, or hidden labels are present
 - every new symbol and concept is defined before use
+- every prerequisite is either taught here or explicitly cited from prior finished outputs
+- every example uses a discipline-appropriate complete reasoning structure, with final interpretation and boundary/check step
+- edge cases and boundary conditions are discussed where relevant
 - no derivation step is skipped
 - LaTeX delimiters satisfy the rendering contract
-- output remains within the line-count limit
+- output is normally 300-500 lines unless [Writer_Instructions] gives a stricter limit
 
 ## Mandatory Draft Shape
+Section intent:
+- 背景与应用场景: Background and application context.
+- 核心概念与符号约定: Core concepts and symbol conventions.
+- 原理与方法: Principles and methods.
+
 # NN. <Knowledge Point Name>
 
 ## 学习目标与先修前置
-## 核心内容
+## 背景与应用场景
+## 核心概念与符号约定
+## 原理与方法
 ## 例题
-## 常见误区
-## 自测题
+## 常见误区与检查点
 
 Do not output YAML front matter. Do not include metadata labels such as chapter, file_seq, difficulty, or confusion_points at the top of the draft. The first visible line must be the H1 title.
 
