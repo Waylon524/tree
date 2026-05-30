@@ -1221,11 +1221,13 @@ def build_watch_display_model(
     dag_model = build_dag_watch_model(dag, branches_doc, state, ledger) if mode == "dag" else {}
     source_ingest = _dict(progress_state.get("source_ingest"))
     learning = _dict(progress_state.get("learning_loop"))
+    planner = _planner_progress_or_legacy(progress_state)
     running_runs = [run for run in branch_runs if getattr(run, "status", "") == "running"]
     slots = _branch_run_slot_models(progress_state, running_runs, slot_count=2)
     return {
         "mode": mode,
         "source_ingest": source_ingest,
+        "planner_progress": planner,
         "learning_loop": learning,
         "dag": dag_model,
         "branch_run_slots": slots,
@@ -1308,6 +1310,7 @@ def build_dag_watch_model(
         "branches": branches,
         "branch_by_id": branch_by_id,
         "diagnostics": diagnostics,
+        "cluster_quality": dag.get("cluster_quality", {}),
         "orphan_node_ids": orphan_nodes,
     }
 
@@ -1316,7 +1319,7 @@ def render_source_processing_panel(model: dict[str, Any]) -> Panel:
     source_ingest = _dict(model.get("source_ingest"))
     ocr = _dict(source_ingest.get("ocr"))
     embedding = _dict(source_ingest.get("embedding"))
-    learning = _dict(model.get("learning_loop"))
+    planner = _planner_progress_or_legacy(model)
 
     table = Table(title="资料处理进度", expand=True)
     table.add_column("Track")
@@ -1343,12 +1346,16 @@ def render_source_processing_panel(model: dict[str, Any]) -> Panel:
         _truncate(str(embedding.get("current_chunk") or embedding.get("state") or ""), 52),
     )
 
-    stage_index = _int_value(learning.get("stage_index"))
-    stage_total = _int_value(learning.get("stage_total"))
+    stage_index = _int_value(planner.get("stage_index"))
+    stage_total = _int_value(planner.get("stage_total"))
+    planner_current = str(planner.get("stage_label") or planner.get("stage") or "等待 BranchRun 创建")
+    planner_diagnostics = _planner_diagnostic_label(planner)
+    if planner_diagnostics:
+        planner_current = f"{planner_current} · {planner_diagnostics}"
     table.add_row(
         "Planner",
         f"{_progress_bar(stage_index, stage_total)} {_progress_label(stage_index, stage_total)}",
-        _truncate(str(learning.get("stage_label") or learning.get("stage") or "等待 BranchRun 创建"), 52),
+        _truncate(planner_current, 52),
     )
     return Panel(table, title="资料处理进度", border_style=_TREE_BORDER)
 
@@ -1417,6 +1424,24 @@ def render_dag_ascii(model: dict[str, Any], width: int = 120) -> Text:
 
 def render_dag_legend(model: dict[str, Any]) -> Group:
     """Render node/branch legends and diagnostics for the DAG watch panel."""
+    panels = []
+    cluster_quality = _dict(model.get("cluster_quality"))
+    if cluster_quality:
+        quality_table = Table(title="聚类质量", expand=True)
+        quality_table.add_column("指标")
+        quality_table.add_column("值")
+        quality_table.add_row("KnowledgeGroups", str(cluster_quality.get("knowledge_groups") or 0))
+        quality_table.add_row("KnowledgeNodes", str(cluster_quality.get("knowledge_nodes") or 0))
+        quality_table.add_row("Merge components", str(cluster_quality.get("merge_components") or 0))
+        quality_table.add_row("Pending merges", str(cluster_quality.get("pending_merges") or 0))
+        quality_table.add_row("Generic titles", str(cluster_quality.get("generic_titles") or 0))
+        if _int_value(cluster_quality.get("pending_merges")):
+            quality_table.add_row(
+                "诊断",
+                "[yellow]当前树结构不可信，需要重新聚类[/yellow]",
+            )
+        panels.append(quality_table)
+
     node_table = Table(title="节点图例", expand=True)
     node_table.add_column("编号")
     node_table.add_column("标题")
@@ -1448,7 +1473,7 @@ def render_dag_legend(model: dict[str, Any]) -> Group:
             _truncate(str(branch.get("execution_path") or branch.get("blocked_reason") or ""), 36),
         )
 
-    panels = [node_table, branch_table]
+    panels.extend([node_table, branch_table])
     diagnostics = model.get("diagnostics") or []
     if diagnostics:
         diag_table = Table(title="诊断", expand=True)
@@ -2076,6 +2101,18 @@ def _dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def _planner_progress_or_legacy(value: dict[str, Any]) -> dict[str, object]:
+    planner = _dict(value.get("planner_progress"))
+    learning = _dict(value.get("learning_loop"))
+    planner_stage = str(planner.get("stage") or "")
+    if planner and planner_stage not in {"", "idle"}:
+        return planner
+    learning_stage = str(learning.get("stage") or "")
+    if learning and learning_stage not in {"", "idle"}:
+        return learning
+    return planner or learning
+
+
 def _string_list(value: object) -> list[str]:
     if isinstance(value, str):
         return [value] if value else []
@@ -2118,6 +2155,27 @@ def _ocr_current_label(ocr: dict[str, object]) -> str:
     if pages_total:
         return f"{current} pages {_progress_label(pages_done, pages_total)}"
     return current
+
+
+def _planner_diagnostic_label(planner: dict[str, object]) -> str:
+    diagnostics = planner.get("diagnostics")
+    if isinstance(diagnostics, list) and diagnostics:
+        first = diagnostics[0]
+        if isinstance(first, dict):
+            label = str(first.get("type") or first.get("reason") or first.get("message") or "")
+            count = first.get("count")
+            if label and count not in (None, ""):
+                return f"{label} x{count}"
+            if label:
+                return label
+        return f"{len(diagnostics)} diagnostics"
+    details = planner.get("details")
+    if isinstance(details, dict):
+        for key in ("blocked_reason", "blockage", "status"):
+            value = str(details.get(key) or "")
+            if value:
+                return value
+    return ""
 
 
 def _progress_bar(done: int, total: int, width: int = 18) -> str:

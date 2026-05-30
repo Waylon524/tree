@@ -23,8 +23,9 @@ def _candidate(
     prerequisites: list[str] | None = None,
     chunks: list[str] | None = None,
     lines: int = 320,
+    **extra: object,
 ) -> dict:
-    return {
+    candidate = {
         "candidate_id": node_id,
         "status": "pending",
         "title_hint": concepts[0],
@@ -40,6 +41,8 @@ def _candidate(
         "selection_priority": 0.5,
         "estimated_output_lines": lines,
     }
+    candidate.update(extra)
+    return candidate
 
 
 def _nodes(*candidates: dict) -> dict:
@@ -222,6 +225,81 @@ def test_canonical_merge_leak_blocks_duplicate_planned_nodes(tmp_path: Path) -> 
     assert any(item["kind"] == "canonical_merge_leak" for item in plan["dag"]["diagnostics"])
     assert all(branch["status"] == "blocked" for branch in plan["branches"]["branches"])
     assert "canonical_merge_leak" in _branch_plan_blockage(plan["branches"])
+
+
+def test_canonical_merge_pending_nodes_do_not_enter_ready_branches(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        {
+            "version": 1,
+            "kind": "candidate_nodes",
+            "diagnostics": [
+                {
+                    "kind": "canonical_merge_pending",
+                    "nodes": ["candidate:forced-a", "candidate:forced-b"],
+                    "group_ids": ["kg:forced:a", "kg:forced:b"],
+                    "reason": "Strongly similar groups require AI merge review.",
+                }
+            ],
+            "chapter_candidates": [
+                _candidate("candidate:forced-a", ["受迫振动", "共振"]),
+                _candidate("candidate:forced-b", ["受迫振动", "共振", "稳态"]),
+                _candidate("candidate:foundation", ["简谐振动"]),
+            ],
+        },
+        _ledger(),
+    )
+
+    plan = rebuild_branch_plan(tmp_path, graph, _ledger())
+
+    blocked = [
+        branch
+        for branch in plan["branches"]["branches"]
+        if set(branch["node_ids"]) & {"candidate:forced-a", "candidate:forced-b"}
+    ]
+    assert blocked
+    assert all(branch["status"] == "blocked" for branch in blocked)
+    assert any(branch["status"] == "ready" for branch in plan["branches"]["branches"])
+
+
+def test_noise_and_review_nodes_are_not_schedulable_as_root(tmp_path: Path) -> None:
+    graph = rebuild_knowledge_graph(
+        tmp_path,
+        _nodes(
+            _candidate(
+                "candidate:review",
+                ["温故知新"],
+                title_hint="温故知新",
+                core_concepts=[],
+                teaching_roles=["review"],
+                source_types=["review"],
+                representative_chunks=[
+                    {
+                        "chunk_ref": "lesson#000",
+                        "core_concepts": [],
+                        "teaching_role": "review",
+                        "source_type": "review",
+                    }
+                ],
+            ),
+            _candidate("candidate:foundation", ["基础概念"]),
+        ),
+        _ledger(),
+    )
+
+    plan = rebuild_branch_plan(tmp_path, graph, _ledger())
+
+    review_branches = [
+        branch
+        for branch in plan["branches"]["branches"]
+        if "candidate:review" in branch["node_ids"]
+    ]
+    assert review_branches
+    assert all(branch["status"] == "blocked" for branch in review_branches)
+    assert any(
+        branch["status"] == "ready" and "candidate:foundation" in branch["node_ids"]
+        for branch in plan["branches"]["branches"]
+    )
 
 
 def test_reconcile_finished_outputs_reads_branch_isolated_paths(tmp_path: Path) -> None:

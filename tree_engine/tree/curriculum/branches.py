@@ -62,7 +62,12 @@ def build_knowledge_dag(knowledge_graph: dict[str, Any]) -> dict[str, Any]:
         if isinstance(node, dict) and node.get("kind") in {"candidate", "knowledge_node"}
     ]
     node_ids = {node["node_id"] for node in nodes}
-    diagnostics = _canonical_merge_leak_diagnostics(knowledge_graph)
+    diagnostics = [
+        item
+        for item in knowledge_graph.get("diagnostics", [])
+        if isinstance(item, dict)
+    ]
+    diagnostics.extend(_canonical_merge_leak_diagnostics(knowledge_graph))
     edges = [
         _dag_edge(edge)
         for edge in knowledge_graph.get("edges", [])
@@ -81,6 +86,7 @@ def build_knowledge_dag(knowledge_graph: dict[str, Any]) -> dict[str, Any]:
         "edges": edges,
         "structural_roles": structural_roles,
         "diagnostics": diagnostics,
+        "cluster_quality": knowledge_graph.get("cluster_quality", {}),
     }
 
 
@@ -106,6 +112,9 @@ def build_knowledge_branches(
         elif set(branch["node_ids"]) & blocked_nodes:
             branch["status"] = "blocked"
             branch["blocked_reason"] = "canonical_merge_leak"
+        elif any(not node_lookup.get(node_id, {}).get("schedulable", True) for node_id in branch["coverage_node_ids"]):
+            branch["status"] = "blocked"
+            branch["blocked_reason"] = "not_schedulable"
         elif set(branch["coverage_node_ids"]).issubset(covered_nodes):
             branch["status"] = "complete"
         else:
@@ -293,6 +302,11 @@ def _knowledge_node_payload(node: dict[str, Any]) -> dict[str, Any]:
         "hit_chunks": _string_list(node.get("hit_chunks")),
         "source_collections": _string_list(node.get("source_collections")),
         "estimated_output_lines": int(node.get("estimated_output_lines") or 0),
+        "title_quality": str(node.get("title_quality") or "clean"),
+        "schedulable": bool(node.get("schedulable", True)),
+        "blocked_reason": str(node.get("blocked_reason") or ""),
+        "merged_group_ids": _string_list(node.get("merged_group_ids")),
+        "pending_merge_group_ids": _string_list(node.get("pending_merge_group_ids")),
     }
 
 
@@ -316,7 +330,16 @@ def _dag_edge(edge: dict[str, Any]) -> dict[str, Any]:
 def _canonical_merge_leak_diagnostics(graph: dict[str, Any]) -> list[dict[str, Any]]:
     diagnostics = []
     for edge in graph.get("edges", []):
-        if not isinstance(edge, dict) or edge.get("relation") not in {"duplicate", "merge_needed"}:
+        if not isinstance(edge, dict):
+            continue
+        relation = edge.get("relation")
+        scores = edge.get("scores") if isinstance(edge.get("scores"), dict) else {}
+        high_sim_adjacent = relation == "adjacent" and (
+            float(scores.get("concept") or 0) >= 0.55
+            or float(scores.get("chunk") or 0) >= 0.62
+            or max(float(scores.get("prerequisite_ab") or 0), float(scores.get("prerequisite_ba") or 0)) >= 0.55
+        )
+        if relation not in {"duplicate", "merge_needed"} and not high_sim_adjacent:
             continue
         left = str(edge.get("from") or "")
         right = str(edge.get("to") or "")
@@ -576,7 +599,10 @@ def _current_branch_prior_nodes(branch: dict[str, Any], start_node_id: str) -> s
 def _diagnostic_node_ids(diagnostics: list[dict[str, Any]]) -> set[str]:
     blocked = set()
     for item in diagnostics:
-        if not isinstance(item, dict) or item.get("kind") != "canonical_merge_leak":
+        if not isinstance(item, dict) or item.get("kind") not in {
+            "canonical_merge_leak",
+            "canonical_merge_pending",
+        }:
             continue
         blocked.update(str(node) for node in item.get("nodes", []) if node)
     return blocked

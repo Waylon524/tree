@@ -19,6 +19,16 @@ _MIN_CLUSTER_PREREQUISITE = 0.34
 _MIN_CLUSTER_METHOD = 0.50
 _MIN_CLUSTER_SIGNATURE = 0.46
 _MIN_ADJACENT_SIGNATURE = 0.12
+_MIN_STRONG_MERGE_CONCEPT = 0.55
+_MIN_STRONG_MERGE_FORMULA = 0.50
+_MIN_STRONG_MERGE_OVERALL = 0.32
+_GENERIC_TITLES = {
+    "§",
+    "光学",
+    "机械波、电磁波",
+    "机械波和电磁波",
+    "温故知新",
+}
 _TERM_RE = re.compile(r"[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_`()+\-]*")
 _SPLIT_RE = re.compile(r"[，,、/；;：:（）()\[\]【】\s的与和及或]+")
 _SIGNATURE_STOPWORDS = {
@@ -391,11 +401,17 @@ def _rebuild_inventory_group_nodes(
             str(item.get("candidate_id", "")),
         )
     )
+    group_pair_metrics = _ranked_group_pair_metrics(groups)
+    merge_components = _merge_review_components(groups, group_pair_metrics)
+    diagnostics = _pending_merge_diagnostics(merge_components, candidates)
+    _mark_pending_merge_candidates(candidates, diagnostics)
     return {
         "version": 1,
         "kind": "candidate_nodes",
         "generator": "inventory_group_v1",
-        "group_pair_metrics": _ranked_group_pair_metrics(groups),
+        "group_pair_metrics": group_pair_metrics,
+        "merge_review_components": merge_components,
+        "diagnostics": diagnostics,
         "chapter_candidates": candidates,
     }
 
@@ -492,6 +508,9 @@ def _group_pair_metrics(left: dict[str, Any], right: dict[str, Any]) -> dict[str
     token_ratio = min(left_tokens, right_tokens) / max(left_tokens, right_tokens)
     chunk_distance = _group_chunk_distance(left, right)
     adjacency = 1.0 if chunk_distance is not None and chunk_distance <= 1 else 0.0
+    clean_title_match = _clean_merge_title(left.get("title_hint")) != "" and (
+        _clean_merge_title(left.get("title_hint")) == _clean_merge_title(right.get("title_hint"))
+    )
     overall = (
         heading_section * 0.16
         + concept * 0.32
@@ -510,8 +529,201 @@ def _group_pair_metrics(left: dict[str, Any], right: dict[str, Any]) -> dict[str
         "source_path_continuity": round(source, 4),
         "token_length_ratio": round(token_ratio, 4),
         "chunk_index_distance": chunk_distance,
+        "clean_title_match": clean_title_match,
         "overall_similarity": round(min(1.0, overall), 4),
     }
+
+
+def _merge_review_components(groups: list[dict[str, Any]], metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {str(group.get("group_id") or ""): group for group in groups}
+    strong_pairs = []
+    for metric in metrics:
+        reason = _strong_merge_reason(metric)
+        if not reason:
+            continue
+        left = str(metric.get("left_group_id") or "")
+        right = str(metric.get("right_group_id") or "")
+        if left in by_id and right in by_id:
+            strong_pairs.append((left, right, reason, metric))
+    if not strong_pairs:
+        return []
+    union = _UnionFind(list(by_id))
+    for left, right, _reason, _metric in strong_pairs:
+        union.union(left, right)
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for group_id in by_id:
+        grouped[union.find(group_id)].append(group_id)
+    components = []
+    for group_ids in grouped.values():
+        if len(group_ids) < 2:
+            continue
+        component_pairs = [
+            {
+                "left_group_id": left,
+                "right_group_id": right,
+                "reason": reason,
+                "overall_similarity": metric.get("overall_similarity"),
+                "concept_overlap": metric.get("concept_overlap"),
+                "formula_overlap": metric.get("formula_overlap"),
+                "heading_section_continuity": metric.get("heading_section_continuity"),
+                "chunk_index_distance": metric.get("chunk_index_distance"),
+            }
+            for left, right, reason, metric in strong_pairs
+            if left in group_ids and right in group_ids
+        ]
+        reasons = _unique(pair["reason"] for pair in component_pairs)
+        ordered = sorted(group_ids, key=lambda group_id: groups.index(by_id[group_id]))
+        components.append(
+            {
+                "component_id": f"merge:{hashlib.sha1('|'.join(ordered).encode('utf-8')).hexdigest()[:10]}",
+                "group_ids": ordered,
+                "reason": reasons[0] if reasons else "strong_similarity",
+                "reasons": reasons,
+                "pairs": component_pairs,
+                "groups": [
+                    {
+                        "group_id": group_id,
+                        "title_hint": by_id[group_id].get("title_hint"),
+                        "source_chunks": by_id[group_id].get("source_chunks", [])[:8],
+                        "core_concepts": by_id[group_id].get("core_concepts", [])[:12],
+                        "formula_signatures": by_id[group_id].get("formula_signatures", [])[:8],
+                        "teaching_role": by_id[group_id].get("teaching_role"),
+                    }
+                    for group_id in ordered
+                ],
+            }
+        )
+    components.sort(key=lambda item: (item["group_ids"][0], item["component_id"]))
+    return components
+
+
+def _strong_merge_reason(metric: dict[str, Any]) -> str:
+    concept = float(metric.get("concept_overlap") or 0)
+    formula = float(metric.get("formula_overlap") or 0)
+    heading = float(metric.get("heading_section_continuity") or 0)
+    chunk_distance = metric.get("chunk_index_distance")
+    overall = float(metric.get("overall_similarity") or 0)
+    if metric.get("clean_title_match"):
+        return "clean_title_match"
+    if concept >= _MIN_STRONG_MERGE_CONCEPT:
+        return "concept_overlap"
+    if formula >= _MIN_STRONG_MERGE_FORMULA and (concept > 0 or heading > 0):
+        return "formula_overlap"
+    if chunk_distance is not None and int(chunk_distance) <= 1 and (concept > 0 or formula > 0):
+        return "adjacent_strong_signal"
+    if overall >= _MIN_STRONG_MERGE_OVERALL:
+        return "overall_similarity"
+    return ""
+
+
+def _pending_merge_diagnostics(
+    components: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    *,
+    decisions: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    decisions = decisions or []
+    diagnostics = []
+    candidate_by_group: dict[str, list[str]] = defaultdict(list)
+    for candidate in candidates:
+        for group_id in _string_list(candidate.get("merged_group_ids")):
+            candidate_by_group[group_id].append(str(candidate.get("candidate_id") or ""))
+    for component in components:
+        group_ids = _string_list(component.get("group_ids"))
+        decision = _component_decision(component, decisions, candidates)
+        if decision.get("decision") in {"merged", "rejected"}:
+            continue
+        node_ids = _unique(
+            candidate_id
+            for group_id in group_ids
+            for candidate_id in candidate_by_group.get(group_id, [])
+        )
+        diagnostics.append(
+            {
+                "kind": "canonical_merge_pending",
+                "component_id": component.get("component_id"),
+                "group_ids": group_ids,
+                "nodes": node_ids,
+                "reason": "Strongly similar groups require explicit AI merge or reject decision.",
+            }
+        )
+    return diagnostics
+
+
+def _component_decision(
+    component: dict[str, Any],
+    decisions: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    group_ids = set(_string_list(component.get("group_ids")))
+    for decision in decisions:
+        decision_groups = set(_string_list(decision.get("group_ids")))
+        if group_ids and group_ids.issubset(decision_groups):
+            return decision
+    for candidate in candidates:
+        merged = set(_string_list(candidate.get("merged_group_ids")))
+        if group_ids and group_ids.issubset(merged):
+            return {
+                "component_id": component.get("component_id"),
+                "group_ids": sorted(group_ids),
+                "decision": "merged",
+                "candidate_id": candidate.get("candidate_id"),
+                "reason": "AI candidate merged all groups in this component.",
+            }
+    return {
+        "component_id": component.get("component_id"),
+        "group_ids": sorted(group_ids),
+        "decision": "uncertain",
+        "reason": "AI response did not explicitly cover this strong merge component.",
+    }
+
+
+def _merge_decisions(
+    ai_map: dict[str, Any],
+    components: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    explicit = [
+        item
+        for item in ai_map.get("merge_decisions", [])
+        if isinstance(item, dict) and _string_list(item.get("group_ids"))
+    ]
+    decisions = []
+    for component in components:
+        decision = _component_decision(component, explicit, candidates)
+        decisions.append(decision)
+    return decisions
+
+
+def _mark_pending_merge_candidates(candidates: list[dict[str, Any]], diagnostics: list[dict[str, Any]]) -> None:
+    by_group = {
+        group_id: candidate
+        for candidate in candidates
+        for group_id in _string_list(candidate.get("merged_group_ids"))
+    }
+    for diagnostic in diagnostics:
+        for group_id in _string_list(diagnostic.get("group_ids")):
+            candidate = by_group.get(group_id)
+            if not candidate:
+                continue
+            pending = candidate.setdefault("pending_merge_group_ids", [])
+            for pending_id in _string_list(diagnostic.get("group_ids")):
+                if pending_id not in pending:
+                    pending.append(pending_id)
+            candidate["schedulable"] = False
+            candidate["blocked_reason"] = "canonical_merge_pending"
+
+
+def _clean_merge_title(value: Any) -> str:
+    title = str(value or "").strip()
+    title = re.sub(r"^§\s*[\d\-–—.]*\s*", "", title).strip()
+    title = re.sub(r"^第[一二三四五六七八九十百\d]+章[、.．\s]*", "", title).strip()
+    title = title.strip(" -—:：。；;，,")
+    if not title or title in _GENERIC_TITLES:
+        return ""
+    if re.fullmatch(r"\$?\^\{?\*+\}?\$?[一二三四五六七八九十\d]*", title):
+        return ""
+    return title
 
 
 def _group_chunk_distance(left: dict[str, Any], right: dict[str, Any]) -> int | None:
@@ -943,7 +1155,7 @@ def _selection_priority(collection: dict[str, Any], status: str) -> float:
 
 
 def _inventory_summary_for_ai(inventory: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "knowledge_groups": [
             {
                 "group_id": item.get("group_id"),
@@ -1014,6 +1226,9 @@ def _inventory_summary_for_ai(inventory: dict[str, Any], fallback: dict[str, Any
             if isinstance(item, dict)
         ]
     }
+    summary["merge_review_components"] = fallback.get("merge_review_components", [])[:40]
+    summary["diagnostics"] = fallback.get("diagnostics", [])[:40]
+    return summary
 
 
 def _normalize_ai_map(
@@ -1107,7 +1322,7 @@ def _normalize_ai_map(
         )
         used_ids.update(item.get("candidate_id") for item in fallback_items_for_raw)
     if not candidates:
-        return fallback
+        return _with_merge_review_metadata(ai_map, fallback, fallback_items)
     for item in fallback_items:
         if item.get("candidate_id") not in used_ids:
             candidates.append(item)
@@ -1119,10 +1334,35 @@ def _normalize_ai_map(
             if candidate in candidate_ids
         ]
     candidates = _sort_candidates_by_prerequisites(candidates)
+    return _with_merge_review_metadata(ai_map, fallback, candidates, generator="ai_with_chunk_cluster_fallback")
+
+
+def _with_merge_review_metadata(
+    ai_map: dict[str, Any],
+    fallback: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    generator: str | None = None,
+) -> dict[str, Any]:
+    merge_components = fallback.get("merge_review_components", [])
+    merge_decisions = _merge_decisions(ai_map, merge_components, candidates)
+    diagnostics = [
+        *[
+            item
+            for item in fallback.get("diagnostics", [])
+            if isinstance(item, dict) and item.get("kind") != "canonical_merge_pending"
+        ],
+        *_pending_merge_diagnostics(merge_components, candidates, decisions=merge_decisions),
+    ]
+    _mark_pending_merge_candidates(candidates, diagnostics)
     return {
         "version": 1,
         "kind": "candidate_nodes",
-        "generator": "ai_with_chunk_cluster_fallback",
+        "generator": generator or fallback.get("generator", "candidate_nodes"),
+        "group_pair_metrics": fallback.get("group_pair_metrics", []),
+        "merge_review_components": merge_components,
+        "merge_decisions": merge_decisions,
+        "diagnostics": diagnostics,
         "chapter_candidates": candidates,
     }
 

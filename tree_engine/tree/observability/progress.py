@@ -29,6 +29,7 @@ class ProgressTracker:
                 "phase": "starting",
                 "message": "TREE is starting",
                 "source_ingest": _empty_source_ingest(),
+                "planner_progress": _empty_planner_progress(),
                 "learning_loop": _empty_learning_loop(),
                 "branch_run_progress": {},
             }
@@ -46,6 +47,9 @@ class ProgressTracker:
                         "state": "pending",
                         "files_total": files_total,
                         "files_done": 0,
+                    },
+                    "archivist": {
+                        "state": "idle",
                     },
                     "embedding": {
                         "state": "pending",
@@ -112,6 +116,46 @@ class ProgressTracker:
                 "chunks_done": chunks_done,
                 "chunks_total": chunks_total,
             },
+        )
+
+    def archivist_degraded(self, *, current_file: str, chunk_index: int, error_type: str) -> None:
+        self.update_nested(
+            "source_ingest.archivist",
+            {
+                "state": "degraded",
+                "current_file": current_file,
+                "chunk_index": chunk_index,
+                "error_type": error_type,
+                "fallback": "raw_ocr",
+            },
+        )
+
+    def planner_stage(
+        self,
+        *,
+        stage: str,
+        stage_label: str,
+        stage_index: int,
+        stage_total: int = 6,
+        details: dict[str, Any] | None = None,
+        diagnostics: list[dict[str, Any]] | None = None,
+        message: str = "",
+    ) -> None:
+        entry = {
+            "stage": stage,
+            "stage_label": stage_label,
+            "stage_index": stage_index,
+            "stage_total": stage_total,
+            "details": details or {},
+            "diagnostics": diagnostics or [],
+            "updated_at": _now(),
+        }
+        self.update(
+            {
+                "phase": "planner",
+                "message": message or stage_label,
+                "planner_progress": entry,
+            }
         )
 
     def learning_stage(
@@ -196,6 +240,7 @@ class ProgressTracker:
             state = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(state, dict):
                 state.setdefault("source_ingest", _empty_source_ingest())
+                state.setdefault("planner_progress", _empty_planner_progress())
                 state.setdefault("learning_loop", _empty_learning_loop())
                 state.setdefault("branch_run_progress", {})
                 return state
@@ -205,6 +250,7 @@ class ProgressTracker:
             "phase": "idle",
             "message": "",
             "source_ingest": _empty_source_ingest(),
+            "planner_progress": _empty_planner_progress(),
             "learning_loop": _empty_learning_loop(),
             "branch_run_progress": {},
         }
@@ -227,6 +273,7 @@ def _empty_source_ingest() -> dict[str, Any]:
         "files_total": 0,
         "files_done": 0,
         "ocr": {"state": "idle", "files_total": 0, "files_done": 0},
+        "archivist": {"state": "idle"},
         "embedding": {"state": "idle", "chunks_total": 0, "chunks_done": 0},
     }
 
@@ -245,6 +292,17 @@ def _empty_learning_loop() -> dict[str, Any]:
         "span_title": "",
         "knowledge_point": "",
         "iteration": 0,
+    }
+
+
+def _empty_planner_progress() -> dict[str, Any]:
+    return {
+        "stage": "idle",
+        "stage_label": "Idle",
+        "stage_index": 0,
+        "stage_total": 6,
+        "details": {},
+        "diagnostics": [],
     }
 
 

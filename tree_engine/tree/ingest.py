@@ -161,8 +161,15 @@ async def ingest_file(
     if archivist:
         final_texts = await asyncio.gather(
             *[
-                _structure_chunk(chunk, archivist, archivist_sem)
-                for chunk in raw_chunks
+                _structure_chunk(
+                    chunk,
+                    archivist,
+                    archivist_sem,
+                    source_name=input_path.name,
+                    chunk_index=index,
+                    progress=progress,
+                )
+                for index, chunk in enumerate(raw_chunks, start=1)
             ]
         )
     else:
@@ -190,11 +197,30 @@ async def _structure_chunk(
     raw_text: str,
     archivist: MarkdownStructurer,
     archivist_sem: asyncio.Semaphore | None,
+    *,
+    source_name: str,
+    chunk_index: int,
+    progress: ProgressTracker | None = None,
 ) -> str:
-    if archivist_sem is None:
-        return await archivist.structure(raw_text)
-    async with archivist_sem:
-        return await archivist.structure(raw_text)
+    try:
+        if archivist_sem is None:
+            return await archivist.structure(raw_text)
+        async with archivist_sem:
+            return await archivist.structure(raw_text)
+    except Exception as exc:
+        logger.exception(
+            "Structurer failed, using raw text: source=%s chunk=%s error=%s",
+            source_name,
+            chunk_index,
+            type(exc).__name__,
+        )
+        if progress is not None:
+            progress.archivist_degraded(
+                current_file=source_name,
+                chunk_index=chunk_index,
+                error_type=type(exc).__name__,
+            )
+        return raw_text
 
 
 async def _wait_for_ocr_upload_slot(interval_sec: float) -> None:

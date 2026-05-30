@@ -128,14 +128,12 @@ class TreeEngine:
             in_progress = self.state_mgr.find_in_progress_all(state)
             if not in_progress:
                 # No active BranchRun execution; refresh planner artifacts and schedule ready branches.
-                self.progress.learning_stage(
-                    stage="refresh_branch_plan",
-                    stage_label="Refreshing branch plan",
-                    stage_index=1,
-                    stage_total=6,
-                    message="Planner is rebuilding KnowledgeNodes, DAG, and ready branches",
-                )
+                _mark_inventory_progress(getattr(self, "progress", None))
                 await self._refresh_planner_artifacts(state)
+                _mark_schedule_progress(
+                    getattr(self, "progress", None),
+                    branches=load_knowledge_branches(self.settings.project_root),
+                )
                 state = self._activate_ready_branch_runs(self.state_mgr.load())
                 in_progress = self.state_mgr.find_in_progress_all(state)
                 if in_progress:
@@ -149,6 +147,11 @@ class TreeEngine:
                 blockage = _branch_plan_blockage(load_knowledge_branches(self.settings.project_root))
                 if blockage:
                     message = f"TREE_BLOCKED — {blockage}"
+                    _mark_schedule_progress(
+                        getattr(self, "progress", None),
+                        branches=load_knowledge_branches(self.settings.project_root),
+                        blockage=blockage,
+                    )
                     self.progress.update({"phase": "blocked", "message": message})
                     print(message)
                     return
@@ -913,9 +916,11 @@ class TreeEngine:
             inventory = await self._rebuild_source_inventory_from_rag()
         _mark_planner_progress(
             getattr(self, "progress", None),
-            stage="build_knowledge_nodes",
+            stage="knowledge_nodes",
             label="Building KnowledgeNodes",
+            stage_index=2,
             message="Archivist is building canonical KnowledgeNodes",
+            details={"knowledge_groups": len(inventory.get("chunks", []))},
         )
         candidate_nodes = await rebuild_candidate_nodes_with_ai(
             self.settings.project_root,
@@ -925,9 +930,21 @@ class TreeEngine:
         )
         _mark_planner_progress(
             getattr(self, "progress", None),
-            stage="build_knowledge_graph",
+            stage="merge_review",
+            label="Reviewing merge components",
+            stage_index=3,
+            message="Planner is reviewing high-similarity KnowledgeGroup merge components",
+            details=_candidate_planner_details(candidate_nodes),
+            diagnostics=_planner_diagnostics(candidate_nodes),
+        )
+        _mark_planner_progress(
+            getattr(self, "progress", None),
+            stage="knowledge_dag",
             label="Building KnowledgeDAG",
+            stage_index=4,
             message="Planner is building the KnowledgeDAG and selecting root candidates",
+            details=_candidate_planner_details(candidate_nodes),
+            diagnostics=_planner_diagnostics(candidate_nodes),
         )
         knowledge_graph = await rebuild_knowledge_graph_with_ai(
             self.settings.project_root,
@@ -937,9 +954,12 @@ class TreeEngine:
         )
         _mark_planner_progress(
             getattr(self, "progress", None),
-            stage="build_knowledge_branches",
+            stage="knowledge_branches",
             label="Building KnowledgeBranches",
+            stage_index=5,
             message="Planner is building executable KnowledgeBranches",
+            details=_graph_planner_details(knowledge_graph),
+            diagnostics=_planner_diagnostics(knowledge_graph),
         )
         running = {
             run.branch_id
@@ -1259,25 +1279,129 @@ def _progress_branch_context(state_mgr: StateManager, chapter_name: str) -> dict
 def _mark_inventory_progress(progress: object | None) -> None:
     if progress is None:
         return
-    progress.learning_stage(
-        stage="rebuild_source_inventory",
+    _write_planner_stage(
+        progress,
+        stage="source_inventory",
         stage_label="Building source inventory",
         stage_index=1,
-        stage_total=6,
         message="Archivist is analyzing source chunks for KnowledgeGroups",
     )
 
 
-def _mark_planner_progress(progress: object | None, *, stage: str, label: str, message: str) -> None:
+def _mark_planner_progress(
+    progress: object | None,
+    *,
+    stage: str,
+    label: str,
+    stage_index: int,
+    message: str,
+    details: dict[str, Any] | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> None:
     if progress is None:
         return
-    progress.learning_stage(
+    _write_planner_stage(
+        progress,
         stage=stage,
         stage_label=label,
-        stage_index=1,
-        stage_total=6,
+        stage_index=stage_index,
+        details=details,
+        diagnostics=diagnostics,
         message=message,
     )
+
+
+def _mark_schedule_progress(
+    progress: object | None,
+    *,
+    branches: dict[str, Any],
+    blockage: str = "",
+) -> None:
+    if progress is None:
+        return
+    details = _branch_planner_details(branches)
+    if blockage:
+        details["blocked_reason"] = blockage
+    _write_planner_stage(
+        progress,
+        stage="schedule_branch_runs",
+        stage_label="Scheduling BranchRuns",
+        stage_index=6,
+        details=details,
+        diagnostics=_planner_diagnostics(branches),
+        message="Planner is scheduling ready BranchRuns",
+    )
+
+
+def _write_planner_stage(progress: object, **kwargs: Any) -> None:
+    planner_stage = getattr(progress, "planner_stage", None)
+    if callable(planner_stage):
+        planner_stage(**kwargs)
+        return
+    learning_stage = getattr(progress, "learning_stage", None)
+    if not callable(learning_stage):
+        return
+    learning_stage(
+        stage=kwargs["stage"],
+        stage_label=kwargs["stage_label"],
+        stage_index=kwargs["stage_index"],
+        stage_total=6,
+        message=kwargs.get("message", kwargs["stage_label"]),
+    )
+
+
+def _candidate_planner_details(candidate_nodes: dict[str, Any]) -> dict[str, Any]:
+    candidates = candidate_nodes.get("chapter_candidates")
+    if not isinstance(candidates, list):
+        candidates = candidate_nodes.get("knowledge_nodes")
+    if not isinstance(candidates, list):
+        candidates = []
+    components = candidate_nodes.get("merge_review_components")
+    if not isinstance(components, list):
+        components = []
+    pending = [
+        item
+        for item in candidate_nodes.get("diagnostics", [])
+        if isinstance(item, dict) and str(item.get("type")) == "canonical_merge_pending"
+    ]
+    return {
+        "knowledge_nodes": len(candidates),
+        "merge_components": len(components),
+        "pending_merges": len(pending),
+    }
+
+
+def _graph_planner_details(knowledge_graph: dict[str, Any]) -> dict[str, Any]:
+    nodes = knowledge_graph.get("nodes")
+    edges = knowledge_graph.get("edges")
+    return {
+        "nodes": len(nodes) if isinstance(nodes, list) else 0,
+        "edges": len(edges) if isinstance(edges, list) else 0,
+    }
+
+
+def _branch_planner_details(branches: dict[str, Any]) -> dict[str, Any]:
+    raw_branches = branches.get("branches")
+    if not isinstance(raw_branches, list):
+        raw_branches = []
+    statuses: dict[str, int] = {}
+    for branch in raw_branches:
+        if not isinstance(branch, dict):
+            continue
+        status = str(branch.get("status") or "unknown")
+        statuses[status] = statuses.get(status, 0) + 1
+    return {
+        "branches": len(raw_branches),
+        "ready_branches": statuses.get("ready", 0),
+        "running_branches": statuses.get("running", 0),
+        "blocked_branches": statuses.get("blocked", 0),
+        "complete_branches": statuses.get("complete", 0),
+    }
+
+
+def _planner_diagnostics(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    diagnostics = doc.get("diagnostics")
+    return [item for item in diagnostics if isinstance(item, dict)] if isinstance(diagnostics, list) else []
 
 
 def _pending_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[Path, str]]:

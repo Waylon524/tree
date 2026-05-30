@@ -314,6 +314,9 @@ def test_candidate_ai_merges_cross_file_groups_without_output_line_cap(tmp_path:
 
     nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, MergeBuilder()))
 
+    assert nodes["group_pair_metrics"]
+    assert nodes["merge_review_components"][0]["group_ids"] == ["kg:physics:a", "kg:physics:b"]
+    assert nodes["merge_decisions"][0]["decision"] == "merged"
     candidate = nodes["chapter_candidates"][0]
     assert candidate["candidate_id"] == "candidate:snell-law"
     assert candidate["merged_group_ids"] == ["kg:physics:a", "kg:physics:b"]
@@ -323,6 +326,91 @@ def test_candidate_ai_merges_cross_file_groups_without_output_line_cap(tmp_path:
         "physics/a#000",
         "physics/b#000",
     }
+
+
+def test_candidate_strict_merge_review_records_pending_when_ai_omits_strong_component(tmp_path: Path) -> None:
+    inventory = {
+        "version": 2,
+        "knowledge_groups": [
+            {
+                "group_id": "kg:forced:intro",
+                "title_hint": "§10-3 受迫振动 共振",
+                "source_chunks": ["physics/a#000"],
+                "source_paths": ["chapter.md"],
+                "source_collection": "physics",
+                "chunk_range": {"start": 4, "end": 4},
+                "core_concepts": ["受迫振动", "共振"],
+                "formula_signatures": [],
+                "teaching_role": "concept",
+                "length_stats": {"token_estimate": 200, "estimated_output_lines": 320},
+            },
+            {
+                "group_id": "kg:forced:detail",
+                "title_hint": "受迫振动与共振",
+                "source_chunks": ["physics/b#000"],
+                "source_paths": ["chapter.md"],
+                "source_collection": "physics",
+                "chunk_range": {"start": 5, "end": 5},
+                "core_concepts": ["受迫振动", "共振", "稳态"],
+                "formula_signatures": [],
+                "teaching_role": "concept",
+                "length_stats": {"token_estimate": 260, "estimated_output_lines": 360},
+            },
+        ],
+    }
+
+    class OmitMergeBuilder:
+        async def build_candidate_nodes(self, inventory_summary: dict, completed_collections: list[str]) -> dict:
+            assert inventory_summary["merge_review_components"][0]["group_ids"] == [
+                "kg:forced:intro",
+                "kg:forced:detail",
+            ]
+            return {"chapter_candidates": []}
+
+    nodes = asyncio.run(rebuild_candidate_nodes_with_ai(tmp_path, inventory, OmitMergeBuilder()))
+
+    pending = [item for item in nodes["diagnostics"] if item["kind"] == "canonical_merge_pending"]
+    assert pending
+    assert pending[0]["group_ids"] == ["kg:forced:intro", "kg:forced:detail"]
+    assert any(
+        "kg:forced:intro" in item.get("pending_merge_group_ids", [])
+        for item in nodes["chapter_candidates"]
+    )
+
+
+def test_candidate_clean_title_match_builds_merge_review_component(tmp_path: Path) -> None:
+    inventory = {
+        "version": 2,
+        "knowledge_groups": [
+            {
+                "group_id": "kg:brewster:a",
+                "title_hint": "布儒斯特定律",
+                "source_chunks": ["optics/a#000"],
+                "source_paths": ["a.md"],
+                "source_collection": "optics",
+                "chunk_range": {"start": 1, "end": 1},
+                "core_concepts": ["布儒斯特定律", "布儒斯特角"],
+                "formula_signatures": ["tani_b=n_2/n_1"],
+                "length_stats": {"token_estimate": 200, "estimated_output_lines": 300},
+            },
+            {
+                "group_id": "kg:brewster:b",
+                "title_hint": "布儒斯特定律",
+                "source_chunks": ["optics/b#000"],
+                "source_paths": ["b.md"],
+                "source_collection": "optics",
+                "chunk_range": {"start": 8, "end": 8},
+                "core_concepts": ["布儒斯特定律", "完全偏振光"],
+                "formula_signatures": ["tani_b=n_2/n_1"],
+                "length_stats": {"token_estimate": 220, "estimated_output_lines": 310},
+            },
+        ],
+    }
+
+    nodes = rebuild_knowledge_nodes(tmp_path, inventory)
+
+    assert nodes["merge_review_components"][0]["group_ids"] == ["kg:brewster:a", "kg:brewster:b"]
+    assert nodes["merge_review_components"][0]["reason"] == "clean_title_match"
 
 
 def test_knowledge_nodes_api_reads_legacy_candidate_nodes_schema(tmp_path: Path) -> None:

@@ -104,10 +104,20 @@ class ArchivistAgent:
             "program-computed group-pair metrics. Merge cross-file groups only when they are the "
             "same teachable KnowledgeNode. Keep the compatibility JSON keys "
             "`chapter_candidates` and `candidate_id`, but semantically each item is a final KnowledgeNode. "
+            "Every input `merge_review_components` item must receive an explicit merge decision: "
+            "`merged`, `rejected`, or `uncertain`. "
             "This step does not choose curriculum order; "
             "the graph planner and root selector will choose roots, branches, and frontier nodes.\n\n"
             "Schema:\n"
             "{\n"
+            '  "merge_decisions": [\n'
+            "    {\n"
+            '      "component_id": "merge component id from input",\n'
+            '      "group_ids": ["kg ids reviewed"],\n'
+            '      "decision": "merged|rejected|uncertain",\n'
+            '      "reason": "brief semantic rationale"\n'
+            "    }\n"
+            "  ],\n"
             '  "chapter_candidates": [\n'
             "    {\n"
             '      "candidate_id": "candidate:<stable-id>",\n'
@@ -132,6 +142,8 @@ class ArchivistAgent:
             "- Do not encode domain-specific fixed ranks. Infer prerequisites from concepts.\n"
             "- If a source collection is mostly application/review, place its prerequisite concepts clearly.\n"
             "- AI may supplement and order prerequisites, but must not clear existing group prerequisites.\n"
+            "- Strong merge review components are mandatory: merge them, reject them, or mark uncertain with a reason.\n"
+            "- If a component is uncertain, do not silently split it without a merge_decision.\n"
             "- Candidate cross-file merge has no output-length cap; use estimated length only as a risk signal.\n"
             "- Do not choose roots, sequence, or next branch. Only generate canonical KnowledgeNodes.\n"
             "- Do not mark a KnowledgeNode completed; the engine will do that.\n"

@@ -25,6 +25,13 @@ _MAX_SUPPORTING_PARENTS = 4
 _STRONG_PARENT_SOURCE = 0.50
 _STRONG_PARENT_CHUNK = 0.45
 _FINISHED_TRUNK_SOLVABILITY = 0.82
+_GENERIC_TITLES = {
+    "§",
+    "光学",
+    "机械波、电磁波",
+    "机械波和电磁波",
+    "温故知新",
+}
 
 
 def load_knowledge_graph(root: Path) -> dict[str, Any]:
@@ -80,6 +87,8 @@ def rebuild_knowledge_graph(
         "version": 1,
         "nodes": nodes,
         "edges": edges,
+        "diagnostics": _graph_diagnostics(candidate_nodes),
+        "cluster_quality": _cluster_quality(candidate_nodes, planned_nodes),
         "planner": planner,
         "stats": _graph_stats(nodes, edges),
     }
@@ -361,25 +370,42 @@ def _candidate_node(candidate: dict[str, Any]) -> dict[str, Any]:
     node_id = str(candidate.get("candidate_id") or candidate.get("node_id") or candidate.get("compat_candidate_id") or "")
     if not node_id.startswith("candidate:"):
         node_id = f"candidate:{candidate.get('primary_source_collection') or candidate.get('title_hint') or 'unknown'}"
+    title = str(candidate.get("title_hint") or candidate.get("primary_source_collection") or node_id)
+    core_concepts = _string_list(candidate.get("core_concepts"))
+    source_types = _candidate_source_types(candidate)
+    teaching_roles = _candidate_teaching_roles(candidate)
+    title_quality = _title_quality(title)
+    schedulable, blocked_reason = _candidate_schedulability(
+        title_quality,
+        core_concepts,
+        source_types,
+        teaching_roles,
+        candidate,
+    )
     return {
         "node_id": node_id,
         "kind": "candidate",
         "status": "planned" if candidate.get("status") != "completed" else "covered",
-        "title": str(candidate.get("title_hint") or candidate.get("primary_source_collection") or node_id),
+        "title": title,
         "path": "",
         "primary_source_collection": str(candidate.get("primary_source_collection") or ""),
         "source_collections": _string_list(candidate.get("source_collections")),
-        "core_concepts": _string_list(candidate.get("core_concepts")),
+        "core_concepts": core_concepts,
         "prerequisites": _string_list(candidate.get("prerequisite_concepts")),
         "hit_chunks": _chunk_refs(candidate.get("representative_chunks")),
         "representative_prerequisites": _representative_prerequisites(candidate.get("representative_chunks")),
-        "source_types": _candidate_source_types(candidate),
-        "teaching_roles": _candidate_teaching_roles(candidate),
+        "source_types": source_types,
+        "teaching_roles": teaching_roles,
         "low_confidence_terms": _candidate_low_confidence_terms(candidate),
         "methods": _string_list(candidate.get("methods")),
         "formulas": _string_list(candidate.get("formulas")),
         "required_nodes": _string_list(candidate.get("prerequisite_candidates")),
         "related_nodes": [],
+        "merged_group_ids": _string_list(candidate.get("merged_group_ids")),
+        "pending_merge_group_ids": _string_list(candidate.get("pending_merge_group_ids")),
+        "title_quality": title_quality,
+        "schedulable": bool(candidate.get("schedulable", schedulable)),
+        "blocked_reason": str(candidate.get("blocked_reason") or blocked_reason),
         "reason": str(candidate.get("reason") or ""),
         "selection_priority": float(candidate.get("selection_priority") or 0),
         "chunk_count": int(candidate.get("chunk_count") or len(candidate.get("representative_chunks", []) or [])),
@@ -424,6 +450,60 @@ def _candidate_low_confidence_terms(candidate: dict[str, Any]) -> list[str]:
         if isinstance(item, dict)
         for term in _string_list(item.get("low_confidence_section_terms"))
     )
+
+
+def _graph_diagnostics(candidate_nodes: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in candidate_nodes.get("diagnostics", [])
+        if isinstance(item, dict)
+    ]
+
+
+def _cluster_quality(candidate_nodes: dict[str, Any], planned_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    diagnostics = _graph_diagnostics(candidate_nodes)
+    return {
+        "knowledge_groups": len(
+            {
+                group_id
+                for candidate in _candidate_items(candidate_nodes)
+                for group_id in _string_list(candidate.get("merged_group_ids"))
+            }
+        ),
+        "knowledge_nodes": len(planned_nodes),
+        "merge_components": len(candidate_nodes.get("merge_review_components", []) or []),
+        "pending_merges": sum(1 for item in diagnostics if item.get("kind") == "canonical_merge_pending"),
+        "generic_titles": sum(1 for node in planned_nodes if node.get("title_quality") == "generic_or_noise"),
+    }
+
+
+def _title_quality(title: str) -> str:
+    stripped = title.strip()
+    if not stripped or stripped in _GENERIC_TITLES:
+        return "generic_or_noise"
+    if re.fullmatch(r"第[一二三四五六七八九十百\d]+章[、.．\s]*(.+)?", stripped):
+        return "generic_or_noise"
+    if re.fullmatch(r"\$?\^\{?\*+\}?\$?[一二三四五六七八九十\d]*", stripped):
+        return "generic_or_noise"
+    return "clean"
+
+
+def _candidate_schedulability(
+    title_quality: str,
+    core_concepts: list[str],
+    source_types: list[str],
+    teaching_roles: list[str],
+    candidate: dict[str, Any],
+) -> tuple[bool, str]:
+    if candidate.get("pending_merge_group_ids"):
+        return False, "canonical_merge_pending"
+    roles = set(source_types) | set(teaching_roles)
+    if title_quality == "generic_or_noise":
+        return False, "generic_or_noise"
+    if roles & {"review", "application", "example", "exercise", "assessment"}:
+        if not core_concepts or not _string_list(candidate.get("prerequisite_concepts")):
+            return False, "not_schedulable_as_root"
+    return True, ""
 
 
 def _representative_metadata_values(value: Any, key: str) -> list[str]:
@@ -1636,7 +1716,7 @@ def _attach_node_links(nodes: list[dict[str, Any]], edges: list[dict[str, Any]])
     for node in nodes:
         required = node.get("required_nodes", [])
         if node.get("status") == "planned":
-            node["eligible"] = all(req in satisfied_ids for req in required)
+            node["eligible"] = bool(node.get("schedulable", True)) and all(req in satisfied_ids for req in required)
         else:
             node["eligible"] = False
 

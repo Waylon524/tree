@@ -714,7 +714,8 @@ def test_run_marks_inventory_stage_before_rebuilding_source_inventory(tmp_path: 
         return None
 
     async def rebuild_inventory():
-        assert progress.calls[-1]["stage"] == "rebuild_source_inventory"
+        assert progress.calls[-1]["stage"] == "source_inventory"
+        assert progress.calls[-1]["stage_index"] == 1
         raise RuntimeError("stop after inventory stage")
 
     fake_engine = SimpleNamespace(

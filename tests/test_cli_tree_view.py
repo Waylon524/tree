@@ -236,6 +236,40 @@ def test_dag_ascii_uses_number_only_nodes_and_running_blink_style() -> None:
     assert any("blink" in style and "#d2b48c" in style for style in styles)
 
 
+def test_dag_legend_shows_cluster_quality_summary() -> None:
+    model = build_dag_watch_model(
+        {
+            "nodes": [{"node_id": "candidate:root", "title": "根节点"}],
+            "edges": [],
+            "diagnostics": [
+                {
+                    "kind": "canonical_merge_pending",
+                    "reason": "Strongly similar groups require AI merge review.",
+                }
+            ],
+            "cluster_quality": {
+                "knowledge_groups": 102,
+                "knowledge_nodes": 98,
+                "merge_components": 4,
+                "pending_merges": 1,
+                "generic_titles": 31,
+            },
+        },
+        {"branches": []},
+        PipelineState(branch_runs=[BranchRunRecord(branch_id="branch:none", run_id="run:none")]),
+        {"records": []},
+    )
+
+    console = Console(record=True, width=120)
+    console.print(render_dag_legend(model))
+    output = console.export_text()
+
+    assert "聚类质量" in output
+    assert "KnowledgeGroups" in output
+    assert "102" in output
+    assert "当前树结构不可信" in output
+
+
 def test_dag_legend_renders_chinese_titles_and_blocked_diagnostics() -> None:
     model = build_dag_watch_model(
         {
@@ -303,16 +337,18 @@ def test_progress_view_shows_source_processing_before_first_branchrun(tmp_path, 
 def test_watch_display_model_uses_source_processing_before_first_branchrun() -> None:
     state = PipelineState()
     progress = {
-        "phase": "learning_loop",
+        "phase": "planner",
         "source_ingest": {
             "ocr": {"files_done": 1, "files_total": 2, "current_file": "lesson.pdf"},
             "embedding": {"chunks_done": 3, "chunks_total": 8, "current_chunk": "lesson#003"},
         },
-        "learning_loop": {
-            "stage": "refresh_branch_plan",
-            "stage_label": "Refreshing branch plan",
-            "stage_index": 1,
+        "planner_progress": {
+            "stage": "knowledge_dag",
+            "stage_label": "Building KnowledgeDAG",
+            "stage_index": 4,
             "stage_total": 6,
+            "details": {"nodes": 12},
+            "diagnostics": [{"type": "canonical_merge_pending", "count": 2}],
         },
     }
 
@@ -326,7 +362,36 @@ def test_watch_display_model_uses_source_processing_before_first_branchrun() -> 
     assert "OCR" in output
     assert "Embedding" in output
     assert "Planner" in output
+    assert "4/6" in output
+    assert "Building KnowledgeDAG" in output
+    assert "canonical_merge_pending" in output
     assert "lesson.pdf" in output
+
+
+def test_watch_display_model_falls_back_to_legacy_learning_loop_for_planner() -> None:
+    state = PipelineState()
+    progress = {
+        "planner_progress": {
+            "stage": "idle",
+            "stage_label": "Idle",
+            "stage_index": 0,
+            "stage_total": 6,
+        },
+        "learning_loop": {
+            "stage": "refresh_branch_plan",
+            "stage_label": "Refreshing branch plan",
+            "stage_index": 1,
+            "stage_total": 6,
+        }
+    }
+
+    model = build_watch_display_model(progress, state, {}, {}, {"records": []})
+    console = Console(record=True, width=120)
+    console.print(render_source_processing_panel(model))
+    output = console.export_text()
+
+    assert model["planner_progress"]["stage"] == "refresh_branch_plan"
+    assert "Refreshing branch plan" in output
 
 
 def test_watch_display_model_keeps_dag_after_branchrun_exists_without_running() -> None:
