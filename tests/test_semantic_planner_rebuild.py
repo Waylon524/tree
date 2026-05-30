@@ -139,6 +139,54 @@ def test_inventory_ai_groups_chunks_sequentially_with_previous_active_group(tmp_
     assert group["completeness"] == "complete"
 
 
+def test_inventory_rebuild_reuses_cached_ai_chunk_analysis(tmp_path: Path) -> None:
+    calls = 0
+    source_hit = {
+        "chunk_id": "physics-000",
+        "text": "折射定律描述入射角与折射角的关系。",
+        "metadata": {
+            "source_collection": "physics",
+            "filename": "optics.md",
+            "path": "optics.md",
+            "chunk_index": 0,
+            "section_id": "折射定律",
+            "token_estimate": 80,
+        },
+    }
+
+    class FirstAnalyzer:
+        async def analyze_inventory_chunk(self, payload: dict) -> dict:
+            nonlocal calls
+            calls += 1
+            return {
+                "merge_with_previous": False,
+                "is_complete_knowledge_point": True,
+                "title_hint": "折射定律",
+                "core_concepts": ["折射定律"],
+                "methods": ["建立折射率关系"],
+                "misconceptions": [],
+                "prerequisites": ["几何光学"],
+                "formula_roles": [],
+                "source_type": "lecture",
+                "teaching_role": "foundation",
+                "completeness": "complete",
+                "evidence_spans": ["折射定律描述"],
+                "summary": "介绍折射定律。",
+            }
+
+    class FailingAnalyzer:
+        async def analyze_inventory_chunk(self, payload: dict) -> dict:
+            raise AssertionError("cached AI analysis should have been reused")
+
+    first = asyncio.run(rebuild_source_inventory_with_ai(tmp_path, [source_hit], FirstAnalyzer()))
+    second = asyncio.run(rebuild_source_inventory_with_ai(tmp_path, [source_hit], FailingAnalyzer()))
+
+    assert calls == 1
+    assert second["chunks"][0]["analysis_mode"] == "ai"
+    assert second["chunks"][0]["core_concepts"] == first["chunks"][0]["core_concepts"]
+    assert second["knowledge_groups"][0]["title_hint"] == "折射定律"
+
+
 def test_inventory_merge_preserves_weak_group_metrics(tmp_path: Path) -> None:
     class SequentialAnalyzer:
         async def analyze_inventory_chunk(self, payload: dict) -> dict:

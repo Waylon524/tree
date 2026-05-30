@@ -907,19 +907,39 @@ class TreeEngine:
 
         s = state if isinstance(state, PipelineState) else None
         ledger = reconcile_finished_outputs(self.settings.project_root)
-        _mark_inventory_progress(getattr(self, "progress", None))
-        inventory = await self._rebuild_source_inventory_from_rag()
+        inventory = load_inventory(self.settings.project_root)
+        if not inventory.get("chunks"):
+            _mark_inventory_progress(getattr(self, "progress", None))
+            inventory = await self._rebuild_source_inventory_from_rag()
+        _mark_planner_progress(
+            getattr(self, "progress", None),
+            stage="build_knowledge_nodes",
+            label="Building KnowledgeNodes",
+            message="Archivist is building canonical KnowledgeNodes",
+        )
         candidate_nodes = await rebuild_candidate_nodes_with_ai(
             self.settings.project_root,
             inventory,
             self.archivist,
             completed_collections=_completed_source_collections(s),
         )
+        _mark_planner_progress(
+            getattr(self, "progress", None),
+            stage="build_knowledge_graph",
+            label="Building KnowledgeDAG",
+            message="Planner is building the KnowledgeDAG and selecting root candidates",
+        )
         knowledge_graph = await rebuild_knowledge_graph_with_ai(
             self.settings.project_root,
             candidate_nodes,
             ledger,
             self.archivist,
+        )
+        _mark_planner_progress(
+            getattr(self, "progress", None),
+            stage="build_knowledge_branches",
+            label="Building KnowledgeBranches",
+            message="Planner is building executable KnowledgeBranches",
         )
         running = {
             run.branch_id
@@ -1245,6 +1265,18 @@ def _mark_inventory_progress(progress: object | None) -> None:
         stage_index=1,
         stage_total=6,
         message="Archivist is analyzing source chunks for KnowledgeGroups",
+    )
+
+
+def _mark_planner_progress(progress: object | None, *, stage: str, label: str, message: str) -> None:
+    if progress is None:
+        return
+    progress.learning_stage(
+        stage=stage,
+        stage_label=label,
+        stage_index=1,
+        stage_total=6,
+        message=message,
     )
 
 

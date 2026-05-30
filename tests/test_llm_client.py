@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from tree.config import RoleConfig, Settings
 from tree.model.client import LLMClient
 
@@ -39,3 +43,35 @@ def test_settings_reads_llm_timeout_from_environment(monkeypatch, tmp_path) -> N
     settings = Settings.from_env(tmp_path)
 
     assert settings.llm_timeout_sec == 7.5
+
+
+def test_llm_client_enforces_outer_timeout(monkeypatch) -> None:
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            await asyncio.sleep(10)
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeAsyncOpenAI:
+        chat = FakeChat()
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("tree.model.client.AsyncOpenAI", FakeAsyncOpenAI)
+    settings = Settings(
+        examiner=_role(),
+        student=_role(),
+        writer=_role(),
+        archivist=_role(),
+        llm_timeout_sec=0.01,
+        max_retries=0,
+    )
+    client = LLMClient(settings)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(client.call("archivist", "system", "user"))

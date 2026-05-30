@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from openai import AsyncOpenAI
 
 from tree.config import Settings
@@ -23,6 +25,7 @@ class LLMClient:
             cooldown_sec=settings.pro_degradation_cooldown_sec,
         )
         self._max_retries = settings.max_retries
+        self._timeout_sec = settings.llm_timeout_sec
 
         for role_name, config in [
             ("examiner", settings.examiner),
@@ -49,12 +52,15 @@ class LLMClient:
             model = self._models["student"]
 
         async def _call():
-            resp = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                ),
+                timeout=self._timeout_sec,
             )
             return _extract_chat_content(resp)
 

@@ -179,6 +179,7 @@ async def rebuild_source_inventory_with_ai(
 
     _ = concurrency  # Sequential grouping intentionally preserves file order.
     sorted_hits = sorted(source_chunks, key=_hit_sort_key)
+    cached_records = _cached_ai_records_by_hash(load_inventory(root))
     records = []
     groups = []
     active_group: dict[str, Any] | None = None
@@ -197,12 +198,17 @@ async def rebuild_source_inventory_with_ai(
             active_group = None
         active_file_key = current_file_key
 
-        try:
-            ai = await _analyze_inventory_chunk(analyzer, hit, base, active_group)
-            record = _merge_ai_analysis(base, ai)
-        except Exception:
-            ai = {}
-            record = base
+        cached = cached_records.get(str(base.get("text_hash") or ""))
+        if cached is not None:
+            record = _merge_cached_ai_analysis(base, cached)
+            ai = record
+        else:
+            try:
+                ai = await _analyze_inventory_chunk(analyzer, hit, base, active_group)
+                record = _merge_ai_analysis(base, ai)
+            except Exception:
+                ai = {}
+                record = base
 
         records.append(record)
         should_merge = bool(ai.get("merge_with_previous")) and active_group is not None
@@ -232,6 +238,17 @@ async def rebuild_source_inventory_with_ai(
     }
     save_inventory(root, inventory)
     return inventory
+
+
+def _cached_ai_records_by_hash(inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    for item in inventory.get("chunks", []) or []:
+        if not isinstance(item, dict) or item.get("analysis_mode") != "ai":
+            continue
+        text_hash = str(item.get("text_hash") or "")
+        if text_hash and text_hash not in records:
+            records[text_hash] = item
+    return records
 
 
 def build_inventory_context(
@@ -684,6 +701,30 @@ def _merge_ai_analysis(base: dict[str, Any], ai: dict[str, Any]) -> dict[str, An
     for key in ("merge_with_previous", "is_complete_knowledge_point"):
         if key in ai:
             merged[key] = bool(ai.get(key))
+    merged["analysis_mode"] = "ai"
+    return merged
+
+
+def _merge_cached_ai_analysis(base: dict[str, Any], cached: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key in (
+        "core_concepts",
+        "methods",
+        "misconceptions",
+        "prerequisites",
+        "formula_roles",
+        "evidence_spans",
+    ):
+        value = cached.get(key)
+        if isinstance(value, list):
+            merged[key] = list(value)
+    for key in ("source_type", "teaching_role", "summary", "title_hint", "completeness"):
+        value = cached.get(key)
+        if isinstance(value, str) and value.strip():
+            merged[key] = value
+    for key in ("merge_with_previous", "is_complete_knowledge_point"):
+        if key in cached:
+            merged[key] = bool(cached.get(key))
     merged["analysis_mode"] = "ai"
     return merged
 
