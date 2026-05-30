@@ -30,6 +30,7 @@ class ProgressTracker:
                 "message": "TREE is starting",
                 "source_ingest": _empty_source_ingest(),
                 "learning_loop": _empty_learning_loop(),
+                "branch_run_progress": {},
             }
         )
 
@@ -124,6 +125,7 @@ class ProgressTracker:
         execution_path: str = "",
         tree_id: str = "",
         branch_id: str = "",
+        branch_run_id: str = "",
         file_seq: str = "",
         knowledge_point: str = "",
         span_title: str = "",
@@ -132,27 +134,33 @@ class ProgressTracker:
     ) -> None:
         execution_path = execution_path or chapter
         span_title = span_title or knowledge_point
-        self.update(
-            {
-                "phase": "learning_loop",
-                "message": message or stage_label,
-                "learning_loop": {
-                    "stage": stage,
-                    "stage_label": stage_label,
-                    "stage_index": stage_index,
-                    "stage_total": stage_total,
-                    "execution_path": execution_path,
-                    "tree_id": tree_id,
-                    "branch_id": branch_id,
-                    "chapter": execution_path,
-                    "file_seq": file_seq,
-                    "span_title": span_title,
-                    "knowledge_point": span_title,
-                    "iteration": iteration,
-                    "updated_at": _now(),
-                },
+        updated_at = _now()
+        entry = {
+            "stage": stage,
+            "stage_label": stage_label,
+            "stage_index": stage_index,
+            "stage_total": stage_total,
+            "execution_path": execution_path,
+            "tree_id": tree_id,
+            "branch_id": branch_id,
+            "chapter": execution_path,
+            "file_seq": file_seq,
+            "span_title": span_title,
+            "knowledge_point": span_title,
+            "iteration": iteration,
+            "updated_at": updated_at,
+        }
+        patch: dict[str, Any] = {
+            "phase": "learning_loop",
+            "message": message or stage_label,
+            "learning_loop": entry,
+        }
+        branch_progress_key = branch_run_id or execution_path
+        if branch_progress_key:
+            patch["branch_run_progress"] = {
+                branch_progress_key: entry,
             }
-        )
+        self.update(patch)
 
     def complete(self, message: str) -> None:
         self.update({"phase": "complete", "message": message})
@@ -185,14 +193,21 @@ class ProgressTracker:
 
     def read(self) -> dict[str, Any]:
         try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
+            state = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(state, dict):
+                state.setdefault("source_ingest", _empty_source_ingest())
+                state.setdefault("learning_loop", _empty_learning_loop())
+                state.setdefault("branch_run_progress", {})
+                return state
         except (OSError, json.JSONDecodeError):
-            return {
-                "phase": "idle",
-                "message": "",
-                "source_ingest": _empty_source_ingest(),
-                "learning_loop": _empty_learning_loop(),
-            }
+            pass
+        return {
+            "phase": "idle",
+            "message": "",
+            "source_ingest": _empty_source_ingest(),
+            "learning_loop": _empty_learning_loop(),
+            "branch_run_progress": {},
+        }
 
     def write(self, state: dict[str, Any]) -> None:
         state["updated_at"] = _now()
@@ -222,8 +237,12 @@ def _empty_learning_loop() -> dict[str, Any]:
         "stage_label": "Idle",
         "stage_index": 0,
         "stage_total": 5,
+        "execution_path": "",
+        "tree_id": "",
+        "branch_id": "",
         "chapter": "",
         "file_seq": "",
+        "span_title": "",
         "knowledge_point": "",
         "iteration": 0,
     }

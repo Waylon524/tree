@@ -131,7 +131,7 @@ tre doctor
 
 `doctor` 会检查 Python、`tre` 是否在 PATH 中、包安装位置、`TREE_HOME`、全局配置、当前 workspace 目录、embedding server 和 Git 状态。它不会修改配置。
 
-`/progress` 和 `/watch` 会读取 `.tree/runtime/progress.json` 与 `.tree/runtime/knowledge-graph.json`，显示 OCR 页级进度、source embedding 进度、当前知识点阶段，以及 Current Tree 面板。Current Tree 会展示已生成 node 之间的 parent / support 关系和正在生成的 node；如果旧数据或中断状态导致 parent 信息不完整，则自动降级为关系表。
+`/progress` 和 `/watch` 会读取 `.tree/runtime/progress.json`、`.tree/runtime/knowledge-dag.json`、`.tree/runtime/knowledge-branches.json` 与 finished ledger。第一个 BranchRun 创建前，主面板显示 OCR、source embedding 与 Planner 准备进度；BranchRun 创建后切换并保持“项目学习图”。项目学习图用编号展示完整 DAG：已完成 node 为绿色，未完成 node 为白色，已完成 branch 为棕色，正在运行的 branch 为浅棕色并带 `▶` 标记。面板底部固定展示两个 BranchRun 循环槽位；只有一个 branch 工作时，另一个显示空闲。
 
 ### 更新
 
@@ -774,7 +774,7 @@ tre doctor
 
 `doctor` checks Python, whether `tre` is on PATH, package location, `TREE_HOME`, global config, the current workspace folders, the embedding server, and Git state. It does not modify configuration.
 
-`/progress` and `/watch` read `.tree/runtime/progress.json` and `.tree/runtime/knowledge-graph.json`. They show OCR page progress, source embedding progress, the current knowledge-point stage, and a Current Tree panel. Current Tree shows parent/support relationships among generated nodes plus the node currently being generated. If older data or an interrupted run has incomplete parent metadata, it falls back to a relation table.
+`/progress` and `/watch` read `.tree/runtime/progress.json`, `.tree/runtime/knowledge-dag.json`, `.tree/runtime/knowledge-branches.json`, and the finished ledger. Before the first BranchRun is created, the main panel shows OCR, source embedding, and Planner preparation progress; after a BranchRun exists, it switches to and keeps the project learning graph. The graph uses compact node numbers for the full DAG: completed nodes are green, unfinished nodes are white, completed branches are brown, and running branches are light brown with a `▶` marker. The bottom of the graph panel always shows two BranchRun loop slots; if only one branch is working, the other slot is idle.
 
 ### Update
 

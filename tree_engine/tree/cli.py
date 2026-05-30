@@ -23,6 +23,7 @@ from rich.live import Live
 from rich import print as rprint
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from tree.io import paths
 
@@ -1153,17 +1154,497 @@ def _build_progress_view(root: Path, tail: int = 5) -> Group:
 
     progress_state = load_progress(root)
     state = StateManager(paths.pipeline_state_path(root)).load()
-    completed_files = sum(len(ch.files_completed) for ch in state.chapters)
-    active = next((ch for ch in state.chapters if ch.status == "in_progress"), None)
-    active_chapter = active.chapter_name if active else ""
-    live_progress = _live_progress_table(
-        progress_state,
-        completed_files=completed_files,
-        active_chapter=active_chapter,
-    )
-    current_tree = _current_tree_panel(root, active_chapter=active_chapter)
+    main_panel = _watch_main_panel(root, progress_state, state)
     tree_log = _tail_panel(paths.service_log_path(root, "tree"), title="TREE Log Tail")
-    return Group(services, live_progress, current_tree, tree_log)
+    return Group(services, main_panel, tree_log)
+
+
+def _watch_main_panel(root: Path, progress_state: dict[str, object], state: object) -> Panel:
+    if getattr(state, "branch_runs", []) or []:
+        return _dag_tree_panel(root, state=state, progress_state=progress_state)
+    model = build_watch_display_model(progress_state, state, {}, {}, {"records": []})
+    return render_source_processing_panel(model)
+
+
+def _dag_tree_panel(
+    root: Path,
+    state: object | None = None,
+    progress_state: dict[str, object] | None = None,
+) -> Panel:
+    try:
+        from tree.curriculum.branches import load_knowledge_branches, load_knowledge_dag
+        from tree.curriculum.ledger import reconcile_finished_outputs
+        from tree.observability.progress import load_progress
+        from tree.state.manager import StateManager
+
+        dag = load_knowledge_dag(root)
+        branches = load_knowledge_branches(root)
+        runtime_state = state or StateManager(paths.pipeline_state_path(root)).load()
+        runtime_progress = progress_state or load_progress(root)
+        ledger = reconcile_finished_outputs(root)
+        model = build_watch_display_model(runtime_progress, runtime_state, dag, branches, ledger)
+    except Exception as exc:
+        return Panel(
+            f"[dim]项目学习图不可用：{exc}[/dim]",
+            title="项目学习图",
+            border_style=_TREE_BORDER,
+        )
+    dag_model = model.get("dag", {})
+    if not dag_model.get("nodes"):
+        return Panel(
+            "[dim]暂无 KnowledgeDAG。完成资料入库和 planner 构建后会显示项目学习图。[/dim]",
+            title="项目学习图",
+            border_style=_TREE_BORDER,
+        )
+    width = max(60, shutil.get_terminal_size((120, 24)).columns - 8)
+    return Panel(
+        Group(
+            render_dag_ascii(dag_model, width=width),
+            render_dag_legend(dag_model),
+            render_branch_run_slots(model),
+        ),
+        title="项目学习图",
+        border_style=_TREE_BORDER,
+    )
+
+
+def build_watch_display_model(
+    progress_state: dict[str, Any],
+    state: object,
+    dag: dict[str, Any],
+    branches_doc: dict[str, Any],
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    branch_runs = list(getattr(state, "branch_runs", []) or [])
+    mode = "dag" if branch_runs else "source_processing"
+    dag_model = build_dag_watch_model(dag, branches_doc, state, ledger) if mode == "dag" else {}
+    source_ingest = _dict(progress_state.get("source_ingest"))
+    learning = _dict(progress_state.get("learning_loop"))
+    running_runs = [run for run in branch_runs if getattr(run, "status", "") == "running"]
+    slots = _branch_run_slot_models(progress_state, running_runs, slot_count=2)
+    return {
+        "mode": mode,
+        "source_ingest": source_ingest,
+        "learning_loop": learning,
+        "dag": dag_model,
+        "branch_run_slots": slots,
+        "hidden_running_count": max(0, len(running_runs) - 2),
+    }
+
+
+def build_dag_watch_model(
+    dag: dict[str, Any],
+    branches_doc: dict[str, Any],
+    state: object,
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the data model used by watch/progress DAG visualization."""
+    raw_nodes = [item for item in dag.get("nodes", []) if isinstance(item, dict)]
+    node_order = _dag_topological_order(raw_nodes, dag.get("edges", []))
+    completed_node_ids = _ledger_covered_node_ids(ledger)
+    running_runs = [
+        run
+        for run in getattr(state, "branch_runs", []) or []
+        if getattr(run, "status", "") == "running"
+    ]
+    running_branch_ids = {str(getattr(run, "branch_id", "")) for run in running_runs}
+    active_run_by_branch = {str(getattr(run, "branch_id", "")): run for run in running_runs}
+
+    nodes = []
+    for index, node in enumerate(node_order, start=1):
+        node_id = str(node.get("node_id") or "")
+        label = f"N{index:02d}"
+        status = "已完成" if node_id in completed_node_ids else "未完成"
+        nodes.append(
+            {
+                "label": label,
+                "node_id": node_id,
+                "title": str(node.get("title") or node_id),
+                "status": status,
+                "style": "green" if status == "已完成" else "white",
+                "level": _dag_node_level(node_id, dag.get("edges", [])),
+            }
+        )
+    node_by_id = {node["node_id"]: node for node in nodes}
+
+    branches = []
+    for index, branch in enumerate(
+        [item for item in branches_doc.get("branches", []) if isinstance(item, dict)],
+        start=1,
+    ):
+        branch_id = str(branch.get("branch_id") or "")
+        status = _branch_watch_status(branch, running_branch_ids)
+        run = active_run_by_branch.get(branch_id)
+        branches.append(
+            {
+                "label": f"B{index:02d}",
+                "branch_id": branch_id,
+                "node_ids": _string_list(branch.get("node_ids")),
+                "coverage_node_ids": _string_list(branch.get("coverage_node_ids")),
+                "start_node_id": str(branch.get("start_node_id") or ""),
+                "end_node_id": str(branch.get("end_node_id") or ""),
+                "status": status,
+                "style": _branch_watch_style(status),
+                "blocked_reason": str(branch.get("blocked_reason") or ""),
+                "coverage": branch.get("coverage") if isinstance(branch.get("coverage"), dict) else {},
+                "tree_id": str(getattr(run, "tree_id", "") or ""),
+                "execution_path": str(getattr(run, "execution_path", "") or ""),
+                "run_id": str(getattr(run, "run_id", "") or ""),
+            }
+        )
+    branch_by_id = {branch["branch_id"]: branch for branch in branches}
+    diagnostics = [
+        item for item in branches_doc.get("diagnostics", dag.get("diagnostics", [])) if isinstance(item, dict)
+    ]
+    orphan_nodes = [
+        node["node_id"]
+        for node in nodes
+        if not any(node["node_id"] in branch["node_ids"] for branch in branches)
+    ]
+    return {
+        "nodes": nodes,
+        "node_by_id": node_by_id,
+        "branches": branches,
+        "branch_by_id": branch_by_id,
+        "diagnostics": diagnostics,
+        "orphan_node_ids": orphan_nodes,
+    }
+
+
+def render_source_processing_panel(model: dict[str, Any]) -> Panel:
+    source_ingest = _dict(model.get("source_ingest"))
+    ocr = _dict(source_ingest.get("ocr"))
+    embedding = _dict(source_ingest.get("embedding"))
+    learning = _dict(model.get("learning_loop"))
+
+    table = Table(title="资料处理进度", expand=True)
+    table.add_column("Track")
+    table.add_column("Progress")
+    table.add_column("Current")
+
+    ocr_done = _int_value(ocr.get("pages_done"))
+    ocr_total = _int_value(ocr.get("pages_total"))
+    ocr_file_done = _int_value(ocr.get("files_done"))
+    ocr_file_total = _int_value(ocr.get("files_total"))
+    ocr_progress_done = ocr_file_done if ocr_file_total else ocr_done
+    ocr_progress_total = ocr_file_total if ocr_file_total else ocr_total
+    table.add_row(
+        "OCR",
+        f"{_progress_bar(ocr_progress_done, ocr_progress_total)} {_ocr_progress_label(ocr_file_done, ocr_file_total, ocr_done, ocr_total)}",
+        _truncate(_ocr_current_label(ocr), 52),
+    )
+
+    embed_done = _int_value(embedding.get("chunks_done"))
+    embed_total = _int_value(embedding.get("chunks_total"))
+    table.add_row(
+        "Embedding",
+        f"{_progress_bar(embed_done, embed_total)} {_progress_label(embed_done, embed_total)}",
+        _truncate(str(embedding.get("current_chunk") or embedding.get("state") or ""), 52),
+    )
+
+    stage_index = _int_value(learning.get("stage_index"))
+    stage_total = _int_value(learning.get("stage_total"))
+    table.add_row(
+        "Planner",
+        f"{_progress_bar(stage_index, stage_total)} {_progress_label(stage_index, stage_total)}",
+        _truncate(str(learning.get("stage_label") or learning.get("stage") or "等待 BranchRun 创建"), 52),
+    )
+    return Panel(table, title="资料处理进度", border_style=_TREE_BORDER)
+
+
+def render_branch_run_slots(model: dict[str, Any], slot_count: int = 2) -> Group:
+    grid = Table.grid(expand=True)
+    for _ in range(slot_count):
+        grid.add_column(ratio=1)
+    panels = [
+        _branch_run_slot_panel(slot, index + 1)
+        for index, slot in enumerate(model.get("branch_run_slots", [])[:slot_count])
+    ]
+    while len(panels) < slot_count:
+        panels.append(_branch_run_slot_panel(_idle_branch_run_slot(), len(panels) + 1))
+    grid.add_row(*panels)
+    hidden = _int_value(model.get("hidden_running_count"))
+    if hidden:
+        return Group(grid, Text(f"+{hidden} running not shown", style="yellow"))
+    return Group(grid)
+
+
+def render_dag_ascii(model: dict[str, Any], width: int = 120) -> Text:
+    """Render a compact branch-path DAG view; graph nodes only show Nxx labels."""
+    text = Text()
+    branches = model.get("branches", [])
+    if not branches:
+        labels = [node["label"] for node in model.get("nodes", [])]
+        for index, label in enumerate(labels):
+            if index:
+                text.append("   ")
+            node = model["nodes"][index]
+            text.append(label, style=node["style"])
+        return text
+
+    for row_index, branch in enumerate(branches):
+        if row_index:
+            text.append("\n")
+        node_ids = branch.get("node_ids", [])
+        if not node_ids:
+            text.append(branch["label"], style=branch["style"])
+            continue
+        for node_index, node_id in enumerate(node_ids):
+            node = model["node_by_id"].get(node_id)
+            label = node["label"] if node else _short_node_id(node_id)
+            if node_index:
+                branch_label = f"▶{branch['label']}" if branch["status"] == "进行中" else branch["label"]
+                text.append(" ──", style=branch["style"])
+                text.append(branch_label, style=branch["style"])
+                text.append("──> ", style=branch["style"])
+            text.append(label, style=(node or {}).get("style", "white"))
+        overflow = max(0, len(text.plain.splitlines()[-1]) - width)
+        if overflow:
+            text.append(f"  …+{overflow}", style="dim")
+
+    orphan_node_ids = model.get("orphan_node_ids", [])
+    if orphan_node_ids:
+        text.append("\n")
+        text.append("未连接节点: ", style="dim")
+        for index, node_id in enumerate(orphan_node_ids):
+            if index:
+                text.append(" ")
+            node = model["node_by_id"].get(node_id, {})
+            text.append(str(node.get("label") or _short_node_id(node_id)), style=node.get("style", "white"))
+    return text
+
+
+def render_dag_legend(model: dict[str, Any]) -> Group:
+    """Render node/branch legends and diagnostics for the DAG watch panel."""
+    node_table = Table(title="节点图例", expand=True)
+    node_table.add_column("编号")
+    node_table.add_column("标题")
+    node_table.add_column("状态")
+    node_table.add_column("Node ID")
+    for node in model.get("nodes", []):
+        node_table.add_row(
+            f"[{node['style']}]{node['label']}[/{node['style']}]",
+            _truncate(str(node.get("title") or ""), 26),
+            str(node.get("status") or ""),
+            _truncate(str(node.get("node_id") or ""), 42),
+        )
+
+    branch_table = Table(title="分支图例", expand=True)
+    branch_table.add_column("编号")
+    branch_table.add_column("路径")
+    branch_table.add_column("状态")
+    branch_table.add_column("覆盖")
+    branch_table.add_column("运行")
+    for branch in model.get("branches", []):
+        style = branch.get("style") or "white"
+        covered = _string_list((branch.get("coverage") or {}).get("covered_node_ids"))
+        targets = _string_list(branch.get("coverage_node_ids"))
+        branch_table.add_row(
+            f"[{style}]{'▶' if branch.get('status') == '进行中' else ''}{branch['label']}[/{style}]",
+            f"{_node_label_for_legend(model, branch.get('start_node_id'))} -> {_node_label_for_legend(model, branch.get('end_node_id'))}",
+            str(branch.get("status") or ""),
+            f"{len(covered)}/{len(targets)}",
+            _truncate(str(branch.get("execution_path") or branch.get("blocked_reason") or ""), 36),
+        )
+
+    panels = [node_table, branch_table]
+    diagnostics = model.get("diagnostics") or []
+    if diagnostics:
+        diag_table = Table(title="诊断", expand=True)
+        diag_table.add_column("类型")
+        diag_table.add_column("说明")
+        for item in diagnostics[:6]:
+            diag_table.add_row(
+                str(item.get("kind") or "diagnostic"),
+                _truncate(str(item.get("reason") or item.get("edge") or ""), 80),
+            )
+        panels.append(diag_table)
+    return Group(*panels)
+
+
+def _branch_run_slot_models(
+    progress_state: dict[str, Any],
+    running_runs: list[object],
+    slot_count: int = 2,
+) -> list[dict[str, Any]]:
+    progress_by_run = _dict(progress_state.get("branch_run_progress"))
+    legacy_learning = _dict(progress_state.get("learning_loop"))
+    slots = []
+    for index, run in enumerate(running_runs[:slot_count]):
+        entry = _branch_progress_entry(progress_by_run, legacy_learning, run, len(running_runs))
+        stage_index = _int_value(entry.get("stage_index"))
+        stage_total = _int_value(entry.get("stage_total")) or 6
+        slots.append(
+            {
+                "status": "进行中",
+                "style": "blink #d2b48c",
+                "branch_id": str(getattr(run, "branch_id", "") or ""),
+                "run_id": str(getattr(run, "run_id", "") or ""),
+                "execution_path": str(entry.get("execution_path") or getattr(run, "execution_path", "") or ""),
+                "stage_label": str(entry.get("stage_label") or entry.get("stage") or "Running"),
+                "stage_index": stage_index,
+                "stage_total": stage_total,
+                "file_seq": str(entry.get("file_seq") or ""),
+                "span_title": str(entry.get("span_title") or entry.get("knowledge_point") or ""),
+                "iteration": _int_value(entry.get("iteration")),
+                "progress": f"{_progress_bar(stage_index, stage_total)} {_progress_label(stage_index, stage_total)}",
+            }
+        )
+    while len(slots) < slot_count:
+        slots.append(_idle_branch_run_slot())
+    return slots
+
+
+def _branch_progress_entry(
+    progress_by_run: dict[str, object],
+    legacy_learning: dict[str, object],
+    run: object,
+    running_count: int,
+) -> dict[str, object]:
+    keys = [
+        str(getattr(run, "run_id", "") or ""),
+        str(getattr(run, "execution_path", "") or ""),
+    ]
+    for key in keys:
+        entry = progress_by_run.get(key)
+        if isinstance(entry, dict):
+            return entry
+    if running_count == 1 and legacy_learning:
+        return legacy_learning
+    return {}
+
+
+def _idle_branch_run_slot() -> dict[str, Any]:
+    return {
+        "status": "空闲",
+        "style": "dim white",
+        "branch_id": "",
+        "run_id": "",
+        "execution_path": "",
+        "stage_label": "等待 ready branch",
+        "stage_index": 0,
+        "stage_total": 6,
+        "file_seq": "",
+        "span_title": "",
+        "iteration": 0,
+        "progress": f"{_progress_bar(0, 6)} {_progress_label(0, 6)}",
+    }
+
+
+def _branch_run_slot_panel(slot: dict[str, Any], index: int) -> Panel:
+    title = f"循环 {index} · {slot.get('status') or '空闲'}"
+    if slot.get("status") == "进行中":
+        title = f"循环 {index} · ▶{slot.get('branch_id') or slot.get('run_id') or 'BranchRun'}"
+    lines = [
+        str(slot.get("stage_label") or "等待 ready branch"),
+        str(slot.get("progress") or ""),
+    ]
+    if slot.get("execution_path"):
+        lines.append(str(slot.get("execution_path")))
+    if slot.get("file_seq"):
+        lines.append(f"file {slot.get('file_seq')}")
+    if slot.get("span_title"):
+        lines.append(_truncate(str(slot.get("span_title")), 42))
+    iteration = _int_value(slot.get("iteration"))
+    if iteration:
+        lines.append(f"iteration {iteration}")
+    if slot.get("run_id"):
+        lines.append(str(slot.get("run_id")))
+    return Panel(
+        "\n".join(lines),
+        title=title,
+        border_style=str(slot.get("style") or "dim white"),
+    )
+
+
+def _dag_topological_order(nodes: list[dict[str, Any]], edges: Any) -> list[dict[str, Any]]:
+    by_id = {str(node.get("node_id") or ""): node for node in nodes if node.get("node_id")}
+    incoming = {node_id: 0 for node_id in by_id}
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in by_id}
+    for edge in edges or []:
+        if not isinstance(edge, dict):
+            continue
+        source = str(edge.get("from") or "")
+        target = str(edge.get("to") or "")
+        if source not in by_id or target not in by_id:
+            continue
+        outgoing[source].append(target)
+        incoming[target] += 1
+    order_hint = {node_id: index for index, node_id in enumerate(by_id)}
+    ready = sorted([node_id for node_id, count in incoming.items() if count == 0], key=order_hint.get)
+    ordered_ids = []
+    while ready:
+        node_id = ready.pop(0)
+        ordered_ids.append(node_id)
+        for target in sorted(outgoing.get(node_id, []), key=order_hint.get):
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                ready.append(target)
+                ready.sort(key=order_hint.get)
+    if len(ordered_ids) < len(by_id):
+        ordered_ids.extend(node_id for node_id in by_id if node_id not in set(ordered_ids))
+    return [by_id[node_id] for node_id in ordered_ids]
+
+
+def _dag_node_level(node_id: str, edges: Any) -> int:
+    parents: dict[str, list[str]] = {}
+    for edge in edges or []:
+        if not isinstance(edge, dict):
+            continue
+        parents.setdefault(str(edge.get("to") or ""), []).append(str(edge.get("from") or ""))
+    seen: set[str] = set()
+
+    def depth(current: str) -> int:
+        if current in seen:
+            return 0
+        seen.add(current)
+        parent_ids = [parent for parent in parents.get(current, []) if parent]
+        if not parent_ids:
+            return 0
+        return 1 + max(depth(parent) for parent in parent_ids)
+
+    return depth(node_id)
+
+
+def _ledger_covered_node_ids(ledger: dict[str, Any]) -> set[str]:
+    covered = set()
+    for record in ledger.get("records", []):
+        if not isinstance(record, dict):
+            continue
+        covered.update(_string_list(record.get("covered_node_ids")))
+        graph_node_id = str(record.get("graph_node_id") or "")
+        if graph_node_id:
+            covered.add(graph_node_id)
+    return covered
+
+
+def _branch_watch_status(branch: dict[str, Any], running_branch_ids: set[str]) -> str:
+    branch_id = str(branch.get("branch_id") or "")
+    raw = str(branch.get("status") or "")
+    if branch_id in running_branch_ids or raw == "running":
+        return "进行中"
+    if raw == "complete":
+        return "已完成"
+    if raw == "blocked":
+        return "阻塞"
+    return "未完成"
+
+
+def _branch_watch_style(status: str) -> str:
+    if status == "已完成":
+        return "#8B5A2B"
+    if status == "进行中":
+        return "blink #d2b48c"
+    if status == "阻塞":
+        return "dim white"
+    return "white"
+
+
+def _node_label_for_legend(model: dict[str, Any], node_id: str | None) -> str:
+    node = model.get("node_by_id", {}).get(str(node_id or ""))
+    if not node:
+        return _short_node_id(str(node_id or ""))
+    return str(node.get("label") or "")
 
 
 def _current_tree_panel(root: Path, active_chapter: str = "") -> Panel | Table:
@@ -1592,6 +2073,14 @@ def _progress_counts(manifest: dict[str, object], pending: int = 0) -> dict[str,
 
 def _dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value else []
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _int_value(value: object) -> int:

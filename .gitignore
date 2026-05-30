@@ -33,4 +33,6 @@ __pycache__/
 !/tests/test_pipeline_resilience.py
 !/tests/test_semantic_planner_rebuild.py
 !/tests/test_branch_planner.py
+!/tests/test_cli_tree_view.py
+!/tests/test_progress_state.py
 /tree_engine/docs/*refactor*.md

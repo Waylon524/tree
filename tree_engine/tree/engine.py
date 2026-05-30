@@ -318,7 +318,7 @@ class TreeEngine:
                 stage_label="Finding knowledge point",
                 stage_index=1,
                 stage_total=6,
-                chapter=chapter_name,
+                **_progress_branch_context(self.state_mgr, chapter_name),
                 file_seq=next_seq,
                 message="Examiner is finding the next knowledge point",
             )
@@ -348,7 +348,7 @@ class TreeEngine:
                 stage_label="Examiner composed exam",
                 stage_index=2,
                 stage_total=6,
-                chapter=chapter_name,
+                **_progress_branch_context(self.state_mgr, chapter_name),
                 file_seq=next_seq,
                 knowledge_point=exam_sections.knowledge_point,
                 message="Examiner has selected the knowledge point and exam",
@@ -373,7 +373,7 @@ class TreeEngine:
                 stage_label="Student blind test",
                 stage_index=3,
                 stage_total=6,
-                chapter=chapter_name,
+                **_progress_branch_context(self.state_mgr, chapter_name),
                 file_seq=iter_state.file_seq,
                 knowledge_point=iter_state.knowledge_point,
                 iteration=iter_state.iteration,
@@ -395,7 +395,7 @@ class TreeEngine:
                 stage_label="Examiner audit",
                 stage_index=4,
                 stage_total=6,
-                chapter=chapter_name,
+                **_progress_branch_context(self.state_mgr, chapter_name),
                 file_seq=iter_state.file_seq,
                 knowledge_point=iter_state.knowledge_point,
                 iteration=iter_state.iteration,
@@ -417,7 +417,7 @@ class TreeEngine:
                     stage_label="PASS and save output",
                     stage_index=6,
                     stage_total=6,
-                    chapter=chapter_name,
+                    **_progress_branch_context(self.state_mgr, chapter_name),
                     file_seq=iter_state.file_seq,
                     knowledge_point=iter_state.knowledge_point,
                     iteration=iter_state.iteration,
@@ -435,7 +435,7 @@ class TreeEngine:
                 stage_label="Writer drafting",
                 stage_index=5,
                 stage_total=6,
-                chapter=chapter_name,
+                **_progress_branch_context(self.state_mgr, chapter_name),
                 file_seq=iter_state.file_seq,
                 knowledge_point=iter_state.knowledge_point,
                 iteration=iter_state.iteration,
@@ -1209,6 +1209,29 @@ class TreeEngine:
             for collection in collections
             for doc in payload.get(collection, [])
         ]
+
+
+def _progress_branch_context(state_mgr: StateManager, chapter_name: str) -> dict[str, str]:
+    try:
+        state = state_mgr.load()
+        chapter = next((item for item in state.chapters if item.chapter_name == chapter_name), None)
+    except Exception:
+        chapter = None
+    if chapter is None:
+        return {
+            "chapter": chapter_name,
+            "execution_path": chapter_name,
+            "tree_id": "",
+            "branch_id": "",
+            "branch_run_id": "",
+        }
+    return {
+        "chapter": chapter.chapter_name,
+        "execution_path": chapter.execution_path,
+        "tree_id": chapter.tree_id,
+        "branch_id": chapter.branch_id or "",
+        "branch_run_id": chapter.branch_run_id or "",
+    }
 
 
 def _pending_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[Path, str]]:
