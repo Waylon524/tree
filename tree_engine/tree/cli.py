@@ -67,6 +67,7 @@ _INTERACTIVE_COMMANDS = [
 _TREE_BORDER = "#8B5A2B"
 _TREE_TITLE = "#2E7D32"
 _DEFAULT_ENV = {
+    "LLM_TIMEOUT_SEC": "60",
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
     "SOURCE_INGEST_CONCURRENCY": "16",
@@ -2490,7 +2491,7 @@ def _read_effective_env(root: Path) -> dict[str, str]:
 
 def _write_env_file(path: Path, values: dict[str, str]) -> None:
     ordered_sections = [
-        ("OpenAI-compatible LLM", ["LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"]),
+        ("OpenAI-compatible LLM", ["LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_TIMEOUT_SEC"]),
         (
             "Role-specific models",
             ["EXAMINER_MODEL", "STUDENT_MODEL", "WRITER_MODEL", "ARCHIVIST_MODEL"],
@@ -2552,6 +2553,7 @@ def _print_model_config(env: dict[str, str]) -> None:
     table.add_column("Value")
     table.add_row("LLM_BASE_URL", env.get("LLM_BASE_URL", ""))
     table.add_row("LLM_MODEL", env.get("LLM_MODEL", ""))
+    table.add_row("LLM_TIMEOUT_SEC", env.get("LLM_TIMEOUT_SEC", "60"))
     for role in _ROLE_NAMES:
         table.add_row(f"{role}_MODEL", env.get(f"{role}_MODEL", env.get("LLM_MODEL", "")))
     table.add_row("PADDLEOCR_MODEL", env.get("PADDLEOCR_MODEL", ""))

@@ -693,6 +693,43 @@ def test_refresh_planner_artifacts_does_not_call_examiner_chapter_scan(
     assert result is None
 
 
+def test_run_marks_inventory_stage_before_rebuilding_source_inventory(tmp_path: Path) -> None:
+    class FakeProgress:
+        def __init__(self):
+            self.calls = []
+
+        def reset(self):
+            self.calls.append({"stage": "reset"})
+
+        def learning_stage(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class FakeTracer:
+        def log_pipeline_start(self):
+            pass
+
+    progress = FakeProgress()
+
+    async def prepare_sources():
+        return None
+
+    async def rebuild_inventory():
+        assert progress.calls[-1]["stage"] == "rebuild_source_inventory"
+        raise RuntimeError("stop after inventory stage")
+
+    fake_engine = SimpleNamespace(
+        settings=SimpleNamespace(project_root=tmp_path),
+        tracer=FakeTracer(),
+        progress=progress,
+        _raise_if_stop_requested=lambda: None,
+        _prepare_source_materials_for_loop=prepare_sources,
+        _rebuild_source_inventory_from_rag=rebuild_inventory,
+    )
+
+    with pytest.raises(RuntimeError, match="stop after inventory stage"):
+        asyncio.run(TreeEngine.run(fake_engine))
+
+
 def test_handle_pass_raises_when_finished_output_indexing_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

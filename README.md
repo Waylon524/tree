@@ -318,6 +318,7 @@ tre models --paddleocr-key
 LLM_API_KEY=
 LLM_BASE_URL=
 LLM_MODEL=
+LLM_TIMEOUT_SEC=60
 
 # Optional role-specific overrides
 EXAMINER_MODEL=
@@ -961,6 +962,7 @@ The generated config file looks roughly like this. The PaddleOCR URL and model a
 LLM_API_KEY=
 LLM_BASE_URL=
 LLM_MODEL=
+LLM_TIMEOUT_SEC=60
 
 # Optional role-specific overrides
 EXAMINER_MODEL=

@@ -119,6 +119,7 @@ class TreeEngine:
         self._raise_if_stop_requested()
         reconcile_finished_outputs(self.settings.project_root)
         await self._prepare_source_materials_for_loop()
+        _mark_inventory_progress(getattr(self, "progress", None))
         await self._rebuild_source_inventory_from_rag()
         while True:
             self._raise_if_stop_requested()
@@ -906,6 +907,7 @@ class TreeEngine:
 
         s = state if isinstance(state, PipelineState) else None
         ledger = reconcile_finished_outputs(self.settings.project_root)
+        _mark_inventory_progress(getattr(self, "progress", None))
         inventory = await self._rebuild_source_inventory_from_rag()
         candidate_nodes = await rebuild_candidate_nodes_with_ai(
             self.settings.project_root,
@@ -1232,6 +1234,18 @@ def _progress_branch_context(state_mgr: StateManager, chapter_name: str) -> dict
         "branch_id": chapter.branch_id or "",
         "branch_run_id": chapter.branch_run_id or "",
     }
+
+
+def _mark_inventory_progress(progress: object | None) -> None:
+    if progress is None:
+        return
+    progress.learning_stage(
+        stage="rebuild_source_inventory",
+        stage_label="Building source inventory",
+        stage_index=1,
+        stage_total=6,
+        message="Archivist is analyzing source chunks for KnowledgeGroups",
+    )
 
 
 def _pending_materials(root: Path, manifest: dict[str, Any]) -> list[tuple[Path, str]]:

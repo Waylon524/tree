@@ -35,4 +35,5 @@ __pycache__/
 !/tests/test_branch_planner.py
 !/tests/test_cli_tree_view.py
 !/tests/test_progress_state.py
+!/tests/test_llm_client.py
 /tree_engine/docs/*refactor*.md

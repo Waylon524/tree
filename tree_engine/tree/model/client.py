@@ -33,6 +33,8 @@ class LLMClient:
             self._clients[role_name] = AsyncOpenAI(
                 api_key=config.api_key,
                 base_url=config.base_url,
+                timeout=settings.llm_timeout_sec,
+                max_retries=0,
             )
             self._models[role_name] = config.model
 

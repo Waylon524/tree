@@ -39,6 +39,7 @@ class Settings:
     # Pipeline
     max_iterations: int = 5
     max_retries: int = 3
+    llm_timeout_sec: float = 60.0
     max_format_retries: int = 2
     source_ingest_concurrency: int = 16
     source_ocr_concurrency: int = 16
@@ -87,6 +88,7 @@ class Settings:
             paddleocr_model=os.environ.get("PADDLEOCR_MODEL", "PaddleOCR-VL-1.6"),
             max_iterations=_env_int("MAX_ITERATIONS", 5),
             max_retries=_env_int("MAX_RETRIES", 3),
+            llm_timeout_sec=_env_float("LLM_TIMEOUT_SEC", 60.0),
             max_format_retries=_env_int("MAX_FORMAT_RETRIES", 2),
             source_ingest_concurrency=_env_int("SOURCE_INGEST_CONCURRENCY", 16),
             source_ocr_concurrency=_env_int("SOURCE_OCR_CONCURRENCY", 16),
