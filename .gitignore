@@ -1,0 +1,22 @@
+# Workspace runtime
+.tree/
+materials/*
+!materials/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Env / secrets
+.env
+config.env
+
+# OS
+.DS_Store
