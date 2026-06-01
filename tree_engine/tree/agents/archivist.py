@@ -93,16 +93,33 @@ class ArchivistAgent(Agent):
         if line_count == 0:
             return []
 
-        raw = await self.complete(
-            _mtu_prompt_body(cleaned_markdown, line_count),
-            system_prompt=ARCHIVIST_MTU_PROMPT,
-            timeout_sec=timeout_sec,
-        )
-        plan = extract_json_object(raw)
-        partition = _partition_mtu_plan(plan, line_count=line_count)
-        last_error: MtuCoverageError | None = None
+        prompt_body = _mtu_prompt_body(cleaned_markdown, line_count)
+        partition: dict[str, Any] | None = None
+        malformed_feedback = ""
+        last_error: ValueError | None = None
 
         for attempt in range(repair_attempts + 1):
+            if partition is None:
+                try:
+                    raw = await self.complete(
+                        prompt_body + malformed_feedback,
+                        system_prompt=ARCHIVIST_MTU_PROMPT,
+                        timeout_sec=timeout_sec,
+                    )
+                    plan = extract_json_object(raw)
+                    partition = _partition_mtu_plan(plan, line_count=line_count)
+                except (ValueError, MtuCoverageError) as exc:
+                    last_error = exc
+                    logger.warning(
+                        "MTU cut plan malformed for %s/%s (attempt %d): %s",
+                        collection, source_file, attempt + 1, exc,
+                    )
+                    malformed_feedback = (
+                        f"\n\nPREVIOUS RESPONSE WAS NOT VALID JSON: {exc}. "
+                        "Regenerate one strict JSON object only, with valid `units` and "
+                        "`skipped_ranges` that cover every line exactly once."
+                    )
+                    continue
             try:
                 final_plan = {
                     "units": partition["valid_units"],
@@ -131,13 +148,26 @@ class ArchivistAgent(Agent):
                     system_prompt=ARCHIVIST_MTU_PROMPT,
                     timeout_sec=timeout_sec,
                 )
-                repair_plan = extract_json_object(raw_repair)
-                partition = _partition_mtu_plan(
-                    repair_plan,
-                    line_count=line_count,
-                    locked_units=partition["valid_units"],
-                    locked_skipped_ranges=partition["valid_skipped_ranges"],
-                )
+                try:
+                    repair_plan = extract_json_object(raw_repair)
+                    partition = _partition_mtu_plan(
+                        repair_plan,
+                        line_count=line_count,
+                        locked_units=partition["valid_units"],
+                        locked_skipped_ranges=partition["valid_skipped_ranges"],
+                    )
+                except (ValueError, MtuCoverageError) as repair_exc:
+                    last_error = repair_exc
+                    logger.warning(
+                        "MTU cut repair malformed for %s/%s (attempt %d): %s",
+                        collection, source_file, attempt + 1, repair_exc,
+                    )
+                    partition = None
+                    malformed_feedback = (
+                        f"\n\nPREVIOUS RESPONSE WAS NOT VALID JSON: {repair_exc}. "
+                        "Regenerate the full strict JSON object only, with valid `units` and "
+                        "`skipped_ranges` that cover every line exactly once."
+                    )
 
         raise last_error or MtuCoverageError(
             f"MTU cut plan invalid for {collection}/{source_file} after {repair_attempts + 1} attempts"
@@ -218,6 +248,16 @@ def _partition_mtu_plan(
             invalid_units.append({"index": index, "block": raw, "problem": str(exc)})
             continue
         if problem:
+            added = False
+            for start, end in _uncovered_segments(unit["start_line"], unit["end_line"], occupied, line_count):
+                segment = {**unit, "start_line": start, "end_line": end}
+                occupied.append((start, end))
+                valid_units.append(segment)
+                added = True
+            if added:
+                continue
+            if "overlaps locked/valid range" in problem:
+                continue
             invalid_units.append({"index": index, "block": unit, "problem": problem})
             continue
         occupied.append((unit["start_line"], unit["end_line"]))
@@ -232,11 +272,9 @@ def _partition_mtu_plan(
                 line_count=line_count,
                 occupied=occupied,
             )
-        except MtuCoverageError as exc:
-            invalid_skipped.append({"index": index, "block": raw, "problem": str(exc)})
+        except MtuCoverageError:
             continue
         if problem:
-            invalid_skipped.append({"index": index, "block": skipped, "problem": problem})
             continue
         occupied.append((skipped["start_line"], skipped["end_line"]))
         valid_skipped.append(skipped)
@@ -285,6 +323,31 @@ def _mtu_span_problem(
         if start <= used_end and end >= used_start:
             return f"range {start}-{end} overlaps locked/valid range {used_start}-{used_end}"
     return ""
+
+
+def _uncovered_segments(
+    start: int,
+    end: int,
+    occupied: list[tuple[int, int]],
+    line_count: int,
+) -> list[tuple[int, int]]:
+    if start < 1 or end > line_count or end < start:
+        return []
+    segments = [(start, end)]
+    for used_start, used_end in sorted(occupied):
+        next_segments: list[tuple[int, int]] = []
+        for seg_start, seg_end in segments:
+            if used_end < seg_start or used_start > seg_end:
+                next_segments.append((seg_start, seg_end))
+                continue
+            if seg_start < used_start:
+                next_segments.append((seg_start, used_start - 1))
+            if used_end < seg_end:
+                next_segments.append((used_end + 1, seg_end))
+        segments = next_segments
+        if not segments:
+            break
+    return segments
 
 
 def _missing_ranges(spans: list[tuple[int, int]], line_count: int) -> list[dict[str, int]]:

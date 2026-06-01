@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from tree.config import RoleConfig, Settings
@@ -39,6 +40,10 @@ def _settings() -> Settings:
         dagger=role,
         max_retries=0,
     )
+
+
+def test_settings_default_archivist_repair_attempts_absorbs_json_mode_retries():
+    assert Settings.from_env(project_root=Path.cwd(), require_llm=False).archivist_mtu_repair_attempts == 3
 
 
 async def test_llm_client_sets_role_specific_deepseek_options(monkeypatch):

@@ -18,7 +18,7 @@ from tree.engine.ingest_driver import prepare_sources
 from tree.io import paths
 from tree.model.client import LLMClient
 from tree.observability.progress import ProgressTracker
-from tree.planner.pipeline import load_branches, load_dag, rebuild_planner
+from tree.planner.pipeline import load_branches, load_dag
 from tree.planner.schedule import start_ready_branch_runs
 from tree.state.manager import StateManager
 
@@ -84,12 +84,6 @@ class TreeEngine:
         await self.prepare_sources()
 
         while True:
-            await rebuild_planner(
-                self.root,
-                settings=self.settings,
-                agents=self.agents,
-                mtu_producer=None,
-            )
             state = self.state_mgr.load()
             in_progress = self.state_mgr.find_in_progress_all(state)
             if not in_progress:

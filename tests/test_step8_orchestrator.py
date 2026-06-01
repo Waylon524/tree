@@ -39,6 +39,11 @@ class _FakeRunner:
         return "branch_complete"
 
 
+class _ExplodingDagger:
+    async def build(self, payload, *, timeout_sec=None):
+        raise AssertionError("run() should not rebuild the planner after prepare_sources()")
+
+
 async def test_tree_engine_run_schedules_ready_branch_and_finishes(tmp_path, monkeypatch):
     paths.ensure_workspace_dirs(tmp_path)
     write_json_atomic(
@@ -83,17 +88,13 @@ async def test_tree_engine_run_schedules_ready_branch_and_finishes(tmp_path, mon
     async def _noop_prepare(engine):
         return {"mtu_count": 0}
 
-    async def _noop_rebuild(root, *, settings, agents, mtu_producer=None):
-        return {"branch_count": 1}
-
     monkeypatch.setattr("tree.engine.orchestrator.prepare_sources", _noop_prepare)
-    monkeypatch.setattr("tree.engine.orchestrator.rebuild_planner", _noop_rebuild)
 
     runner = _FakeRunner(tmp_path)
     engine = TreeEngine(
         SimpleNamespace(project_root=tmp_path, max_active_branch_runs=1),
         branch_runner=runner,
-        agents=SimpleNamespace(dagger=object()),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
     )
 
     await engine.run()

@@ -153,6 +153,36 @@ async def test_archivist_cut_mtus_retries_invalid_metadata_json():
     assert len(client.calls) == 2
 
 
+async def test_archivist_cut_mtus_retries_malformed_initial_json():
+    malformed = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件"
+      ],
+      "skipped_ranges": []
+    }"""
+    valid = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    def response(user):
+        if "PREVIOUS RESPONSE WAS NOT VALID JSON" in user:
+            return valid
+        return malformed
+
+    client = _FakeClient({"archivist": response})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus("line 1\nline 2", collection="课件", source_file="ch1.md", repair_attempts=1)
+
+    assert mtus[0].title == "干涉条件"
+    assert len(client.calls) == 2
+
+
 async def test_archivist_cut_mtus_repairs_only_invalid_unit_metadata():
     invalid = """{
       "units": [
@@ -225,6 +255,91 @@ async def test_archivist_cut_mtus_repairs_only_missing_ranges():
 
     assert [mtu.line_range for mtu in mtus] == [(1, 2), (3, 4)]
     assert len(client.calls) == 2
+
+
+async def test_archivist_cut_mtus_ignores_redundant_overlapping_skipped_ranges():
+    plan = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": [
+        {"start_line": 2, "end_line": 2, "reason": "redundant_noise"}
+      ]
+    }"""
+
+    client = _FakeClient({"archivist": plan})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus("line 1\nline 2", collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 2)]
+    assert len(client.calls) == 1
+
+
+async def test_archivist_cut_mtus_trims_overlapping_repair_units_to_missing_segments():
+    incomplete = """{
+      "units": [
+        {"start_line": 3, "end_line": 3, "title": "中心条件",
+         "keywords": ["条件"], "summary": "说明中心条件在本段中的作用边界。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+    broad_repair = """{
+      "units": [
+        {"start_line": 1, "end_line": 5, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    client = _FakeClient(
+        {"archivist": lambda user: broad_repair if "REPAIR_ONLY_INVALID_MTU_BLOCKS" in user else incomplete}
+    )
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus(
+        "line 1\nline 2\nline 3\nline 4\nline 5",
+        collection="课件",
+        source_file="ch1.md",
+        repair_attempts=1,
+    )
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 2), (3, 3), (4, 5)]
+
+
+async def test_archivist_cut_mtus_drops_fully_redundant_overlapping_repair_units():
+    incomplete = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+    redundant_repair = """{
+      "units": [
+        {"start_line": 2, "end_line": 3, "title": "重复条件",
+         "keywords": ["重复"], "summary": "重复覆盖已经锁定的教学行，应被忽略。",
+         "unit_kind": "concept"},
+        {"start_line": 3, "end_line": 3, "title": "补充条件",
+         "keywords": ["补充"], "summary": "补齐第三行遗漏的教学内容边界。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    client = _FakeClient(
+        {"archivist": lambda user: redundant_repair if "REPAIR_ONLY_INVALID_MTU_BLOCKS" in user else incomplete}
+    )
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus("line 1\nline 2\nline 3", collection="课件", source_file="ch1.md", repair_attempts=1)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 2), (3, 3)]
 
 
 async def test_archivist_cut_mtus_sorts_repaired_units_by_source_line():
