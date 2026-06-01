@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tree.engine.ingest_driver import prepare_sources, split_raw_markdown_for_cleaning
+from tree.engine.ingest_driver import (
+    prepare_sources,
+    remove_ocr_image_html,
+    split_raw_markdown_for_cleaning,
+)
 from tree.io import paths
 from tree.planner.pipeline import load_dag, load_nodes
 from tree.planner.store import read_envelope_data
@@ -168,6 +172,60 @@ async def test_prepare_sources_persists_ocr_markdown_checkpoint_before_archivist
         and patch["source_ingest"]["path"] == "ocr/课件/ch1.md.md"
         for patch in progress.patches
     )
+
+
+def test_remove_ocr_image_html_removes_centered_img_div_blocks():
+    raw = (
+        "before\n"
+        '<div style="text-align: center;"><img src="https://pplines-online.bj.bcebos.com/deploy/'
+        'official/paddleocr/pp-ocr-vl-16-online//x/markdown_1/imgs/img_in_image_box.jpg?authorization=abc" '
+        'alt="Image" width="57%" /></div>\n'
+        "after"
+    )
+
+    cleaned = remove_ocr_image_html(raw)
+
+    assert "before" in cleaned
+    assert "after" in cleaned
+    assert "<img" not in cleaned
+    assert "pplines-online" not in cleaned
+
+
+async def test_prepare_sources_persists_ocr_checkpoint_after_removing_image_html(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.parent.mkdir(parents=True)
+    raw = (
+        "raw line 1\nraw line 2\n"
+        '<div style="text-align: center;"><img src="https://pplines-online.bj.bcebos.com/x.jpg" '
+        'alt="Image" width="57%" /></div>\n'
+        "raw line 3\nraw line 4"
+    )
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    archivist = _FakeArchivist()
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        archivist_mtu_cut_timeout_sec=1.0,
+        archivist_mtu_repair_attempts=0,
+        dagger_build_timeout_sec=1.0,
+        dagger_repair_attempts=0,
+        dagger_max_nodes_per_call=400,
+    )
+    engine = SimpleNamespace(
+        settings=settings,
+        archivist=archivist,
+        agents=SimpleNamespace(dagger=_EchoDagger()),
+        rag_indexer=_FakeIndexer(),
+    )
+
+    await prepare_sources(engine)
+
+    checkpoint = paths.ocr_markdown_path(tmp_path, "课件", "ch1.md")
+    checkpoint_text = checkpoint.read_text(encoding="utf-8")
+    assert "<img" not in checkpoint_text
+    assert "pplines-online" not in checkpoint_text
+    assert archivist.clean_inputs == [checkpoint_text]
 
 
 def test_split_raw_markdown_prefers_nearest_level_one_heading_in_window():

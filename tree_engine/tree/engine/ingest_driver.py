@@ -74,7 +74,7 @@ async def ensure_all_embedded(engine: object) -> int:
 async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) -> list[MTU]:
     """Extract one material, clean it, persist source Markdown, and cut MTUs."""
     material_path = paths.materials_root(root) / material["path"]
-    raw = await asyncio.to_thread(extract_text, material_path)
+    raw = remove_ocr_image_html(await asyncio.to_thread(extract_text, material_path))
     ocr_path = persist_ocr_markdown(root, material["collection"], material["source_file"], raw)
     _record_ocr_checkpoint(engine, root, ocr_path, raw)
     checkpoint_raw = ocr_path.read_text(encoding="utf-8")
@@ -148,6 +148,18 @@ def split_raw_markdown_for_cleaning(raw_markdown: str) -> list[str]:
     if start < len(raw_markdown):
         chunks.append(raw_markdown[start:])
     return [chunk for chunk in chunks if chunk]
+
+
+def remove_ocr_image_html(raw_markdown: str) -> str:
+    """Remove OCR-emitted HTML image blocks before chunking or LLM cleanup."""
+    text = re.sub(
+        r'<div\b[^>]*>\s*<img\b[^>]*>\s*</div>',
+        "",
+        raw_markdown,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"<img\b[^>]*>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def chunk_source_file_name(source_file: str, *, index: int, total: int) -> str:
