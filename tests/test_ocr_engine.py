@@ -1,0 +1,161 @@
+"""Tests for PaddleOCR file-level scheduling."""
+
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from tree.ingest.ocr_engine import OCREngine
+
+
+@pytest.fixture(autouse=True)
+def reset_ocr_engine_singleton():
+    OCREngine._instance = None
+    yield
+    if OCREngine._instance is not None:
+        OCREngine._instance.close()
+    OCREngine._instance = None
+
+
+def test_pdf_chunks_are_ocrd_with_max_five_concurrent_files(tmp_path, monkeypatch):
+    engine = OCREngine(token="test", pdf_max_pages_per_job=1)
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    chunks = [tmp_path / f"chunk-{index}.pdf" for index in range(6)]
+    for chunk in chunks:
+        chunk.write_bytes(b"%PDF-chunk")
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    five_started = threading.Event()
+    release = threading.Event()
+
+    monkeypatch.setattr(engine, "_pdf_page_count", lambda path: 6 if Path(path) == pdf else 1)
+    monkeypatch.setattr(engine, "_split_pdf", lambda pdf_path, output_dir, max_pages: chunks)
+
+    def fake_ocr_single(path, context=None):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            if active == 5:
+                five_started.set()
+        try:
+            release.wait(timeout=0.2)
+            return Path(path).stem
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(engine, "_ocr_single_local", fake_ocr_single)
+
+    result_holder: dict[str, str] = {}
+    worker = threading.Thread(target=lambda: result_holder.setdefault("text", engine._ocr_local_pdf(pdf)))
+    worker.start()
+    try:
+        assert five_started.wait(timeout=0.2)
+        release.set()
+        worker.join(timeout=1)
+    finally:
+        release.set()
+        worker.join(timeout=1)
+
+    assert max_active == 5
+    assert result_holder["text"].split("\n\n") == [chunk.stem for chunk in chunks]
+
+
+def test_direct_ocr_files_share_global_five_file_gate(tmp_path, monkeypatch):
+    engine = OCREngine(token="test", ocr_concurrency=5)
+    files = [tmp_path / f"file-{index}.png" for index in range(6)]
+    for file in files:
+        file.write_bytes(b"image")
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    five_started = threading.Event()
+    release = threading.Event()
+
+    def fake_unlocked(path, context=None):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+            if active == 5:
+                five_started.set()
+        try:
+            release.wait(timeout=0.2)
+            return Path(path).stem
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(engine, "_ocr_single_local_unlocked", fake_unlocked)
+
+    results: list[str] = []
+    threads = [
+        threading.Thread(target=lambda path=file: results.append(engine._ocr_single_local(path)))
+        for file in files
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        assert five_started.wait(timeout=0.2)
+        release.set()
+        for thread in threads:
+            thread.join(timeout=1)
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(timeout=1)
+
+    assert max_active == 5
+    assert sorted(results) == [file.stem for file in files]
+
+
+class _OcrRateLimitError(Exception):
+    pass
+
+
+def test_pdf_chunk_retry_waits_for_completed_file_after_concurrency_error(tmp_path, monkeypatch):
+    engine = OCREngine(token="test", pdf_max_pages_per_job=1)
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    overloaded = tmp_path / "overloaded.pdf"
+    slow = tmp_path / "slow.pdf"
+    overloaded.write_bytes(b"%PDF-overloaded")
+    slow.write_bytes(b"%PDF-slow")
+
+    events: list[str] = []
+    attempts = {"overloaded": 0}
+    slow_started = threading.Event()
+    overload_failed = threading.Event()
+
+    monkeypatch.setattr(engine, "_pdf_page_count", lambda path: 2 if Path(path) == pdf else 1)
+    monkeypatch.setattr(engine, "_split_pdf", lambda pdf_path, output_dir, max_pages: [overloaded, slow])
+
+    def fake_ocr_single(path, context=None):
+        name = Path(path).stem
+        if name == "slow":
+            events.append("slow-start")
+            slow_started.set()
+            overload_failed.wait(timeout=0.2)
+            time.sleep(0.01)
+            events.append("slow-complete")
+            return "slow text"
+        attempts["overloaded"] += 1
+        events.append(f"overloaded-attempt-{attempts['overloaded']}")
+        if attempts["overloaded"] == 1:
+            slow_started.wait(timeout=0.2)
+            overload_failed.set()
+            raise _OcrRateLimitError("too many concurrent OCR jobs")
+        return "overloaded text"
+
+    monkeypatch.setattr(engine, "_ocr_single_local", fake_ocr_single)
+
+    assert engine._ocr_local_pdf(pdf).split("\n\n") == ["overloaded text", "slow text"]
+    assert events.index("slow-complete") < events.index("overloaded-attempt-2")

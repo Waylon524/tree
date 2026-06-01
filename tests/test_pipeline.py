@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 from tree.io import paths
@@ -131,3 +132,58 @@ async def test_rebuild_planner_reuses_chunked_mtu_cache_when_unchanged(tmp_path)
 
     assert summary["mtu_count"] == 2
     assert summary["node_count"] == 2
+
+
+async def test_rebuild_planner_processes_changed_materials_with_configured_concurrency(tmp_path):
+    for index in range(6):
+        path = tmp_path / "materials" / "课件" / f"ch{index}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("l1\nl2", encoding="utf-8")
+
+    active = 0
+    max_active = 0
+    started_five = asyncio.Event()
+    release = asyncio.Event()
+
+    async def producer(root, material):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        if active == 5:
+            started_five.set()
+        try:
+            await release.wait()
+            units = [
+                {
+                    "start_line": 1,
+                    "end_line": 2,
+                    "title": material["source_file"],
+                    "keywords": ["k1"],
+                    "summary": "",
+                    "unit_kind": "concept",
+                }
+            ]
+            return build_mtus(units, collection=material["collection"], source_file=material["source_file"])
+        finally:
+            active -= 1
+
+    settings = SimpleNamespace(
+        source_ingest_concurrency=5,
+        dagger_build_timeout_sec=1.0,
+        dagger_repair_attempts=0,
+        dagger_max_nodes_per_call=400,
+    )
+    task = asyncio.create_task(
+        rebuild_planner(tmp_path, settings=settings, agents=SimpleNamespace(dagger=_EchoDagger()), mtu_producer=producer)
+    )
+    try:
+        await asyncio.wait_for(started_five.wait(), timeout=1)
+        assert active == 5
+        release.set()
+        await task
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+
+    assert max_active == 5

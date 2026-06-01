@@ -16,7 +16,9 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,6 +31,7 @@ _DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 _DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT = 600
+_OCR_CONCURRENCY = 5
 _PDF_MAX_PAGES_PER_JOB = 99
 _HTTP_RETRY_ATTEMPTS = 5
 _HTTP_RETRY_INITIAL_DELAY = 2.0
@@ -60,6 +63,7 @@ class OCREngine:
     """Async-job client for Baidu AI Studio PaddleOCR-VL."""
 
     _instance = None
+    _ocr_semaphore = threading.BoundedSemaphore(_OCR_CONCURRENCY)
 
     def __new__(cls, job_url: str | None = None, token: str | None = None, **kwargs):
         if cls._instance is None:
@@ -73,11 +77,18 @@ class OCREngine:
                 "pdf_max_pages_per_job",
                 int(os.environ.get("SOURCE_OCR_PDF_MAX_PAGES_PER_JOB", _PDF_MAX_PAGES_PER_JOB)),
             )
+            cls._instance._ocr_concurrency = max(
+                1, kwargs.pop("ocr_concurrency", int(os.environ.get("SOURCE_OCR_CONCURRENCY", _OCR_CONCURRENCY)))
+            )
+            cls._ocr_semaphore = threading.BoundedSemaphore(cls._instance._ocr_concurrency)
             cls._instance._options = {**_DEFAULT_OPTIONS, **kwargs.pop("options", {})}
             cls._instance._client = httpx.Client(timeout=kwargs.pop("timeout", 30.0))
             logger.info("OCR API client: %s", cls._instance._job_url)
         elif "pdf_max_pages_per_job" in kwargs:
             cls._instance._pdf_max_pages_per_job = kwargs["pdf_max_pages_per_job"]
+        elif "ocr_concurrency" in kwargs:
+            cls._instance._ocr_concurrency = max(1, kwargs["ocr_concurrency"])
+            cls._ocr_semaphore = threading.BoundedSemaphore(cls._instance._ocr_concurrency)
         return cls._instance
 
     def _headers(self, content_type: str | None = None) -> dict:
@@ -131,30 +142,91 @@ class OCREngine:
             max_pages,
             pdf_path.name,
         )
-        parts = []
         with tempfile.TemporaryDirectory(prefix="tree-pdf-split-") as temp_dir:
             chunk_paths = self._split_pdf(pdf_path, Path(temp_dir), max_pages)
+            jobs = []
             for index, chunk_path in enumerate(chunk_paths, start=1):
-                logger.info("OCR-ing PDF chunk %d/%d: %s", index, len(chunk_paths), chunk_path.name)
                 chunk_pages = self._pdf_page_count(chunk_path)
-                text = self._ocr_single_local(
-                    chunk_path,
-                    {
-                        "current_file": pdf_path.name,
-                        "current_chunk": chunk_path.name,
-                        "chunk_index": index,
-                        "chunks_total": len(chunk_paths),
-                        "file_pages_total": page_count,
-                        "chunk_pages_total": chunk_pages,
-                        "pdf_max_pages_per_job": max_pages,
-                    },
+                jobs.append(
+                    (
+                        chunk_path,
+                        {
+                            "current_file": pdf_path.name,
+                            "current_chunk": chunk_path.name,
+                            "chunk_index": index,
+                            "chunks_total": len(chunk_paths),
+                            "file_pages_total": page_count,
+                            "chunk_pages_total": chunk_pages,
+                            "pdf_max_pages_per_job": max_pages,
+                        },
+                    )
                 )
-                if text.strip():
-                    parts.append(text)
+            parts = self._ocr_pdf_chunks(jobs)
         return clean_ocr_markdown_text("\n\n".join(parts))
+
+    def _ocr_pdf_chunks(self, jobs: list[tuple[Path, dict[str, Any]]]) -> list[str]:
+        """OCR split PDF chunks with bounded file-level concurrency."""
+        if not jobs:
+            return []
+
+        results: list[str | None] = [None] * len(jobs)
+        pending = list(range(len(jobs)))
+        running: dict[Future[str], int] = {}
+        retry_counts = {index: 0 for index in pending}
+        wait_for_success_before_retry = False
+
+        def submit_available(executor: ThreadPoolExecutor) -> None:
+            nonlocal wait_for_success_before_retry
+            while (
+                pending
+                and len(running) < self._ocr_concurrency
+                and not wait_for_success_before_retry
+            ):
+                index = pending.pop(0)
+                chunk_path, context = jobs[index]
+                logger.info(
+                    "OCR-ing PDF chunk %d/%d: %s",
+                    context.get("chunk_index", index + 1),
+                    context.get("chunks_total", len(jobs)),
+                    chunk_path.name,
+                )
+                running[executor.submit(self._ocr_single_local, chunk_path, context)] = index
+
+        with ThreadPoolExecutor(max_workers=self._ocr_concurrency) as executor:
+            submit_available(executor)
+            while running:
+                done, _ = wait(running, return_when=FIRST_COMPLETED)
+                saw_success = False
+                for future in done:
+                    index = running.pop(future)
+                    try:
+                        results[index] = future.result()
+                        saw_success = True
+                    except Exception as exc:
+                        if not _is_ocr_concurrency_error(exc):
+                            raise
+                        retry_counts[index] += 1
+                        if retry_counts[index] > _HTTP_RETRY_ATTEMPTS:
+                            raise
+                        pending.insert(0, index)
+                        if running:
+                            wait_for_success_before_retry = True
+
+                if saw_success:
+                    wait_for_success_before_retry = False
+                if not running and pending:
+                    wait_for_success_before_retry = False
+                submit_available(executor)
+
+        return [text for text in results if text and text.strip()]
 
     def _ocr_single_local(self, path: Path, context: dict[str, Any] | None = None) -> str:
         """OCR one local file without additional splitting."""
+        with self._ocr_semaphore:
+            return self._ocr_single_local_unlocked(path, context)
+
+    def _ocr_single_local_unlocked(self, path: Path, context: dict[str, Any] | None = None) -> str:
+        """OCR one local file after the file-level concurrency gate is acquired."""
         context = {
             "current_file": path.name,
             "current_chunk": path.name,
@@ -499,6 +571,30 @@ def _response_summary(resp: httpx.Response) -> str:
     if code is None:
         return f"HTTP {resp.status_code}"
     return f"HTTP {resp.status_code}, API code {code}"
+
+
+def _is_ocr_concurrency_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status_code == 429 or getattr(response, "status_code", None) == 429:
+        return True
+    name = exc.__class__.__name__.lower()
+    if "ratelimit" in name or "rate_limit" in name:
+        return True
+    message = str(exc).lower()
+    markers = (
+        "too many",
+        "rate limit",
+        "rate_limit",
+        "concurrent",
+        "concurrency",
+        "overload",
+        "server busy",
+        "429",
+        "并发",
+        "限流",
+    )
+    return any(marker in message for marker in markers)
 
 
 def _int_or_none(value: Any) -> int | None:

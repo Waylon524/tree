@@ -8,6 +8,7 @@ See docs/REBUILD-DESIGN.md §5.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
@@ -57,7 +58,7 @@ async def rebuild_planner(
     if needs_build and mtu_producer is None:
         raise PlannerError("Materials are new/changed but no mtu_producer was supplied.")
 
-    mtus = await _collect_mtus(root, manifest, producer=mtu_producer)
+    mtus = await _collect_mtus(root, manifest, producer=mtu_producer, settings=settings)
     mtus_env = envelope(
         schema="tree.mtus",
         data={"mtus": [m.model_dump(mode="json") for m in mtus]},
@@ -107,16 +108,29 @@ async def rebuild_planner(
 
 
 async def _collect_mtus(
-    root: Path, manifest: dict[str, Any], *, producer: MtuProducer | None
+    root: Path, manifest: dict[str, Any], *, producer: MtuProducer | None, settings: Any
 ) -> list[MTU]:
     cache = _load_mtu_cache(root)
     collected: list[MTU] = []
+    produce_tasks: list[asyncio.Task[list[MTU]]] = []
+    concurrency = max(1, int(getattr(settings, "source_ingest_concurrency", 1)))
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def produce(material: dict[str, Any]) -> list[MTU]:
+        if producer is None:
+            return []
+        async with semaphore:
+            return await producer(root, material)
+
     for material in manifest["materials"]:
         key = (material["collection"], material["source_file"])
         if material["status"] == "unchanged" and key in cache:
             collected.extend(cache[key])
         elif producer is not None:
-            collected.extend(await producer(root, material))
+            produce_tasks.append(asyncio.create_task(produce(material)))
+
+    for task in produce_tasks:
+        collected.extend(await task)
 
     # Deterministic global ordering used for source-order edges.
     collected.sort(key=lambda m: (m.collection, m.source_file, m.line_range[0]))

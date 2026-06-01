@@ -55,7 +55,7 @@ class Settings:
 
     # Source ingest / OCR
     source_ingest_concurrency: int = 16
-    source_ocr_concurrency: int = 16
+    source_ocr_concurrency: int = 5
     source_ocr_pdf_max_pages_per_job: int = 99
     source_ocr_upload_interval_sec: float = 5.0
     source_embedding_concurrency: int = 1
@@ -115,7 +115,7 @@ class Settings:
             pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
             pro_degradation_cooldown_sec=_env_int("PRO_DEGRADATION_COOLDOWN_SEC", 600),
             source_ingest_concurrency=_env_int("SOURCE_INGEST_CONCURRENCY", 16),
-            source_ocr_concurrency=_env_int("SOURCE_OCR_CONCURRENCY", 16),
+            source_ocr_concurrency=_env_int("SOURCE_OCR_CONCURRENCY", 5),
             source_ocr_pdf_max_pages_per_job=_env_int("SOURCE_OCR_PDF_MAX_PAGES_PER_JOB", 99),
             source_ocr_upload_interval_sec=_env_float("SOURCE_OCR_UPLOAD_INTERVAL_SEC", 5.0),
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
