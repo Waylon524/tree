@@ -38,7 +38,7 @@ python -m compileall tree_engine/tree
 - ✅ Step 4 Archivist 切 MTU：clean + cut_mtus（行全覆盖校验 + repair + 兜底）/ planner.mtu 纯函数
 - ✅ Step 5 Dagger 建 DAG：合并 canonical 节点 + 连边 + 断环 + 覆盖校验（一次性全局 / 超阈值分批兜底）
 - ✅ Step 6 planner 编排：material_scan（增量指纹）+ rebuild_planner（②③④ envelope 化 + MTU 缓存复用）+ schedule（ready branch + CoverageSnapshot）
-- ⬜ Step 7 examiner/student/writer + branch_run
+- ✅ Step 7 以考促写循环：examiner/student/writer agents + parsers + branch_run（Step 0→4 + Prior Scope + PASS 写盘 + 内联 ledger）+ StateManager mutators
 - ⬜ Step 8 engine 编排 + ingest_driver
 - ⬜ Step 9 CLI + dashboard
 - ⬜ Step 10 端到端验收

@@ -1,17 +1,107 @@
-"""WriterAgent: CREATE/OPTIMIZE branch-span drafts from Bottleneck Reports.
-
-TODO (step 7): draft(branch_span, writer_instructions, bottleneck, current_draft,
-                     prior_scope, source_rag) -> WriterResult
-See docs/REBUILD-DESIGN.md §6.
-"""
+"""WriterAgent: CREATE or OPTIMIZE a branch-span draft. See REBUILD-DESIGN §6."""
 
 from __future__ import annotations
 
+import re
+
 from tree.agents.base import Agent
+from tree.state.models import WriterResult
+
+_SENSITIVE_EXAM_HEADER_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\[)?"
+    r"(?:Blind_Exam|Answer_Key|Exam Paper|Standard Answers|Student'?s? Exam Responses|"
+    r"Student Responses|Student Answer|Student's Answer|试卷原文|盲考试题|考试题目|"
+    r"标准答案|学生答卷|学生答案)"
+    r"(?:\])?\b",
+    re.IGNORECASE,
+)
+_MARKDOWN_HEADER_RE = re.compile(r"^\s*#{1,6}\s+\S")
 
 
 class WriterAgent(Agent):
     role = "writer"
 
-    async def draft(self, *args, **kwargs):
-        raise NotImplementedError("Writer.draft — implement in step 7")
+    async def draft(
+        self,
+        *,
+        span_title: str,
+        file_seq: str,
+        bottleneck_report: str,
+        prior_paths: list[str],
+        prior_contents: list[str],
+        draft_text: str | None = None,
+        previous_bottleneck: str | None = None,
+        writer_instructions: str | None = None,
+        retrieved: list[dict] | None = None,
+        branch_context: str | None = None,
+    ) -> WriterResult:
+        mode = "OPTIMIZE" if draft_text else "CREATE"
+        bottleneck_report = sanitize_writer_context(bottleneck_report)
+        previous_bottleneck = sanitize_writer_context(previous_bottleneck) if previous_bottleneck else None
+        writer_instructions = sanitize_writer_context(writer_instructions) if writer_instructions else None
+
+        parts = [
+            f"## Task: {mode} mode\n",
+            f"Declared branch span title: {span_title}\n",
+            f"File sequence: {file_seq}\n",
+            f"Bottleneck Report:\n{bottleneck_report}\n",
+        ]
+        if previous_bottleneck:
+            parts.append(f"Previous Bottleneck Report:\n{previous_bottleneck}\n")
+        parts.append(
+            f"Current draft (OPTIMIZE this):\n{draft_text}\n" if draft_text
+            else "Current draft: 尚未创建 (CREATE from scratch)\n"
+        )
+        if writer_instructions:
+            parts.append(f"[Writer_Instructions]:\n{writer_instructions}\n")
+        if branch_context:
+            parts.append(
+                "Planner-bound ActiveBranch context. Use it only to enforce the declared branch-span "
+                f"delta and prerequisite boundaries:\n{branch_context}\n"
+            )
+        if retrieved:
+            parts.append(_format_retrieved(retrieved))
+        parts.append("Prior completed file paths:\n" + "\n".join(f"  - {p}" for p in prior_paths) + "\n")
+        if prior_contents:
+            parts.append("Prior completed file contents:\n")
+            for i, content in enumerate(prior_contents):
+                parts.append(f"--- File {i + 1} ---\n{content}\n")
+
+        raw = await self.complete("\n".join(parts))
+        return WriterResult(draft_content=raw)
+
+
+def sanitize_writer_context(text: str) -> str:
+    """Remove exam-only blocks before text is sent to the writer."""
+    sanitized: list[str] = []
+    redacting = False
+    for line in text.splitlines():
+        if _SENSITIVE_EXAM_HEADER_RE.search(line):
+            if not sanitized or sanitized[-1] != "[REDACTED writer-invisible exam content]":
+                sanitized.append("[REDACTED writer-invisible exam content]")
+            redacting = True
+            continue
+        if redacting:
+            if _MARKDOWN_HEADER_RE.match(line):
+                redacting = False
+            else:
+                continue
+        sanitized.append(line)
+    return "\n".join(sanitized).strip()
+
+
+def _format_retrieved(retrieved: list[dict]) -> str:
+    parts = [
+        "Retrieved RAG context:\n"
+        "- content_kind=source hits may teach the current declared branch span.\n"
+        "- content_kind=finished hits are already taught; cite briefly as prerequisites, do not duplicate.\n"
+        "- content_kind=ledger hits summarize the delta that must remain after removing duplicates.\n"
+    ]
+    for i, hit in enumerate(retrieved, start=1):
+        meta = hit.get("metadata") or {}
+        kind = meta.get("content_kind") or "unknown"
+        source = meta.get("path") or meta.get("filename") or meta.get("doc_id") or "unknown"
+        score = hit.get("score")
+        score_text = f", score={score:.4f}" if isinstance(score, float) else ""
+        parts.append(f"--- RAG Hit {i}: kind={kind}, {source}{score_text} ---\n{hit.get('text', '')}\n")
+    return "\n".join(parts)
