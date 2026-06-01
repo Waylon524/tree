@@ -17,6 +17,15 @@ from tree.observability.retry import (
     retry_with_backoff,
 )
 
+_JSON_RESPONSE_ROLES = {"archivist", "dagger"}
+_THINKING_BY_ROLE = {
+    "archivist": "disabled",
+    "dagger": "enabled",
+    "examiner": "enabled",
+    "writer": "enabled",
+    "student": "disabled",
+}
+
 
 class LLMClient:
     def __init__(self, settings: Settings):
@@ -64,6 +73,7 @@ class LLMClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
+                    **_request_options(role),
                 ),
                 timeout=effective_timeout,
             )
@@ -83,6 +93,17 @@ class LLMClient:
     async def close(self) -> None:
         for client in self._clients.values():
             await client.close()
+
+
+def _request_options(role: str) -> dict[str, object]:
+    options: dict[str, object] = {
+        "extra_body": {"thinking": {"type": _THINKING_BY_ROLE.get(role, "disabled")}},
+    }
+    if role in _JSON_RESPONSE_ROLES:
+        options["response_format"] = {"type": "json_object"}
+    if role == "dagger":
+        options["reasoning_effort"] = "high"
+    return options
 
 
 def _extract_chat_content(resp: object) -> str:
