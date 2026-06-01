@@ -73,6 +73,59 @@ async def test_student_answer_returns_text():
     assert out == "学生作答内容"
 
 
+async def test_archivist_clean_deletes_only_llm_selected_ranges():
+    raw = "# 原始标题\n页脚 12\n## 原始小节\n教学正文"
+    client = _FakeClient(
+        {
+            "archivist": """{
+              "deleted_ranges": [
+                {"start_line": 2, "end_line": 2, "reason": "page_footer"}
+              ]
+            }"""
+        }
+    )
+    agent = ArchivistAgent(client)
+
+    cleaned = await agent.clean(raw)
+
+    assert cleaned == "# 原始标题\n## 原始小节\n教学正文"
+    user_prompt = client.calls[0][1]
+    assert "TOTAL_LINES: 4" in user_prompt
+    assert "1\t# 原始标题" in user_prompt
+    assert "2\t页脚 12" in user_prompt
+
+
+async def test_archivist_clean_repairs_only_invalid_deleted_ranges():
+    raw = "教学一\n页脚\n广告\n教学二"
+
+    def response(user):
+        if "INVALID_DELETED_RANGES" in user:
+            assert '"start_line": 2' in user
+            assert '"reason": "page_footer"' in user
+            assert '"start_line": 8' in user
+            assert '"start_line": 2, "end_line": 2' in user
+            return """{
+              "deleted_ranges": [
+                {"start_line": 3, "end_line": 3, "reason": "ad"}
+              ]
+            }"""
+        return """{
+          "deleted_ranges": [
+            {"start_line": 2, "end_line": 2, "reason": "page_footer"},
+            {"start_line": 2, "end_line": 3, "reason": "overlap"},
+            {"start_line": 8, "end_line": 9, "reason": "out_of_bounds"}
+          ]
+        }"""
+
+    client = _FakeClient({"archivist": response})
+    agent = ArchivistAgent(client)
+
+    cleaned = await agent.clean(raw)
+
+    assert cleaned == "教学一\n教学二"
+    assert len(client.calls) == 2
+
+
 async def test_archivist_cut_mtus_retries_invalid_metadata_json():
     invalid = """{
       "units": [
@@ -97,6 +150,108 @@ async def test_archivist_cut_mtus_retries_invalid_metadata_json():
 
     assert mtus[0].title == "干涉条件"
     assert len(client.calls) == 2
+
+
+async def test_archivist_cut_mtus_repairs_only_invalid_unit_metadata():
+    invalid = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"},
+        {"start_line": 3, "end_line": 4, "title": "短",
+         "keywords": ["k"], "summary": "太短", "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+    repair = """{
+      "units": [
+        {"start_line": 3, "end_line": 4, "title": "衍射条件",
+         "keywords": ["衍射"], "summary": "说明衍射条纹形成条件及其基本教学边界。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    def response(user):
+        if "REPAIR_ONLY_INVALID_MTU_BLOCKS" in user:
+            assert "VALID_UNITS_LOCKED" in user
+            assert '"title": "干涉条件"' in user
+            assert "INVALID_UNITS" in user
+            assert '"title": "短"' in user
+            return repair
+        return invalid
+
+    client = _FakeClient({"archivist": response})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus("line 1\nline 2\nline 3\nline 4", collection="课件", source_file="ch1.md", repair_attempts=1)
+
+    assert [mtu.title for mtu in mtus] == ["干涉条件", "衍射条件"]
+    assert len(client.calls) == 2
+
+
+async def test_archivist_cut_mtus_repairs_only_missing_ranges():
+    incomplete = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+    repair = """{
+      "units": [
+        {"start_line": 3, "end_line": 4, "title": "衍射条件",
+         "keywords": ["衍射"], "summary": "说明衍射条纹形成条件及其基本教学边界。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    def response(user):
+        if "REPAIR_ONLY_INVALID_MTU_BLOCKS" in user:
+            assert "MISSING_RANGES" in user
+            assert '"start_line": 3' in user
+            assert '"end_line": 4' in user
+            assert '"title": "干涉条件"' in user
+            return repair
+        return incomplete
+
+    client = _FakeClient({"archivist": response})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus("line 1\nline 2\nline 3\nline 4", collection="课件", source_file="ch1.md", repair_attempts=1)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 2), (3, 4)]
+    assert len(client.calls) == 2
+
+
+async def test_archivist_cut_mtus_sorts_repaired_units_by_source_line():
+    incomplete = """{
+      "units": [
+        {"start_line": 3, "end_line": 4, "title": "衍射条件",
+         "keywords": ["衍射"], "summary": "说明衍射条纹形成条件及其基本教学边界。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+    repair = """{
+      "units": [
+        {"start_line": 1, "end_line": 2, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    client = _FakeClient(
+        {"archivist": lambda user: repair if "REPAIR_ONLY_INVALID_MTU_BLOCKS" in user else incomplete}
+    )
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus("line 1\nline 2\nline 3\nline 4", collection="课件", source_file="ch1.md", repair_attempts=1)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 2), (3, 4)]
 
 
 async def test_archivist_cut_mtus_includes_dynamic_line_count_in_prompt():

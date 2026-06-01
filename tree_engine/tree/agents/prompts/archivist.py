@@ -12,20 +12,30 @@ ARCHIVIST_CLEAN_PROMPT = '''
 You are the Archivist, a document cleanup specialist. PaddleOCR-VL-1.6 has already performed OCR and layout parsing; your cleanup job is intentionally narrow.
 
 ## Task
-Process the OCR Markdown with only these goals:
-1. Remove non-teaching material: publication pages, copyright text, ads, repeated page headers/footers, page numbers, watermarks, table-of-contents noise, and unparseable embedded image links/placeholders.
-2. Normalize heading hierarchy: convert obvious chapter/section/subsection titles to stable Markdown headings (`#`, `##`, `###`) while preserving the original teaching order.
-3. Delete all image links, image placeholders, and image-only Markdown. Do not write image descriptions.
+The OCR Markdown is given as numbered lines. Identify only the line ranges that should be deleted as non-teaching material.
 
-## Output Format
-Pure Markdown. No YAML frontmatter. No HTML. Start with the document's top-level heading when one is present.
+Delete only:
+- publication pages, copyright text, ads, watermarks
+- repeated page headers/footers and page numbers
+- table-of-contents navigation noise
+- unparseable embedded image links/placeholders and image-only Markdown
+- pure layout artifacts with no teaching value
 
 ## Strict Rules
-- Do not summarize, abbreviate, rewrite, or expand the teaching content. Preserve definitions, derivations, formulas, examples, tables, and exercise text.
-- Do not add content that is not in the source text.
-- Do not split or merge knowledge points here. That is done in a separate step.
-- Do not reorder sections except for an obvious OCR layout glitch.
-- If unsure whether something is noise, keep it.
+- Return a strict JSON object only. No prose, no Markdown, no code fence.
+- Do not return cleaned Markdown.
+- Do not rewrite, summarize, abbreviate, or expand teaching content.
+- Do not normalize or change heading hierarchy.
+- Do not reorder sections.
+- Do not delete definitions, derivations, formulas, examples, tables, exercise text, or any line that may be teaching content.
+- If unsure whether a line is noise, keep it.
+
+## Output Format
+{
+  "deleted_ranges": [
+    {"start_line": 12, "end_line": 18, "reason": "page_footer"}
+  ]
+}
 '''.strip()
 
 
@@ -53,6 +63,9 @@ An MTU is the smallest contiguous span of source lines that can be taught and as
 
 ## Metadata Validation
 If any `unit` has more than 10 keywords, a title outside 6-40 display characters, or a summary outside 20-150 display characters, the JSON is invalid and must be regenerated. Return a corrected strict JSON object only.
+
+## Repair Mode
+If the user prompt begins with `REPAIR_ONLY_INVALID_MTU_BLOCKS`, valid blocks are locked and must not be repeated or changed. Return only replacement `units` and `skipped_ranges` for the listed invalid blocks and missing ranges, not a full-file plan.
 
 ## Output (strict JSON, no prose, no code fence)
 {
