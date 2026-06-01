@@ -6,12 +6,18 @@ calls these around its LLM cut-plan call. See docs/REBUILD-DESIGN.md §4 ②.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 from tree.planner.ids import normalize_concepts, prefixed_id
 from tree.planner.models import MTU
 
 _VALID_UNIT_KINDS = {"concept", "example", "exercise", "misconception", "procedure", "application"}
+_MAX_KEYWORDS = 10
+_TITLE_MIN_WIDTH = 6
+_TITLE_MAX_WIDTH = 40
+_SUMMARY_MIN_WIDTH = 20
+_SUMMARY_MAX_WIDTH = 150
 
 
 class MtuCoverageError(ValueError):
@@ -96,28 +102,6 @@ def build_mtus(
     return mtus
 
 
-def whole_document_fallback(
-    line_count: int,
-    *,
-    collection: str,
-    source_file: str,
-    order_offset: int = 0,
-    title: str = "",
-) -> list[MTU]:
-    """Deterministic single-MTU fallback when cut planning cannot be validated."""
-    if line_count <= 0:
-        return []
-    unit = {
-        "start_line": 1,
-        "end_line": line_count,
-        "title": title or source_file.rsplit(".", 1)[0] or "Source Unit",
-        "keywords": [],
-        "summary": "Imported as a single teachable unit (cut-plan fallback).",
-        "unit_kind": "concept",
-    }
-    return build_mtus([unit], collection=collection, source_file=source_file, order_offset=order_offset)
-
-
 def mtu_text(markdown: str, line_range: tuple[int, int]) -> str:
     """Slice a MTU's source text from cleaned Markdown by 1-based inclusive range."""
     lines = markdown.splitlines()
@@ -130,9 +114,23 @@ def _normalize_unit(raw: Any, index: int) -> dict:
         raise MtuCoverageError(f"unit {index} must be an object")
     start = _int(raw.get("start_line"), f"unit {index} start_line")
     end = _int(raw.get("end_line"), f"unit {index} end_line")
-    title = str(raw.get("title") or "").strip() or f"Unit {index}"
+    title = str(raw.get("title") or "").strip()
+    _validate_display_width(
+        title,
+        f"unit {index} title",
+        min_width=_TITLE_MIN_WIDTH,
+        max_width=_TITLE_MAX_WIDTH,
+    )
     keywords = normalize_concepts(raw.get("keywords") or [])
+    if len(keywords) > _MAX_KEYWORDS:
+        raise MtuCoverageError(f"unit {index} keywords must contain no more than {_MAX_KEYWORDS} items")
     summary = str(raw.get("summary") or "").strip()
+    _validate_display_width(
+        summary,
+        f"unit {index} summary",
+        min_width=_SUMMARY_MIN_WIDTH,
+        max_width=_SUMMARY_MAX_WIDTH,
+    )
     unit_kind = str(raw.get("unit_kind") or "concept").strip().lower()
     if unit_kind not in _VALID_UNIT_KINDS:
         unit_kind = "concept"
@@ -151,3 +149,20 @@ def _int(value: Any, label: str) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise MtuCoverageError(f"{label} must be an integer") from exc
+
+
+def _validate_display_width(value: str, label: str, *, min_width: int, max_width: int) -> None:
+    width = _display_width(value)
+    if width < min_width or width > max_width:
+        raise MtuCoverageError(
+            f"{label} display length must be {min_width}-{max_width} characters "
+            f"(Han/full-width characters count as 2); got {width}"
+        )
+
+
+def _display_width(value: str) -> int:
+    """Count display characters for LLM metadata limits."""
+    width = 0
+    for char in value:
+        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+    return width

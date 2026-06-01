@@ -46,10 +46,13 @@ An MTU is the smallest contiguous span of source lines that can be taught and as
 
 ## For each MTU, emit
 - `start_line`, `end_line`: inclusive 1-based line numbers in the numbered Markdown.
-- `title`: a concise, specific Chinese title naming the unit's concept (命名). Avoid generic titles like "概述" or "练习".
-- `keywords`: 3-8 distinct核心术语/概念/方法名 (关键词). No filler words.
-- `summary`: 1-3 sentences stating what the unit teaches and its teachable boundary (摘要).
+- `title`: a concise, specific title naming the unit's concept (命名). Avoid generic titles like "概述" or "练习". It must be 6-40 display characters; count each Chinese/Han/full-width character as 2 characters and ASCII characters as 1.
+- `keywords`: no more than 10 distinct 核心术语/概念/方法名 (关键词). No filler words.
+- `summary`: 20-150 display characters. Count each Chinese/Han/full-width character as 2 characters and ASCII characters as 1. State what the unit teaches and its teachable boundary (摘要).
 - `unit_kind`: one of `concept` | `example` | `exercise` | `misconception` | `procedure` | `application`.
+
+## Metadata Validation
+If any `unit` has more than 10 keywords, a title outside 6-40 display characters, or a summary outside 20-150 display characters, the JSON is invalid and must be regenerated. Return a corrected strict JSON object only.
 
 ## Output (strict JSON, no prose, no code fence)
 {

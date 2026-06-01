@@ -8,6 +8,7 @@ See docs/REBUILD-DESIGN.md §5.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -130,7 +131,14 @@ def _load_mtu_cache(root: Path) -> dict[tuple[str, str], list[MTU]]:
     for raw in data.get("mtus", []):
         mtu = MTU.model_validate(raw)
         cache.setdefault((mtu.collection, mtu.source_file), []).append(mtu)
+        if original_source_file := _chunk_original_source_file(mtu.source_file):
+            cache.setdefault((mtu.collection, original_source_file), []).append(mtu)
     return cache
+
+
+def _chunk_original_source_file(source_file: str) -> str:
+    match = re.match(r"^(.+)\.part-\d{3}$", source_file)
+    return match.group(1) if match else ""
 
 
 # --- artifact loaders (used by engine / cli) --------------------------------

@@ -21,7 +21,6 @@ from tree.planner.mtu import (
     build_mtus,
     number_lines,
     validate_and_normalize,
-    whole_document_fallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +55,7 @@ class ArchivistAgent(Agent):
 
         numbered = number_lines(cleaned_markdown)
         feedback = ""
+        last_error: ValueError | None = None
         for attempt in range(repair_attempts + 1):
             try:
                 raw = await self.complete(
@@ -72,20 +72,18 @@ class ArchivistAgent(Agent):
                     order_offset=order_offset,
                 )
             except (ValueError, MtuCoverageError) as exc:
+                last_error = exc
                 logger.warning(
                     "MTU cut plan invalid for %s/%s (attempt %d): %s",
                     collection, source_file, attempt + 1, exc,
                 )
                 feedback = (
                     f"\n\nPREVIOUS ATTEMPT WAS INVALID: {exc}. "
-                    f"Re-emit strict JSON whose units + skipped_ranges together cover "
-                    f"every line 1..{line_count} exactly once, with no gaps or overlaps."
+                    f"Regenerate the strict JSON object. Fix the invalid unit metadata and "
+                    f"ensure units + skipped_ranges together cover every line 1..{line_count} "
+                    f"exactly once, with no gaps or overlaps."
                 )
 
-        logger.warning(
-            "Falling back to whole-document MTU for %s/%s after %d attempts",
-            collection, source_file, repair_attempts + 1,
-        )
-        return whole_document_fallback(
-            line_count, collection=collection, source_file=source_file, order_offset=order_offset
+        raise last_error or MtuCoverageError(
+            f"MTU cut plan invalid for {collection}/{source_file} after {repair_attempts + 1} attempts"
         )

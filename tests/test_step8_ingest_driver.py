@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tree.engine.ingest_driver import prepare_sources
+from tree.engine.ingest_driver import prepare_sources, split_raw_markdown_for_cleaning
 from tree.io import paths
 from tree.planner.pipeline import load_dag, load_nodes
+from tree.planner.store import read_envelope_data
 
 
 class _FakeArchivist:
+    def __init__(self):
+        self.clean_inputs = []
+
     async def clean(self, raw_markdown: str, *, timeout_sec=None) -> str:
+        self.clean_inputs.append(raw_markdown)
         return raw_markdown.replace("raw", "clean")
 
     async def cut_mtus(
@@ -81,6 +86,14 @@ class _FakeIndexer:
         return False
 
 
+class _FakeProgress:
+    def __init__(self):
+        self.patches = []
+
+    def update(self, patch):
+        self.patches.append(patch)
+
+
 async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(tmp_path, monkeypatch):
     material = tmp_path / "materials" / "课件" / "ch1.md"
     material.parent.mkdir(parents=True)
@@ -115,3 +128,113 @@ async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(
     assert [text for _, text, _ in indexer.indexed] == ["clean line 1\nclean line 2", "clean line 3\nclean line 4"]
     assert all(node_id for _, _, node_id in indexer.indexed)
     assert not any(paths.source_markdown_root(tmp_path).rglob("*.md"))
+
+
+async def test_prepare_sources_persists_ocr_markdown_checkpoint_before_archivist(
+    tmp_path, monkeypatch
+):
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.parent.mkdir(parents=True)
+    raw = "raw line 1\nraw line 2\nraw line 3\nraw line 4"
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    indexer = _FakeIndexer()
+    archivist = _FakeArchivist()
+    progress = _FakeProgress()
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        archivist_mtu_cut_timeout_sec=1.0,
+        archivist_mtu_repair_attempts=0,
+        dagger_build_timeout_sec=1.0,
+        dagger_repair_attempts=0,
+        dagger_max_nodes_per_call=400,
+    )
+    engine = SimpleNamespace(
+        settings=settings,
+        archivist=archivist,
+        agents=SimpleNamespace(dagger=_EchoDagger()),
+        rag_indexer=indexer,
+        progress=progress,
+    )
+
+    await prepare_sources(engine)
+
+    checkpoint = paths.ocr_markdown_path(tmp_path, "课件", "ch1.md")
+    assert checkpoint.read_text(encoding="utf-8") == raw
+    assert archivist.clean_inputs == [raw]
+    assert any(
+        patch.get("source_ingest", {}).get("checkpoint") == "ocr_markdown"
+        and patch["source_ingest"]["path"] == "ocr/课件/ch1.md.md"
+        for patch in progress.patches
+    )
+
+
+def test_split_raw_markdown_prefers_nearest_level_one_heading_in_window():
+    raw = "a" * 70_010 + "\n# 第一章\n" + "b" * 40_000
+
+    chunks = split_raw_markdown_for_cleaning(raw)
+
+    assert len(chunks) == 2
+    assert chunks[0] == "a" * 70_010 + "\n"
+    assert chunks[1].startswith("# 第一章")
+
+
+def test_split_raw_markdown_falls_back_from_h1_to_h2_to_h3_then_70k():
+    h2_raw = "a" * 70_020 + "\n## 二级标题\n" + "b" * 40_000
+    h3_raw = "a" * 70_030 + "\n### 三级标题\n" + "b" * 40_000
+    plain_raw = "a" * 110_000
+
+    h2_chunks = split_raw_markdown_for_cleaning(h2_raw)
+    h3_chunks = split_raw_markdown_for_cleaning(h3_raw)
+    plain_chunks = split_raw_markdown_for_cleaning(plain_raw)
+
+    assert h2_chunks[1].startswith("## 二级标题")
+    assert h3_chunks[1].startswith("### 三级标题")
+    assert [len(chunk) for chunk in plain_chunks] == [70_000, 40_000]
+
+
+def test_split_raw_markdown_does_not_treat_window_start_as_line_start():
+    raw = "a" * 70_000 + "# fake heading in same line" + "b" * 40_000
+
+    chunks = split_raw_markdown_for_cleaning(raw)
+
+    assert [len(chunk) for chunk in chunks] == [70_000, len(raw) - 70_000]
+
+
+async def test_prepare_sources_cleans_and_cuts_each_long_chunk_independently(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "long.md"
+    material.parent.mkdir(parents=True)
+    raw = "raw line 1\nraw line 2\n" + "x" * 70_000 + "\n# Next\nraw line 3\nraw line 4\n" + "y" * 40_000
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    indexer = _FakeIndexer()
+    archivist = _FakeArchivist()
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        archivist_mtu_cut_timeout_sec=1.0,
+        archivist_mtu_repair_attempts=0,
+        dagger_build_timeout_sec=1.0,
+        dagger_repair_attempts=0,
+        dagger_max_nodes_per_call=400,
+    )
+    engine = SimpleNamespace(
+        settings=settings,
+        archivist=archivist,
+        agents=SimpleNamespace(dagger=_EchoDagger()),
+        rag_indexer=indexer,
+    )
+
+    await prepare_sources(engine)
+
+    assert len(archivist.clean_inputs) == 2
+    indexed_texts = [text for _, text, _ in indexer.indexed]
+    assert "clean line 1\nclean line 2" in indexed_texts
+    assert any("clean line 3" in text for text in indexed_texts)
+    assert any("clean line 4" in text for text in indexed_texts)
+    source_files = {
+        raw_mtu["source_file"]
+        for raw_mtu in read_envelope_data(paths.mtus_path(tmp_path)).get("mtus", [])
+    }
+    assert source_files == {"long.md.part-001", "long.md.part-002"}

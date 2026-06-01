@@ -47,6 +47,31 @@ def _make_producer(counter):
     return producer
 
 
+def _make_chunked_producer(counter):
+    async def producer(root, material):
+        counter["calls"] += 1
+        units = [
+            {"start_line": 1, "end_line": 2, "title": "分块单元A",
+             "keywords": ["k1"], "summary": "", "unit_kind": "concept"},
+            {"start_line": 1, "end_line": 2, "title": "分块单元B",
+             "keywords": ["k2"], "summary": "", "unit_kind": "concept"},
+        ]
+        return [
+            *build_mtus(
+                [units[0]],
+                collection=material["collection"],
+                source_file=f"{material['source_file']}.part-001",
+            ),
+            *build_mtus(
+                [units[1]],
+                collection=material["collection"],
+                source_file=f"{material['source_file']}.part-002",
+            ),
+        ]
+
+    return producer
+
+
 def _seed_material(root):
     path = root / "materials" / "课件" / "ch1.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,5 +116,18 @@ async def test_rebuild_planner_reuses_cache_when_unchanged(tmp_path):
     # Second rebuild: nothing changed -> no producer needed, MTUs reused from cache.
     summary = await rebuild_planner(tmp_path, settings=_SETTINGS, agents=agents, mtu_producer=None)
     assert counter["calls"] == 1  # producer not called again
+    assert summary["mtu_count"] == 2
+    assert summary["node_count"] == 2
+
+
+async def test_rebuild_planner_reuses_chunked_mtu_cache_when_unchanged(tmp_path):
+    _seed_material(tmp_path)
+    counter = {"calls": 0}
+    agents = SimpleNamespace(dagger=_EchoDagger())
+    await rebuild_planner(tmp_path, settings=_SETTINGS, agents=agents, mtu_producer=_make_chunked_producer(counter))
+    assert counter["calls"] == 1
+
+    summary = await rebuild_planner(tmp_path, settings=_SETTINGS, agents=agents, mtu_producer=None)
+
     assert summary["mtu_count"] == 2
     assert summary["node_count"] == 2

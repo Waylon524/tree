@@ -58,6 +58,15 @@ def source_markdown_root(root: Path) -> Path:
     return runtime_root(root) / "source"
 
 
+def ocr_markdown_root(root: Path) -> Path:
+    """Raw OCR Markdown checkpoints; retained for inspection and retries."""
+    return runtime_root(root) / "ocr"
+
+
+def ocr_markdown_path(root: Path, collection: str, source_file: str) -> Path:
+    return ocr_markdown_root(root) / collection / f"{source_file}.md"
+
+
 def drafts_root(root: Path) -> Path:
     return runtime_root(root) / "drafts"
 
@@ -138,6 +147,7 @@ def ensure_workspace_dirs(root: Path) -> None:
         materials_root(root),
         outputs_root(root),
         runtime_root(root),
+        ocr_markdown_root(root),
         source_markdown_root(root),
         drafts_root(root),
         planner_root(root),
