@@ -61,7 +61,7 @@ class Settings:
     source_embedding_concurrency: int = 1
 
     # Archivist (MTU cutting)
-    archivist_mtu_cut_timeout_sec: float = 240.0
+    archivist_mtu_cut_timeout_sec: float = 480.0
     archivist_mtu_repair_attempts: int = 1
 
     # Dagger (DAG build)
@@ -119,7 +119,7 @@ class Settings:
             source_ocr_pdf_max_pages_per_job=_env_int("SOURCE_OCR_PDF_MAX_PAGES_PER_JOB", 99),
             source_ocr_upload_interval_sec=_env_float("SOURCE_OCR_UPLOAD_INTERVAL_SEC", 5.0),
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
-            archivist_mtu_cut_timeout_sec=_env_float("ARCHIVIST_MTU_CUT_TIMEOUT_SEC", 240.0),
+            archivist_mtu_cut_timeout_sec=_env_float("ARCHIVIST_MTU_CUT_TIMEOUT_SEC", 480.0),
             archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 1),
             dagger_build_timeout_sec=_env_float("DAGGER_BUILD_TIMEOUT_SEC", 300.0),
             dagger_repair_attempts=_env_int("DAGGER_REPAIR_ATTEMPTS", 1),
