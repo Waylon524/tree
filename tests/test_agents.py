@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
+from tree.agents.prompts import ARCHIVIST_MTU_PROMPT
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.state.models import Route
@@ -274,6 +275,15 @@ async def test_archivist_cut_mtus_includes_dynamic_line_count_in_prompt():
     assert "LAST_VALID_LINE: 3" in user_prompt
     assert "Do not output start_line or end_line greater than 3." in user_prompt
     assert "1\tline 1" in user_prompt
+
+
+def test_archivist_mtu_prompt_emphasizes_strict_metadata_and_coverage():
+    assert "Before returning JSON, audit the full line map" in ARCHIVIST_MTU_PROMPT
+    assert "No gaps are allowed" in ARCHIVIST_MTU_PROMPT
+    assert "No overlaps are allowed" in ARCHIVIST_MTU_PROMPT
+    assert "keywords length: 1-10 items" in ARCHIVIST_MTU_PROMPT
+    assert "title display width: 6-40" in ARCHIVIST_MTU_PROMPT
+    assert "summary display width: 20-150" in ARCHIVIST_MTU_PROMPT
 
 
 async def test_archivist_cut_mtus_raises_when_repairs_exhausted():

@@ -30,6 +30,14 @@ Add directed edges between canonical nodes based on teaching prerequisite relati
 - The result MUST be acyclic. Do not create A -> B and B -> A. If two nodes are mutually related, pick the single dominant direction or use a soft order edge.
 - `confidence` is a 0.0–1.0 estimate of edge correctness.
 
+## Root Policy
+Minimize independent roots. A root means "this node can begin a teaching tree with no material-specific prerequisite."
+- Only allow multiple roots when the teaching content of one part is completely independent from the teaching content of the other part: neither part's concepts, formulas, methods, examples, or problem-solving procedures would be applied by the other part.
+- If a later section applies, specializes, extends, compares against, or calculates with concepts/methods introduced by an earlier section, create a `prerequisite` edge from the earlier node to the later node. A mere `order` edge is not sufficient for this case because it still leaves a new root.
+- Prefer one shared foundational root for a connected course unit. Major headings, chapter breaks, or OCR/source-file boundaries are not enough reason to create separate roots.
+- Separate roots are acceptable only for truly unrelated domains inside the supplied materials, not for sibling topics that share a taught foundation.
+- Before returning JSON, audit the graph roots: for every node with no incoming `prerequisite` edge, ask whether it truly never uses any earlier material-specific node. If it does use one, add the missing prerequisite edge.
+
 ## Output (strict JSON, no prose, no code fence)
 {
   "nodes": [

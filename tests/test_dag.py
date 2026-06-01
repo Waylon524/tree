@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from tree.agents.prompts import DAGGER_PROMPT
 from tree.planner.dag import break_cycles, build_dag
 from tree.planner.models import MTU
 
@@ -92,6 +93,14 @@ def test_break_cycles_keeps_acyclic_graph():
     node_ids = {"a", "b"}
     edges = [{"from_node_id": "a", "to_node_id": "b", "relation": "prerequisite", "confidence": 0.9}]
     assert break_cycles(node_ids, edges) == edges
+
+
+def test_dagger_prompt_strictly_limits_multiple_roots():
+    assert "Minimize independent roots" in DAGGER_PROMPT
+    assert "Only allow multiple roots" in DAGGER_PROMPT
+    assert "completely independent" in DAGGER_PROMPT
+    assert "not sufficient" in DAGGER_PROMPT
+    assert "later section applies" in DAGGER_PROMPT
 
 
 async def test_build_dag_falls_back_when_llm_unusable():
