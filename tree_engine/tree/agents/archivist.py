@@ -53,13 +53,13 @@ class ArchivistAgent(Agent):
         if line_count == 0:
             return []
 
-        numbered = number_lines(cleaned_markdown)
+        prompt_body = _mtu_prompt_body(cleaned_markdown, line_count)
         feedback = ""
         last_error: ValueError | None = None
         for attempt in range(repair_attempts + 1):
             try:
                 raw = await self.complete(
-                    numbered + feedback,
+                    prompt_body + feedback,
                     system_prompt=ARCHIVIST_MTU_PROMPT,
                     timeout_sec=timeout_sec,
                 )
@@ -87,3 +87,17 @@ class ArchivistAgent(Agent):
         raise last_error or MtuCoverageError(
             f"MTU cut plan invalid for {collection}/{source_file} after {repair_attempts + 1} attempts"
         )
+
+
+def _mtu_prompt_body(cleaned_markdown: str, line_count: int) -> str:
+    numbered = number_lines(cleaned_markdown)
+    return (
+        "NUMBERED_MARKDOWN_CONTRACT\n"
+        f"TOTAL_LINES: {line_count}\n"
+        f"LAST_VALID_LINE: {line_count}\n"
+        f"Do not output start_line or end_line greater than {line_count}.\n"
+        "Every line number in units and skipped_ranges must be between 1 and "
+        f"{line_count}, inclusive.\n"
+        "END_CONTRACT\n\n"
+        f"{numbered}"
+    )

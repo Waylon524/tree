@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 from tree.engine.ingest_driver import (
@@ -96,6 +97,18 @@ class _FakeProgress:
 
     def update(self, patch):
         self.patches.append(patch)
+
+
+def _settings(tmp_path):
+    return SimpleNamespace(
+        project_root=tmp_path,
+        archivist_mtu_cut_timeout_sec=1.0,
+        archivist_mtu_repair_attempts=0,
+        dagger_build_timeout_sec=1.0,
+        dagger_repair_attempts=0,
+        dagger_max_nodes_per_call=400,
+        max_retries=3,
+    )
 
 
 async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(tmp_path, monkeypatch):
@@ -296,3 +309,168 @@ async def test_prepare_sources_cleans_and_cuts_each_long_chunk_independently(tmp
         for raw_mtu in read_envelope_data(paths.mtus_path(tmp_path)).get("mtus", [])
     }
     assert source_files == {"long.md.part-001", "long.md.part-002"}
+
+
+class _BlockingArchivist:
+    def __init__(self):
+        self.active = 0
+        self.max_active = 0
+        self.started_five = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def clean(self, raw_markdown: str, *, timeout_sec=None) -> str:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        if self.active == 5:
+            self.started_five.set()
+        try:
+            await self.release.wait()
+            return raw_markdown.replace("raw", "clean")
+        finally:
+            self.active -= 1
+
+    async def cut_mtus(
+        self,
+        cleaned_markdown: str,
+        *,
+        collection: str,
+        source_file: str,
+        order_offset: int = 0,
+        timeout_sec=None,
+        repair_attempts: int = 1,
+    ):
+        from tree.planner.mtu import build_mtus
+
+        return build_mtus(
+            [
+                {
+                    "start_line": 1,
+                    "end_line": 2,
+                    "title": "A",
+                    "keywords": ["ka"],
+                    "summary": "",
+                    "unit_kind": "concept",
+                }
+            ],
+            collection=collection,
+            source_file=source_file,
+            order_offset=order_offset,
+        )
+
+
+async def test_prepare_sources_processes_chunks_with_max_five_concurrent_parts(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "long.md"
+    material.parent.mkdir(parents=True)
+    raw = "ignored"
+    material.write_text(raw, encoding="utf-8")
+    chunks = [f"raw line 1\nraw line 2\nraw line 3\nraw line 4\nchunk {i}" for i in range(6)]
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+    monkeypatch.setattr("tree.engine.ingest_driver.split_raw_markdown_for_cleaning", lambda text: chunks)
+
+    archivist = _BlockingArchivist()
+    engine = SimpleNamespace(
+        settings=_settings(tmp_path),
+        archivist=archivist,
+        agents=SimpleNamespace(dagger=_EchoDagger()),
+        rag_indexer=_FakeIndexer(),
+    )
+
+    task = asyncio.create_task(prepare_sources(engine))
+    try:
+        await asyncio.wait_for(archivist.started_five.wait(), timeout=1)
+        assert archivist.active == 5
+        archivist.release.set()
+        await task
+    finally:
+        archivist.release.set()
+        if not task.done():
+            task.cancel()
+
+    assert archivist.max_active == 5
+
+
+class RateLimitError(Exception):
+    pass
+
+
+class _RetryingArchivist:
+    def __init__(self):
+        self.events = []
+        self.attempts = {"overloaded": 0}
+        self.slow_started = asyncio.Event()
+        self.overload_failed = asyncio.Event()
+
+    async def clean(self, raw_markdown: str, *, timeout_sec=None) -> str:
+        if raw_markdown.startswith("slow"):
+            self.events.append("slow-start")
+            self.slow_started.set()
+            await self.overload_failed.wait()
+            await asyncio.sleep(0.01)
+            self.events.append("slow-complete")
+            return raw_markdown.replace("raw", "clean")
+
+        if raw_markdown.startswith("overloaded"):
+            try:
+                await asyncio.wait_for(self.slow_started.wait(), timeout=0.05)
+            except TimeoutError:
+                pass
+            self.attempts["overloaded"] += 1
+            self.events.append(f"overloaded-attempt-{self.attempts['overloaded']}")
+            if self.attempts["overloaded"] == 1:
+                self.overload_failed.set()
+                raise RateLimitError("too many concurrent requests")
+            return raw_markdown.replace("raw", "clean")
+
+        return raw_markdown.replace("raw", "clean")
+
+    async def cut_mtus(
+        self,
+        cleaned_markdown: str,
+        *,
+        collection: str,
+        source_file: str,
+        order_offset: int = 0,
+        timeout_sec=None,
+        repair_attempts: int = 1,
+    ):
+        from tree.planner.mtu import build_mtus
+
+        return build_mtus(
+            [
+                {
+                    "start_line": 1,
+                    "end_line": 2,
+                    "title": source_file,
+                    "keywords": ["ka"],
+                    "summary": "",
+                    "unit_kind": "concept",
+                }
+            ],
+            collection=collection,
+            source_file=source_file,
+            order_offset=order_offset,
+        )
+
+
+async def test_prepare_sources_waits_for_completed_part_before_retrying_concurrency_error(
+    tmp_path, monkeypatch
+):
+    material = tmp_path / "materials" / "课件" / "long.md"
+    material.parent.mkdir(parents=True)
+    raw = "ignored"
+    material.write_text(raw, encoding="utf-8")
+    chunks = ["overloaded raw line 1\nraw line 2\nraw line 3\nraw line 4", "slow raw line 1\nraw line 2\nraw line 3\nraw line 4"]
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+    monkeypatch.setattr("tree.engine.ingest_driver.split_raw_markdown_for_cleaning", lambda text: chunks)
+
+    archivist = _RetryingArchivist()
+    engine = SimpleNamespace(
+        settings=_settings(tmp_path),
+        archivist=archivist,
+        agents=SimpleNamespace(dagger=_EchoDagger()),
+        rag_indexer=_FakeIndexer(),
+    )
+
+    await prepare_sources(engine)
+
+    assert archivist.events.index("slow-complete") < archivist.events.index("overloaded-attempt-2")

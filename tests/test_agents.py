@@ -99,6 +99,28 @@ async def test_archivist_cut_mtus_retries_invalid_metadata_json():
     assert len(client.calls) == 2
 
 
+async def test_archivist_cut_mtus_includes_dynamic_line_count_in_prompt():
+    valid = """{
+      "units": [
+        {"start_line": 1, "end_line": 3, "title": "干涉条件",
+         "keywords": ["相干光"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。",
+         "unit_kind": "concept"}
+      ],
+      "skipped_ranges": []
+    }"""
+
+    client = _FakeClient({"archivist": valid})
+    agent = ArchivistAgent(client)
+
+    await agent.cut_mtus("line 1\nline 2\nline 3", collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    user_prompt = client.calls[0][1]
+    assert "TOTAL_LINES: 3" in user_prompt
+    assert "LAST_VALID_LINE: 3" in user_prompt
+    assert "Do not output start_line or end_line greater than 3." in user_prompt
+    assert "1\tline 1" in user_prompt
+
+
 async def test_archivist_cut_mtus_raises_when_repairs_exhausted():
     invalid = """{
       "units": [

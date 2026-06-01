@@ -23,6 +23,7 @@ from tree.planner.pipeline import load_nodes, rebuild_planner
 LONG_DOCUMENT_CHAR_THRESHOLD = 100_000
 CLEAN_CHUNK_MIN_CHARS = 70_000
 CLEAN_CHUNK_MAX_CHARS = 100_000
+MAX_ARCHIVIST_CHUNK_CONCURRENCY = 5
 
 
 async def prepare_sources(engine: object) -> dict[str, Any]:
@@ -81,23 +82,8 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
     if not checkpoint_raw.strip():
         return []
 
-    mtus: list[MTU] = []
     raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
-    for index, raw_chunk in enumerate(raw_chunks, start=1):
-        chunk_source_file = chunk_source_file_name(
-            material["source_file"], index=index, total=len(raw_chunks)
-        )
-        mtus.extend(
-            await _clean_and_cut_chunk(
-                engine,
-                root,
-                raw_chunk,
-                collection=material["collection"],
-                source_file=chunk_source_file,
-                order_offset=len(mtus),
-            )
-        )
-    return mtus
+    return await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
 
 
 def source_markdown_path(root: Path, collection: str, source_file: str) -> Path:
@@ -131,6 +117,109 @@ async def _clean_and_cut_chunk(
         order_offset=order_offset,
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
         repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
+    )
+
+
+async def _clean_and_cut_chunks(
+    engine: object,
+    root: Path,
+    raw_chunks: list[str],
+    *,
+    material: dict[str, Any],
+) -> list[MTU]:
+    total = len(raw_chunks)
+    results: list[list[MTU] | None] = [None] * total
+    pending = list(range(total))
+    running: dict[asyncio.Task[list[MTU]], int] = {}
+    retry_counts: dict[int, int] = {}
+    max_retries = max(0, int(getattr(engine.settings, "max_retries", 3)))
+    wait_for_success_before_retry = False
+
+    def start_available() -> None:
+        nonlocal wait_for_success_before_retry
+        if wait_for_success_before_retry:
+            return
+        while pending and len(running) < MAX_ARCHIVIST_CHUNK_CONCURRENCY:
+            index = pending.pop(0)
+            source_file = chunk_source_file_name(material["source_file"], index=index + 1, total=total)
+            task = asyncio.create_task(
+                _clean_and_cut_chunk(
+                    engine,
+                    root,
+                    raw_chunks[index],
+                    collection=material["collection"],
+                    source_file=source_file,
+                    order_offset=0,
+                )
+            )
+            running[task] = index
+
+    start_available()
+    while pending or running:
+        if not running:
+            wait_for_success_before_retry = False
+            start_available()
+        done, _pending_tasks = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+        saw_success = False
+        saw_concurrency_retry = False
+
+        for task in done:
+            index = running.pop(task)
+            try:
+                results[index] = task.result()
+                saw_success = True
+            except Exception as exc:
+                if not _is_api_concurrency_error(exc):
+                    raise
+                retry_counts[index] = retry_counts.get(index, 0) + 1
+                if retry_counts[index] > max_retries:
+                    raise
+                pending.insert(0, index)
+                saw_concurrency_retry = True
+
+        if saw_success:
+            wait_for_success_before_retry = False
+        elif saw_concurrency_retry and running:
+            wait_for_success_before_retry = True
+        else:
+            wait_for_success_before_retry = False
+        start_available()
+
+    mtus: list[MTU] = []
+    for chunk_mtus in results:
+        for mtu in chunk_mtus or []:
+            mtu.source_order_index = len(mtus)
+            mtus.append(mtu)
+    return mtus
+
+
+def _is_api_concurrency_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, "status_code", None)
+    if status_code == 429:
+        return True
+
+    name = type(exc).__name__.lower()
+    if "ratelimit" in name or "rate_limit" in name:
+        return True
+
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "too many",
+            "rate limit",
+            "rate_limit",
+            "concurrent",
+            "concurrency",
+            "overload",
+            "server busy",
+            "429",
+            "并发",
+            "限流",
+        )
     )
 
 
