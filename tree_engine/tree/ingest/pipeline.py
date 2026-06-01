@@ -5,14 +5,23 @@ PDFs/images for formula fidelity), then hands cleaned Markdown to the Archivist.
 
 See docs/REBUILD-DESIGN.md §1/§4.
 
-TODO (step 2 for extraction, step 4 for MTU):
-  - detect_type(path) / extract_text(path)
-  - ingest_file(path, collection, archivist) -> (cleaned_md_path, list[MTU])
+Step 2 implemented: detect_type / extract_text.
+TODO (step 4): ingest_file(path, collection, archivist) -> (cleaned_md_path, list[MTU])
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+from tree.ingest.extractors import (
+    docx_extractor,
+    image_extractor,
+    pdf_extractor,
+    presentation_extractor,
+)
+
+logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
 _PDF_EXTS = {".pdf"}
@@ -39,4 +48,25 @@ def detect_type(path: Path) -> str:
 
 
 def extract_text(path: Path) -> str:
-    raise NotImplementedError("ingest.extract_text — migrate extractors in step 2")
+    """Extract raw Markdown text from a material file.
+
+    PDFs and images go through PaddleOCR-VL; docx/pptx use structural extractors
+    (plus OCR for embedded images); text/md are read directly.
+    """
+    path = Path(path)
+    ftype = detect_type(path)
+    logger.info("Extracting %s [%s]", path.name, ftype)
+
+    if ftype == "pdf":
+        return pdf_extractor.extract(path)
+    if ftype == "image":
+        return image_extractor.extract(path)
+    if ftype == "docx":
+        return docx_extractor.extract(path)
+    if ftype == "presentation":
+        return presentation_extractor.extract(path)
+    if ftype == "text":
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    logger.warning("Unsupported file type: %s", path)
+    return ""

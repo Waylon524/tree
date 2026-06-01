@@ -1,12 +1,26 @@
-"""pdf extractor — migrate from previous engine (step 2).
+"""PDF extractor using PaddleOCR-VL 1.6.
 
-★ Behaviour to preserve: see docs/LEGACY-DESIGN.md §4.1.
+All PDFs go through PaddleOCR-VL for OCR + formula recognition. No embedded-text
+shortcut — even PDFs with embedded text are fully OCR'd for formula consistency.
 """
 
-from __future__ import annotations
-
+import logging
 from pathlib import Path
 
+from tree.ingest.ocr_engine import get_engine
 
-def extract(path: Path) -> str:
-    raise NotImplementedError("pdf_extractor.extract — migrate in step 2")
+logger = logging.getLogger(__name__)
+
+
+def extract(pdf_path: str | Path) -> str:
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    logger.info("OCR-ing PDF with PaddleOCR-VL 1.6: %s", pdf_path.name)
+    engine = get_engine()
+    text = engine.ocr_file(pdf_path)
+
+    if not text.strip():
+        logger.warning("PaddleOCR returned empty result for %s", pdf_path.name)
+    return text

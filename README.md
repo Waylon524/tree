@@ -30,9 +30,20 @@ python -m compileall tree_engine/tree
 
 ## 状态
 
-骨架阶段。按 `docs/REBUILD-DESIGN.md` §9 的十步路线增量实现。
-已实现：基础层（config / paths / ids / store / state / observability / model client）。
-待实现（stub）：agents / planner / ingest / rag / engine / cli。
+按 `docs/REBUILD-DESIGN.md` §9 的十步路线增量实现。
+
+- ✅ Step 1 基础层：config / paths / ids / store / state / observability / model client
+- ✅ Step 2 摄入提取：OCR engine + pdf/image/docx/presentation extractors + extract_text
+- ✅ Step 3 RAG：embed client / 本地 server / 精简 chunker（MTU 边界）/ RAGClient / RAGIndexer
+- ⬜ Step 4 Archivist 切 MTU
+- ⬜ Step 5 Dagger 建 DAG
+- ⬜ Step 6 planner pipeline + schedule
+- ⬜ Step 7 examiner/student/writer + branch_run
+- ⬜ Step 8 engine 编排 + ingest_driver
+- ⬜ Step 9 CLI + dashboard
+- ⬜ Step 10 端到端验收
+
+OCR 与 embedding 服务接口与旧引擎保持一致（可直接复用本地 embedding server 和 PaddleOCR 配置）。
 
 ## License
 
