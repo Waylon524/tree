@@ -17,6 +17,7 @@ from rich import print as rprint
 from tree.cli import theme
 from tree.cli.commands import config_cmd
 from tree.cli.commands import inspect as inspect_cmd
+from tree.cli.dashboard.live import run_watch as run_watch_panel
 from tree.cli.commands import lifecycle as lifecycle_cmd
 from tree.cli.commands import rag as rag_cmd
 from tree.config import Settings
@@ -143,8 +144,8 @@ def progress() -> None:
 
 @app.command()
 def watch() -> None:
-    """Render a one-shot dashboard view."""
-    rprint(inspect_cmd.watch_text(Path.cwd()))
+    """Render a live dashboard until ESC is pressed."""
+    run_watch_panel(Path.cwd())
 
 
 @app.command()

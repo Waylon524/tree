@@ -8,8 +8,10 @@ from typer.testing import CliRunner
 
 from tree.cli.app import app
 from tree.cli import theme
+from tree.cli.dashboard import live
 from tree.cli.dashboard.dag_view import render_dag
 from tree.cli.dashboard.model import build_watch_model
+from tree.cli.dashboard.panels import render_watch
 from tree.io import paths
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
@@ -118,3 +120,91 @@ def test_status_progress_materials_and_rag_nodes_cli(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "n1" in result.stdout
     assert "A" in result.stdout
+
+
+def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
+    _seed_workspace(tmp_path)
+    log_path = paths.service_log_path(tmp_path, "engine")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "2026-06-02 ok\nRuntimeError: planner failed while linking nodes\n",
+        encoding="utf-8",
+    )
+    progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
+    progress["phase"] = "blocked"
+    progress["message"] = "TREE_BLOCKED - no ready node runs"
+    progress["stages"]["link"]["status"] = "failed"
+    progress["stages"]["link"]["message"] = "invalid prerequisite edge"
+    write_json_atomic(paths.progress_path(tmp_path), progress)
+
+    output = render_watch(tmp_path)
+
+    assert "╭" in output
+    assert "╰" in output
+    assert "Errors" in output
+    assert "TREE_BLOCKED - no ready node runs" in output
+    assert "Link: failed - invalid prerequisite edge" in output
+    assert "RuntimeError: planner failed while linking nodes" in output
+
+
+def test_watch_command_delegates_to_live_dashboard(tmp_path, monkeypatch):
+    _seed_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    monkeypatch.setattr("tree.cli.app.run_watch_panel", lambda root: calls.append(root), raising=False)
+
+    result = CliRunner().invoke(app, ["watch"])
+
+    assert result.exit_code == 0
+    assert calls == [tmp_path]
+
+
+def test_live_watch_loop_exits_on_escape(tmp_path, monkeypatch):
+    _seed_workspace(tmp_path)
+    printed = []
+    updates = []
+
+    class _Console:
+        is_terminal = True
+
+        def print(self, value):
+            printed.append(value)
+
+    class _Live:
+        def __init__(self, renderable, **kwargs):
+            self.renderable = renderable
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, renderable):
+            updates.append(renderable)
+
+    monkeypatch.setattr(live, "Live", _Live)
+    monkeypatch.setattr(live, "_raw_terminal", lambda stream: _null_context())
+    monkeypatch.setattr(live, "_escape_pressed", lambda stream, timeout: True)
+    monkeypatch.setattr(live.sys, "stdin", _TtyInput())
+
+    live.run_watch(tmp_path, console=_Console(), refresh_seconds=0.01)
+
+    assert printed == []
+    assert updates == []
+
+
+class _TtyInput:
+    def isatty(self):
+        return True
+
+    def fileno(self):
+        return 0
+
+
+class _null_context:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False

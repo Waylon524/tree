@@ -39,6 +39,7 @@ def build_watch_model(root: Path) -> dict[str, Any]:
         "active_node_runs": active,
         "completed_node_runs": completed,
         "running_node_ids": sorted({run.node_id for run in state.node_runs if run.status == "running"}),
+        "errors": _collect_errors(root, progress),
     }
 
 
@@ -53,3 +54,82 @@ def _material_paths(root: Path) -> list[Path]:
         and not path.name.startswith(".")
         and path.suffix.lower() in MATERIAL_EXTENSIONS
     ]
+
+
+def _collect_errors(root: Path, progress: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    phase = str(progress.get("phase") or "").strip().lower()
+    message = str(progress.get("message") or "").strip()
+    if phase in {"blocked", "failed", "error"} and message:
+        errors.append(message)
+
+    raw_errors = progress.get("errors") or progress.get("error") or []
+    if isinstance(raw_errors, str):
+        raw_errors = [raw_errors]
+    if isinstance(raw_errors, list):
+        for item in raw_errors:
+            if isinstance(item, dict):
+                detail = item.get("message") or item.get("error") or item.get("detail")
+                if detail:
+                    errors.append(str(detail))
+            elif item:
+                errors.append(str(item))
+
+    for stage in (progress.get("stages") or {}).values():
+        if not isinstance(stage, dict):
+            continue
+        status = str(stage.get("status") or "").strip().lower()
+        if status not in {"blocked", "failed", "error"}:
+            continue
+        label = str(stage.get("label") or "stage")
+        detail = str(stage.get("message") or "").strip()
+        errors.append(f"{label}: {status}" + (f" - {detail}" if detail else ""))
+
+    errors.extend(_recent_log_errors(root))
+    return _dedupe(errors)[:8]
+
+
+def _recent_log_errors(root: Path) -> list[str]:
+    candidates = [paths.service_log_path(root, "engine")]
+    temp_root = paths.pipeline_temp_root(root)
+    if temp_root.exists():
+        candidates.extend(sorted(temp_root.glob("*.log")))
+
+    lines: list[str] = []
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]:
+            stripped = line.strip()
+            if stripped and _looks_like_error(stripped):
+                lines.append(stripped)
+    return lines[-5:]
+
+
+def _looks_like_error(line: str) -> bool:
+    lowered = line.lower()
+    return any(
+        needle in lowered
+        for needle in (
+            "traceback",
+            "runtimeerror",
+            "valueerror",
+            "exception",
+            "failed",
+            " error",
+            "error:",
+            "blocked",
+        )
+    )
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in items:
+        clean = item.strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        unique.append(clean)
+    return unique

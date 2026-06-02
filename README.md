@@ -354,7 +354,7 @@ tre
 
 ```text
 /start      后台启动 TREE engine
-/watch      显示一次全流程进度面板
+/watch      实时刷新全流程进度面板，按 ESC 退出
 /progress   打印 progress.json
 /status     查看当前 workspace 状态
 /materials  列出 materials/ 下支持的资料
@@ -408,7 +408,7 @@ tre planner dag-svg
 
 ### `tre watch`
 
-`tre watch` 是一屏式进度面板，显示七个阶段：
+`tre watch` 是实时刷新的进度面板，按 `ESC` 退出，显示七个阶段与最近错误信息：
 
 ```text
 TREE Watch
@@ -417,6 +417,7 @@ message: ...
 materials: 6
 nodes: 74
 edges: 81
+exit: Press ESC
 
 Progress
 OCR      [##################]     6/6 complete
@@ -566,7 +567,7 @@ tre continue             # 等同于 tre run
 ```bash
 tre status               # 简短状态：phase/message/materials/nodes/edges/active nodes
 tre progress             # 打印完整 progress.json
-tre watch                # 显示七阶段进度条
+tre watch                # 实时显示七阶段进度条和错误信息，按 ESC 退出
 tre materials            # 列出支持的资料文件
 tre logs                 # 列出 runtime log 文件
 ```

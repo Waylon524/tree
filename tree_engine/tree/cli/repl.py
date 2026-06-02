@@ -9,6 +9,7 @@ from rich import print as rprint
 
 from tree.cli import theme
 from tree.cli.commands import inspect
+from tree.cli.dashboard.live import run_watch as run_watch_panel
 from tree.cli.commands.lifecycle import quit_tree, start_engine, stop_engine
 
 
@@ -19,7 +20,7 @@ _HELP_ROWS = (
     ("/exit", "leave the shell without stopping services"),
     ("/status", "show workspace status"),
     ("/progress", "print progress.json"),
-    ("/watch", "render the dashboard once"),
+    ("/watch", "watch the dashboard until ESC"),
     ("/materials", "list supported materials"),
     ("/help", "show this help"),
 )
@@ -44,6 +45,9 @@ def run_repl() -> None:
             rprint(handle_slash_command("/quit", root=root))
             return
         if not command:
+            continue
+        if command == "/watch":
+            run_watch_panel(root, console=console)
             continue
         result = handle_slash_command(command, root=root)
         if command == "/progress":
