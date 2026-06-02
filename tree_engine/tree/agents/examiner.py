@@ -1,7 +1,7 @@
-"""ExaminerAgent: Phase A branch-span exam assembly, Phase B dual audit.
+"""ExaminerAgent: Phase A node exam assembly, Phase B dual audit.
 
-Migrated from the previous engine; `Covered_Node_IDs` are Dagger canonical node
-ids and `branch_context` is the ActiveBranch boundary. See REBUILD-DESIGN §6.
+`Covered_Node_IDs` are Dagger canonical node ids and `node_context` is the
+ActiveNode boundary.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ class ExaminerAgent(Agent):
         prior_paths: list[str],
         prior_contents: list[str],
         retrieved: list[dict] | None = None,
+        node_context: str | None = None,
         branch_context: str | None = None,
     ) -> ExamSections:
         parts = [
@@ -50,10 +51,11 @@ class ExaminerAgent(Agent):
             f"Next file sequence number: {next_seq}\n",
             "Prior completed file paths:\n" + "\n".join(f"  - {p}" for p in prior_paths) + "\n",
         ]
-        if branch_context:
+        context = node_context or branch_context
+        if context:
             parts.append(
-                "Planner-bound ActiveBranch context. Treat this as the highest-priority scope "
-                f"constraint for Phase A:\n{branch_context}\n"
+                "Planner-bound ActiveNode context. Treat this as the highest-priority scope "
+                f"constraint for Phase A:\n{context}\n"
             )
         if retrieved:
             parts.append(_format_retrieved(retrieved))
@@ -78,6 +80,7 @@ class ExaminerAgent(Agent):
         prior_contents: list[str],
         previous_bottleneck: str | None = None,
         retrieved: list[dict] | None = None,
+        node_context: str | None = None,
         branch_context: str | None = None,
     ) -> AuditResult:
         parts = [
@@ -89,10 +92,11 @@ class ExaminerAgent(Agent):
         ]
         if previous_bottleneck:
             parts.append(f"[Previous Bottleneck Report]:\n{previous_bottleneck}\n")
-        if branch_context:
+        context = node_context or branch_context
+        if context:
             parts.append(
-                "Planner-bound ActiveBranch context. PASS requires the draft to cover the declared "
-                f"Covered_Node_IDs and stay inside this boundary:\n{branch_context}\n"
+                "Planner-bound ActiveNode context. PASS requires the draft to cover the declared "
+                f"Covered_Node_IDs and stay inside this boundary:\n{context}\n"
             )
         parts.append("Prior completed file paths:\n" + "\n".join(f"  - {p}" for p in prior_paths) + "\n")
         if prior_contents:
@@ -103,7 +107,7 @@ class ExaminerAgent(Agent):
             parts.append(_format_retrieved(retrieved))
         parts.append(
             "You must end the response with exactly:\n"
-            "ROUTE: PASS or ROUTE: FAIL_KNOWLEDGE_GAP\nEXAM_ID: <branch span or output title>\n"
+            "ROUTE: PASS or ROUTE: FAIL_KNOWLEDGE_GAP\nEXAM_ID: <node title or output title>\n"
         )
 
         user = "\n".join(parts)

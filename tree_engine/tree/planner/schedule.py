@@ -1,11 +1,8 @@
-"""Ready-branch scheduling.
+"""Ready-node scheduling for NodeRun execution.
 
-A branch is ready when all its upstream branches are completed and it is neither
-completed nor already scheduled. Newly started branches get a frozen
-CoverageSnapshot (visible prerequisite ancestors + forbidden downstream branches)
-so the BranchRun's prior scope is deterministic.
-
-Pure function (ledger I/O happens in the caller). See docs/REBUILD-DESIGN.md §4/§6.
+A node is ready when every direct prerequisite parent has already been covered
+by the finished-output ledger. The scheduler is deterministic and only starts
+nodes that are not already scheduled.
 """
 
 from __future__ import annotations
@@ -13,17 +10,11 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-from tree.state.models import (
-    BranchExecutionRecord,
-    BranchRunRecord,
-    CoverageSnapshot,
-    PipelineState,
-)
+from tree.state.models import CoverageSnapshot, NodeExecutionRecord, NodeRunRecord, PipelineState
 
 
-def start_ready_branch_runs(
+def start_ready_node_runs(
     state: PipelineState,
-    branches: list[dict[str, Any]],
     dag: dict[str, Any],
     *,
     covered_node_ids: set[str],
@@ -31,96 +22,95 @@ def start_ready_branch_runs(
     finished_output_ids: list[str] | None = None,
     now: str = "",
 ) -> PipelineState:
-    by_id = {b["branch_id"]: b for b in branches}
-    completed = {
-        b["branch_id"]
-        for b in branches
-        if b.get("coverage_node_ids") and set(b["coverage_node_ids"]) <= covered_node_ids
-    }
-    scheduled = {be.branch_id for be in state.branch_executions if be.branch_id}
-    active = sum(1 for be in state.branch_executions if be.status == "in_progress")
+    nodes = sorted(
+        dag.get("nodes") or [],
+        key=lambda n: (n.get("source_order_index", 0), n.get("node_id", "")),
+    )
+    parents, children = _prereq_adjacency(dag)
+    scheduled = {item.node_id for item in state.node_executions}
+    active = sum(1 for item in state.node_executions if item.status == "in_progress")
 
-    node_collections = _node_collection_lookup(dag)
-    prereq_edges = [e for e in dag.get("edges", []) if e.get("relation") == "prerequisite"]
-
-    for branch in sorted(branches, key=lambda b: b.get("display_order", 0)):
+    for node in nodes:
         if active >= max_active:
             break
-        branch_id = branch["branch_id"]
-        if branch_id in scheduled or branch_id in completed:
+        node_id = node.get("node_id", "")
+        if not node_id or node_id in covered_node_ids or node_id in scheduled:
             continue
-        upstream = branch.get("upstream_branch_ids") or []
-        if not all(up in completed for up in upstream):
+        direct_parents = set(parents.get(node_id, []))
+        if not direct_parents <= covered_node_ids:
             continue
 
-        run_id = f"{branch_id}::run"
+        run_id = f"{node_id}::run"
+        ancestors = _ancestors(parents, node_id)
         snapshot = CoverageSnapshot(
             started_at=now,
             finished_output_ids=list(finished_output_ids or []),
             covered_node_ids=sorted(covered_node_ids),
-            completed_branch_ids=sorted(completed),
-            snapshot_visible_ancestor_node_ids=sorted(
-                _prereq_ancestors(prereq_edges, branch.get("start_node_id", ""))
-            ),
-            forbidden_future_branch_ids=sorted(_downstream_closure(by_id, branch_id)),
+            snapshot_visible_ancestor_node_ids=sorted(ancestors & covered_node_ids),
+            forbidden_future_node_ids=sorted(_descendants(children, node_id)),
         )
-        state.branch_executions.append(
-            BranchExecutionRecord(
-                execution_path=branch_id,
+        state.node_executions.append(
+            NodeExecutionRecord(
+                node_id=node_id,
                 status="in_progress",
-                coverage_node_ids=list(branch.get("coverage_node_ids") or []),
-                current_start_node_id=branch.get("start_node_id"),
-                source_collections=sorted(
-                    {c for nid in branch.get("node_ids", []) for c in node_collections.get(nid, [])}
-                ),
-                branch_id=branch_id,
-                branch_run_id=run_id,
+                source_collections=sorted(node.get("collections") or []),
+                node_run_id=run_id,
             )
         )
-        state.branch_runs.append(
-            BranchRunRecord(
-                branch_id=branch_id,
+        state.node_runs.append(
+            NodeRunRecord(
+                node_id=node_id,
                 run_id=run_id,
                 status="running",
                 coverage_snapshot=snapshot,
-                execution_path=branch_id,
             )
         )
-        scheduled.add(branch_id)
+        scheduled.add(node_id)
         active += 1
 
     return state
 
 
-def _node_collection_lookup(dag: dict[str, Any]) -> dict[str, list[str]]:
-    return {n["node_id"]: list(n.get("collections") or []) for n in dag.get("nodes", [])}
-
-
-def _prereq_ancestors(prereq_edges: list[dict[str, Any]], start_node_id: str) -> set[str]:
-    """All nodes reachable backward along prerequisite edges from start_node_id."""
-    if not start_node_id:
-        return set()
-    reverse: dict[str, list[str]] = {}
-    for edge in prereq_edges:
-        reverse.setdefault(edge["to_node_id"], []).append(edge["from_node_id"])
-    ancestors: set[str] = set()
-    queue = deque([start_node_id])
-    while queue:
-        node = queue.popleft()
-        for parent in reverse.get(node, []):
-            if parent not in ancestors:
-                ancestors.add(parent)
-                queue.append(parent)
-    return ancestors
-
-
-def _downstream_closure(by_id: dict[str, dict[str, Any]], branch_id: str) -> set[str]:
-    closure: set[str] = set()
-    queue = deque(by_id.get(branch_id, {}).get("downstream_branch_ids", []))
-    while queue:
-        bid = queue.popleft()
-        if bid in closure:
+def _prereq_adjacency(dag: dict[str, Any]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    parents: dict[str, list[str]] = {}
+    children: dict[str, list[str]] = {}
+    for edge in dag.get("edges") or []:
+        if edge.get("relation") != "prerequisite":
             continue
-        closure.add(bid)
-        queue.extend(by_id.get(bid, {}).get("downstream_branch_ids", []))
-    return closure
+        src, dst = edge.get("from_node_id", ""), edge.get("to_node_id", "")
+        if not src or not dst:
+            continue
+        parents.setdefault(dst, []).append(src)
+        children.setdefault(src, []).append(dst)
+    for values in parents.values():
+        values.sort()
+    for values in children.values():
+        values.sort()
+    return parents, children
+
+
+def _ancestors(parents: dict[str, list[str]], node_id: str) -> set[str]:
+    found: set[str] = set()
+    queue = deque(parents.get(node_id, []))
+    while queue:
+        current = queue.popleft()
+        if current in found:
+            continue
+        found.add(current)
+        queue.extend(parents.get(current, []))
+    return found
+
+
+def _descendants(children: dict[str, list[str]], node_id: str) -> set[str]:
+    found: set[str] = set()
+    queue = deque(children.get(node_id, []))
+    while queue:
+        current = queue.popleft()
+        if current in found:
+            continue
+        found.add(current)
+        queue.extend(children.get(current, []))
+    return found
+
+
+__all__ = ["start_ready_node_runs"]

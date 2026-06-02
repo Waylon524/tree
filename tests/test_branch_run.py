@@ -1,19 +1,19 @@
-"""Tests for the BranchRunner Step 0->4 loop (step 7)."""
+"""Tests for the NodeRunner Examiner -> Student -> Writer loop."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tree.engine.branch_run import BranchRunner, ledger_covered_node_ids
+from tree.engine.node_run import NodeRunner, ledger_covered_node_ids
 from tree.io import paths
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditResult,
-    BranchExecutionRecord,
-    BranchRunRecord,
     CoverageSnapshot,
     ExamSections,
+    NodeExecutionRecord,
+    NodeRunRecord,
     PipelineState,
     Route,
     WriterResult,
@@ -24,11 +24,16 @@ class _FakeExaminer:
     def __init__(self, fail_then_pass=1):
         self.audit_calls = 0
         self.fail_count = fail_then_pass
+        self.compose_kwargs = []
 
     async def compose(self, **kw):
+        self.compose_kwargs.append(kw)
         return ExamSections(
-            knowledge_point="化学平衡", covered_node_ids=["n1"],
-            blind_exam="Q", answer_key="A", writer_instructions="Scope: x",
+            knowledge_point="01. 化学平衡",
+            covered_node_ids=["n1", "n2"],
+            blind_exam="Q",
+            answer_key="A",
+            writer_instructions="Scope: x",
         )
 
     async def audit(self, **kw):
@@ -38,7 +43,11 @@ class _FakeExaminer:
 
 
 class _FakeStudent:
+    def __init__(self):
+        self.calls = []
+
     async def answer(self, **kw):
+        self.calls.append(kw)
         return "学生作答"
 
 
@@ -48,103 +57,148 @@ class _FakeWriter:
 
     async def draft(self, **kw):
         self.calls += 1
-        return WriterResult(draft_content="# 化学平衡\n平衡常数 K 的表达式与计算。")
+        return WriterResult(
+            draft_content=(
+                "# 01. 化学平衡\n\n"
+                "## 学习目标与先修前置\n\n"
+                "**先修前置：** AI 自己乱写的先修。\n\n"
+                "**学习目标：** 学会平衡常数。\n\n"
+                "## 背景与应用场景\n\n"
+                "平衡常数 K 的表达式与计算。"
+            )
+        )
 
 
 class _FakeRetriever:
     def __init__(self):
         self.indexed = []
+        self.source_queries = []
+        self.finished_queries = []
 
-    def source_hits(self, query, *, collections, top_k):
+    def source_hits(self, query, *, collections, node_ids, top_k):
+        self.source_queries.append({"collections": collections, "node_ids": node_ids, "top_k": top_k})
         return []
 
     def finished_hits(self, query, *, allowed_paths, top_k):
-        return []
+        self.finished_queries.append({"allowed_paths": set(allowed_paths), "top_k": top_k})
+        return [{"text": "prior hit", "metadata": {"path": next(iter(allowed_paths))}}] if allowed_paths else []
 
-    def index_finished(self, execution_path, path):
-        self.indexed.append(path)
+    def index_finished(self, node_id, path):
+        self.indexed.append((node_id, path))
         return 1
 
 
 def _seed(root):
     paths.ensure_workspace_dirs(root)
     write_json_atomic(
-        paths.knowledge_branches_path(root),
-        envelope(schema="tree.knowledge-branches", data={"branches": [
-            {"branch_id": "kb:1", "node_ids": ["n1"], "coverage_node_ids": ["n1"],
-             "start_node_id": "n1", "end_node_id": "n1", "upstream_branch_ids": [],
-             "downstream_branch_ids": [], "display_order": 0}
-        ]}),
+        paths.knowledge_dag_path(root),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [
+                    {"node_id": "n0", "title": "前置", "defines": ["前置"], "collections": ["课件"], "source_order_index": 0},
+                    {"node_id": "n1", "title": "化学平衡", "defines": ["平衡"], "collections": ["课件"], "source_order_index": 1},
+                ],
+                "edges": [
+                    {
+                        "from_node_id": "n0",
+                        "to_node_id": "n1",
+                        "relation": "prerequisite",
+                        "required_defines": ["前置定义"],
+                    }
+                ],
+                "roots": ["n0"],
+            },
+        ),
     )
     write_json_atomic(
         paths.knowledge_nodes_path(root),
-        envelope(schema="tree.knowledge-nodes", data={"knowledge_nodes": [
-            {"node_id": "n1", "title": "化学平衡", "keywords": ["平衡"], "collections": ["课件"]}
-        ]}),
+        envelope(
+            schema="tree.knowledge-nodes",
+            data={"knowledge_nodes": [
+                {"node_id": "n0", "title": "前置", "defines": ["前置"], "collections": ["课件"], "source_order_index": 0},
+                {"node_id": "n1", "title": "化学平衡", "defines": ["平衡"], "collections": ["课件"], "source_order_index": 1},
+            ]},
+        ),
     )
-    state = PipelineState(
-        branch_executions=[
-            BranchExecutionRecord(
-                execution_path="kb:1", status="in_progress", branch_id="kb:1",
-                branch_run_id="kb:1::run", source_collections=["课件"], coverage_node_ids=["n1"],
-                current_start_node_id="n1",
-            )
-        ],
-        branch_runs=[
-            BranchRunRecord(
-                branch_id="kb:1", run_id="kb:1::run", status="running",
-                coverage_snapshot=CoverageSnapshot(), execution_path="kb:1",
-            )
-        ],
+    prior = paths.outputs_root(root) / "001.前置.md"
+    prior.write_text("# 前置\n已学内容", encoding="utf-8")
+    write_json_atomic(
+        paths.knowledge_ledger_path(root),
+        {"records": [{"node_id": "n0", "node_ids": ["n0"], "output_path": "outputs/001.前置.md", "title": "前置", "file_seq": "001"}]},
     )
-    StateManager(paths.pipeline_state_path(root)).save(state)
+    StateManager(paths.pipeline_state_path(root)).save(
+        PipelineState(
+            node_executions=[
+                NodeExecutionRecord(
+                    node_id="n1",
+                    status="in_progress",
+                    node_run_id="n1::run",
+                    source_collections=["课件"],
+                )
+            ],
+            node_runs=[
+                NodeRunRecord(
+                    node_id="n1",
+                    run_id="n1::run",
+                    status="running",
+                    coverage_snapshot=CoverageSnapshot(snapshot_visible_ancestor_node_ids=["n0"]),
+                )
+            ],
+        )
+    )
 
 
-async def test_branch_run_fail_then_pass_records_output(tmp_path):
+async def test_node_run_fail_then_pass_records_single_node_output(tmp_path):
     _seed(tmp_path)
     examiner = _FakeExaminer(fail_then_pass=1)
+    student = _FakeStudent()
     writer = _FakeWriter()
     retriever = _FakeRetriever()
-    runner = BranchRunner(
+    runner = NodeRunner(
         root=tmp_path,
         settings=SimpleNamespace(max_iterations=5),
         examiner=examiner,
-        student=_FakeStudent(),
+        student=student,
         writer=writer,
         retriever=retriever,
         state_mgr=StateManager(paths.pipeline_state_path(tmp_path)),
     )
 
-    result = await runner.run_one("kb:1")
+    result = await runner.run_one("n1")
 
-    assert result == "branch_complete"
-    assert examiner.audit_calls == 2  # one FAIL, one PASS
+    assert result == "node_complete"
+    assert examiner.audit_calls == 2
     assert writer.calls == 1
 
-    # Output file landed and was indexed.
-    output = paths.outputs_root(tmp_path) / "kb_1" / "01.化学平衡.md"
+    output = paths.outputs_root(tmp_path) / "002.化学平衡.md"
     assert output.exists()
-    assert retriever.indexed == [output]
+    text = output.read_text(encoding="utf-8")
+    assert text.startswith("# 002. 化学平衡\n\n## 先修前置\n")
+    assert "- [前置](001.前置.md)：相关先修 defines：前置定义。" in text
+    assert "## 学习目标\n\n**学习目标：** 学会平衡常数。" in text
+    assert "AI 自己乱写的先修" not in text
+    assert retriever.indexed == [("n1", output)]
+    assert retriever.source_queries and retriever.source_queries[0]["node_ids"] == ["n1"]
+    assert student.calls
+    assert "prior_contents" not in student.calls[0]
+    assert student.calls[0]["learned_hits"] == [{"text": "prior hit", "metadata": {"path": "outputs/001.前置.md"}}]
 
-    # Ledger covers n1.
-    assert ledger_covered_node_ids(tmp_path) == {"n1"}
-
-    # State updated.
+    assert ledger_covered_node_ids(tmp_path) == {"n0", "n1"}
     state = StateManager(paths.pipeline_state_path(tmp_path)).load()
-    be = state.branch_executions[0]
-    assert be.status == "completed"
-    assert be.outputs_completed == ["01.化学平衡.md"]
+    execution = state.node_executions[0]
+    assert execution.status == "completed"
+    assert execution.outputs_completed == ["002.化学平衡.md"]
+    assert state.node_runs[0].status == "complete"
 
 
-async def test_branch_run_skips_when_already_covered(tmp_path):
+async def test_node_run_skips_when_already_covered(tmp_path):
     _seed(tmp_path)
-    # Pre-cover n1 in the ledger.
     write_json_atomic(
         paths.knowledge_ledger_path(tmp_path),
-        {"records": [{"execution_path": "kb:1", "output_path": "outputs/kb_1/01.x.md",
-                      "title": "x", "node_ids": ["n1"], "file_seq": "01"}]},
+        {"records": [{"node_id": "n1", "node_ids": ["n1"], "output_path": "outputs/002.x.md", "title": "x", "file_seq": "002"}]},
     )
-    runner = BranchRunner(
+    runner = NodeRunner(
         root=tmp_path,
         settings=SimpleNamespace(max_iterations=5),
         examiner=_FakeExaminer(),
@@ -153,7 +207,9 @@ async def test_branch_run_skips_when_already_covered(tmp_path):
         retriever=_FakeRetriever(),
         state_mgr=StateManager(paths.pipeline_state_path(tmp_path)),
     )
-    result = await runner.run_one("kb:1")
-    assert result == "branch_complete"
+
+    result = await runner.run_one("n1")
+
+    assert result == "node_complete"
     state = StateManager(paths.pipeline_state_path(tmp_path)).load()
-    assert state.branch_executions[0].status == "completed"
+    assert state.node_executions[0].status == "completed"

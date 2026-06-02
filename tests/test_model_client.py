@@ -43,7 +43,22 @@ def _settings() -> Settings:
 
 
 def test_settings_default_archivist_repair_attempts_absorbs_json_mode_retries():
-    assert Settings.from_env(project_root=Path.cwd(), require_llm=False).archivist_mtu_repair_attempts == 3
+    assert Settings.from_env(project_root=Path.cwd(), require_llm=False).archivist_mtu_repair_attempts == 8
+
+
+def test_settings_default_dagger_build_timeout_is_480_seconds(monkeypatch, tmp_path):
+    monkeypatch.delenv("DAGGER_BUILD_TIMEOUT_SEC", raising=False)
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_build_timeout_sec == 480.0
+
+
+def test_settings_default_llm_timeout_is_480_seconds(monkeypatch, tmp_path):
+    monkeypatch.delenv("LLM_TIMEOUT_SEC", raising=False)
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).llm_timeout_sec == 480.0
+
+
+def test_settings_default_dagger_repair_attempts_is_three(monkeypatch, tmp_path):
+    monkeypatch.delenv("DAGGER_REPAIR_ATTEMPTS", raising=False)
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_repair_attempts == 3
 
 
 async def test_llm_client_sets_role_specific_deepseek_options(monkeypatch):
@@ -75,3 +90,15 @@ async def test_llm_client_sets_role_specific_deepseek_options(monkeypatch):
 
     assert "response_format" not in calls["student"]
     assert calls["student"]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+async def test_llm_client_passes_per_call_timeout_to_openai(monkeypatch):
+    _FakeAsyncOpenAI.instances = []
+    monkeypatch.setattr(model_client, "AsyncOpenAI", _FakeAsyncOpenAI)
+    client = model_client.LLMClient(_settings())
+
+    await client.call("dagger", "system", "user", timeout_sec=480.0)
+
+    dagger_index = list(model_client.ROLES).index("dagger")
+    call = _FakeAsyncOpenAI.instances[dagger_index].chat.completions.calls[0]
+    assert call["timeout"] == 480.0

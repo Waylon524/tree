@@ -3,8 +3,6 @@
 Roles: examiner, student, writer, archivist, dagger.
 Load order: ~/.tree/config.env  ->  ./.env  ->  ./.tree/config.env
 Blank values never override an already-set key.
-
-See docs/REBUILD-DESIGN.md §7.2.
 """
 
 from __future__ import annotations
@@ -49,7 +47,7 @@ class Settings:
     max_iterations: int = 5
     max_retries: int = 3
     max_format_retries: int = 2
-    llm_timeout_sec: float = 60.0
+    llm_timeout_sec: float = 480.0
     pro_degradation_threshold: int = 3
     pro_degradation_cooldown_sec: int = 600
 
@@ -62,15 +60,21 @@ class Settings:
 
     # Archivist (MTU cutting)
     archivist_mtu_cut_timeout_sec: float = 480.0
-    archivist_mtu_repair_attempts: int = 3
+    archivist_mtu_repair_attempts: int = 8
 
     # Dagger (DAG build)
-    dagger_build_timeout_sec: float = 300.0
-    dagger_repair_attempts: int = 1
+    dagger_build_timeout_sec: float = 480.0
+    dagger_repair_attempts: int = 3
     dagger_max_nodes_per_call: int = 400  # above this, fall back to per-collection batching
+    dagger_embed_cluster_enabled: bool = True
+    dagger_cluster_similarity_threshold: float = 0.80
+    dagger_cluster_top_k: int = 5
+    dagger_cluster_max_size: int = 8
+    dagger_cluster_auto_accept_singleton: bool = True
+    dagger_cluster_auto_accept_same_collection: bool = False
 
-    # BranchRun loop
-    max_active_branch_runs: int = 2
+    # NodeRun loop
+    max_active_node_runs: int = 5
     max_examiner_span_nodes: int = 3
 
     project_root: Path = field(default_factory=Path.cwd)
@@ -111,7 +115,7 @@ class Settings:
             max_iterations=_env_int("MAX_ITERATIONS", 5),
             max_retries=_env_int("MAX_RETRIES", 3),
             max_format_retries=_env_int("MAX_FORMAT_RETRIES", 2),
-            llm_timeout_sec=_env_float("LLM_TIMEOUT_SEC", 60.0),
+            llm_timeout_sec=_env_float("LLM_TIMEOUT_SEC", 480.0),
             pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
             pro_degradation_cooldown_sec=_env_int("PRO_DEGRADATION_COOLDOWN_SEC", 600),
             source_ingest_concurrency=_env_int("SOURCE_INGEST_CONCURRENCY", 16),
@@ -120,11 +124,17 @@ class Settings:
             source_ocr_upload_interval_sec=_env_float("SOURCE_OCR_UPLOAD_INTERVAL_SEC", 5.0),
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
             archivist_mtu_cut_timeout_sec=_env_float("ARCHIVIST_MTU_CUT_TIMEOUT_SEC", 480.0),
-            archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 3),
-            dagger_build_timeout_sec=_env_float("DAGGER_BUILD_TIMEOUT_SEC", 300.0),
-            dagger_repair_attempts=_env_int("DAGGER_REPAIR_ATTEMPTS", 1),
+            archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 8),
+            dagger_build_timeout_sec=_env_float("DAGGER_BUILD_TIMEOUT_SEC", 480.0),
+            dagger_repair_attempts=_env_int("DAGGER_REPAIR_ATTEMPTS", 3),
             dagger_max_nodes_per_call=_env_int("DAGGER_MAX_NODES_PER_CALL", 400),
-            max_active_branch_runs=_env_int("MAX_ACTIVE_BRANCH_RUNS", 2),
+            dagger_embed_cluster_enabled=_env_bool("DAGGER_EMBED_CLUSTER_ENABLED", True),
+            dagger_cluster_similarity_threshold=_env_float("DAGGER_CLUSTER_SIMILARITY_THRESHOLD", 0.80),
+            dagger_cluster_top_k=_env_int("DAGGER_CLUSTER_TOP_K", 5),
+            dagger_cluster_max_size=_env_int("DAGGER_CLUSTER_MAX_SIZE", 8),
+            dagger_cluster_auto_accept_singleton=_env_bool("DAGGER_CLUSTER_AUTO_ACCEPT_SINGLETON", True),
+            dagger_cluster_auto_accept_same_collection=_env_bool("DAGGER_CLUSTER_AUTO_ACCEPT_SAME_COLLECTION", False),
+            max_active_node_runs=_env_int("MAX_ACTIVE_NODE_RUNS", 5),
             max_examiner_span_nodes=_env_int("MAX_EXAMINER_SPAN_NODES", 3),
             project_root=root,
         )

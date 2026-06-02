@@ -11,8 +11,13 @@ from tree.engine.ingest_driver import (
     split_raw_markdown_for_cleaning,
 )
 from tree.io import paths
+from tree.observability.progress import ProgressTracker
 from tree.planner.pipeline import load_dag, load_nodes
 from tree.planner.store import read_envelope_data
+
+
+def _raw_lines(count: int) -> str:
+    return "\n".join(f"raw line {index}" for index in range(1, count + 1))
 
 
 class _FakeArchivist:
@@ -38,17 +43,17 @@ class _FakeArchivist:
         units = [
             {
                 "start_line": 1,
-                "end_line": 2,
+                "end_line": 31,
                 "title": "A",
-                "keywords": ["ka"],
+                "defines": ["ka"],
                 "summary": "",
                 "unit_kind": "concept",
             },
             {
-                "start_line": 3,
-                "end_line": 4,
+                "start_line": 32,
+                "end_line": 62,
                 "title": "B",
-                "keywords": ["kb"],
+                "defines": ["kb"],
                 "summary": "",
                 "unit_kind": "concept",
             },
@@ -57,38 +62,47 @@ class _FakeArchivist:
 
 
 class _EchoDagger:
-    async def build(self, payload, *, timeout_sec=None):
+    async def build_nodes(self, payload, *, timeout_sec=None):
         metas = [p for p in payload if "mtu_id" in p]
         return {
             "nodes": [
                 {
                     "title": p["title"],
                     "member_mtu_ids": [p["mtu_id"]],
-                    "keywords": p.get("keywords", []),
+                    "defines": [p["mtu_id"]],
                 }
                 for p in metas
-            ],
-            "edges": [
+            ]
+        }
+
+    async def build_prerequisites(self, payload, *, timeout_sec=None):
+        nodes = list(payload.get("nodes") or [])
+        return {
+            "node_prerequisites": [
                 {
-                    "from_title": metas[0]["title"],
-                    "to_title": metas[1]["title"],
-                    "relation": "prerequisite",
-                    "confidence": 0.9,
+                    "node_id": node["node_id"],
+                    "required_defines": [] if index == 0 else [nodes[index - 1]["defines"][0]],
+                    "reason": "first node" if index == 0 else "continues the previous node",
                 }
-            ],
+                for index, node in enumerate(nodes)
+            ]
         }
 
 
 class _FakeIndexer:
     def __init__(self):
         self.indexed = []
+        self.updated_node_ids = {}
 
     def index_mtu(self, mtu, text: str, *, node_id: str = "") -> int:
         self.indexed.append((mtu.mtu_id, text, node_id))
         return 1
 
     def is_mtu_indexed(self, mtu_id: str) -> bool:
-        return False
+        return any(indexed_id == mtu_id for indexed_id, _text, _node_id in self.indexed)
+
+    def update_mtu_node_ids(self, mapping: dict[str, str]) -> None:
+        self.updated_node_ids.update(mapping)
 
 
 class _FakeProgress:
@@ -114,7 +128,7 @@ def _settings(tmp_path):
 async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(tmp_path, monkeypatch):
     material = tmp_path / "materials" / "课件" / "ch1.md"
     material.parent.mkdir(parents=True)
-    material.write_text("raw line 1\nraw line 2\nraw line 3\nraw line 4", encoding="utf-8")
+    material.write_text(_raw_lines(62), encoding="utf-8")
     monkeypatch.setattr(
         "tree.engine.ingest_driver.extract_text",
         lambda path: material.read_text(encoding="utf-8"),
@@ -134,6 +148,7 @@ async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(
         archivist=_FakeArchivist(),
         agents=SimpleNamespace(dagger=_EchoDagger()),
         rag_indexer=indexer,
+        progress=ProgressTracker(tmp_path),
     )
 
     summary = await prepare_sources(engine)
@@ -142,9 +157,23 @@ async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(
     assert len(load_nodes(tmp_path)) == 2
     assert len(load_dag(tmp_path)["edges"]) == 1
     assert len(indexer.indexed) == 2
-    assert [text for _, text, _ in indexer.indexed] == ["clean line 1\nclean line 2", "clean line 3\nclean line 4"]
-    assert all(node_id for _, _, node_id in indexer.indexed)
+    assert "clean line 1" in indexer.indexed[0][1]
+    assert "clean line 31" in indexer.indexed[0][1]
+    assert "clean line 32" in indexer.indexed[1][1]
+    assert "clean line 62" in indexer.indexed[1][1]
+    assert not any(node_id for _, _, node_id in indexer.indexed)
+    assert set(indexer.updated_node_ids) == {mtu_id for mtu_id, _, _ in indexer.indexed}
+    assert all(indexer.updated_node_ids.values())
     assert not any(paths.source_markdown_root(tmp_path).rglob("*.md"))
+    stages = engine.progress.load()["stages"]
+    assert stages["ocr"]["done"] == 1
+    assert stages["ocr"]["total"] == 1
+    assert stages["clean"]["done"] == 1
+    assert stages["cut"]["done"] == 1
+    assert stages["embed"]["done"] == 2
+    assert stages["embed"]["status"] == "complete"
+    assert stages["cluster"]["status"] == "complete"
+    assert stages["link"]["done"] == 2
 
 
 async def test_prepare_sources_persists_ocr_markdown_checkpoint_before_archivist(
@@ -152,7 +181,7 @@ async def test_prepare_sources_persists_ocr_markdown_checkpoint_before_archivist
 ):
     material = tmp_path / "materials" / "课件" / "ch1.md"
     material.parent.mkdir(parents=True)
-    raw = "raw line 1\nraw line 2\nraw line 3\nraw line 4"
+    raw = _raw_lines(62)
     material.write_text(raw, encoding="utf-8")
     monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
 
@@ -202,6 +231,26 @@ def test_remove_ocr_image_html_removes_centered_img_div_blocks():
     assert "after" in cleaned
     assert "<img" not in cleaned
     assert "pplines-online" not in cleaned
+
+
+def test_remove_ocr_image_html_removes_ocr_html_tables():
+    raw = (
+        "before\n"
+        "<table border=1 style='margin: auto; width: max-content;'> "
+        "<thead><tr><th style='text-align: center;'>t</th>"
+        "<th style='text-align: center;'>过阻尼</th></tr></thead> "
+        "<tbody><tr><td style='text-align: center;'>0</td>"
+        "<td style='text-align: center;'>0.0</td></tr></tbody> "
+        "</table>\n"
+        "after"
+    )
+
+    cleaned = remove_ocr_image_html(raw)
+
+    assert "before" in cleaned
+    assert "after" in cleaned
+    assert "<table" not in cleaned
+    assert "过阻尼" not in cleaned
 
 
 async def test_prepare_sources_persists_ocr_checkpoint_after_removing_image_html(tmp_path, monkeypatch):
@@ -301,7 +350,7 @@ async def test_prepare_sources_cleans_and_cuts_each_long_chunk_independently(tmp
 
     assert len(archivist.clean_inputs) == 2
     indexed_texts = [text for _, text, _ in indexer.indexed]
-    assert "clean line 1\nclean line 2" in indexed_texts
+    assert any("clean line 1" in text and "clean line 2" in text for text in indexed_texts)
     assert any("clean line 3" in text for text in indexed_texts)
     assert any("clean line 4" in text for text in indexed_texts)
     source_files = {
@@ -345,9 +394,9 @@ class _BlockingArchivist:
             [
                 {
                     "start_line": 1,
-                    "end_line": 2,
+                    "end_line": 31,
                     "title": "A",
-                    "keywords": ["ka"],
+                    "defines": ["ka"],
                     "summary": "",
                     "unit_kind": "concept",
                 }
@@ -439,9 +488,9 @@ class _RetryingArchivist:
             [
                 {
                     "start_line": 1,
-                    "end_line": 2,
+                    "end_line": 31,
                     "title": source_file,
-                    "keywords": ["ka"],
+                    "defines": ["ka"],
                     "summary": "",
                     "unit_kind": "concept",
                 }

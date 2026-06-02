@@ -1,7 +1,7 @@
 """Material scan: incremental fingerprint manifest over materials/.
 
 Decides which materials are new / changed / unchanged so the planner can reuse
-cached MTUs for untouched files. See docs/REBUILD-DESIGN.md §5.
+cached MTUs for untouched files.
 """
 
 from __future__ import annotations

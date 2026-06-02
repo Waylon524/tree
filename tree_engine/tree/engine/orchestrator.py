@@ -13,13 +13,13 @@ from tree.agents.examiner import ExaminerAgent
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
 from tree.config import Settings
-from tree.engine.branch_run import BranchRunner, ledger_covered_node_ids, ledger_output_ids
+from tree.engine.node_run import NodeRunner, ledger_covered_node_ids, ledger_output_ids
 from tree.engine.ingest_driver import prepare_sources
 from tree.io import paths
 from tree.model.client import LLMClient
 from tree.observability.progress import ProgressTracker
-from tree.planner.pipeline import load_branches, load_dag
-from tree.planner.schedule import start_ready_branch_runs
+from tree.planner.pipeline import load_dag
+from tree.planner.schedule import start_ready_node_runs
 from tree.state.manager import StateManager
 
 if TYPE_CHECKING:
@@ -36,7 +36,8 @@ class TreeEngine:
         rag_client: Any | None = None,
         rag_indexer: "RAGIndexer | None" = None,
         retriever: Any | None = None,
-        branch_runner: BranchRunner | None = None,
+        node_runner: NodeRunner | None = None,
+        branch_runner: NodeRunner | None = None,
     ):
         self.settings = settings
         self.root = Path(settings.project_root)
@@ -64,11 +65,12 @@ class TreeEngine:
         self.rag_client = rag_client
         self.rag_indexer = rag_indexer
         self.retriever = retriever
-        if branch_runner is None:
+        node_runner = node_runner or branch_runner
+        if node_runner is None:
             self.rag_client = self.rag_client or _make_rag_client(self.root)
             self.rag_indexer = self.rag_indexer or _make_rag_indexer(self.rag_client)
             self.retriever = self.retriever or Retriever(self.rag_client, self.rag_indexer, self.root)
-        self.branch_runner = branch_runner or BranchRunner(
+        self.node_runner = node_runner or NodeRunner(
             root=self.root,
             settings=settings,
             examiner=self.examiner,
@@ -79,60 +81,95 @@ class TreeEngine:
         )
 
     async def run(self) -> None:
-        """Run until all branches are covered, or until the planner is blocked."""
+        """Run until all DAG nodes are covered, or until the planner is blocked."""
         self.progress.reset()
         await self.prepare_sources()
+        self._refresh_noderun_progress(status="running")
 
         while True:
             state = self.state_mgr.load()
             in_progress = self.state_mgr.find_in_progress_all(state)
             if not in_progress:
-                state = self._activate_ready_branch_runs(state)
+                state = self._activate_ready_node_runs(state)
                 in_progress = self.state_mgr.find_in_progress_all(state)
 
             if not in_progress:
-                if _all_branches_covered(self.root):
+                if _all_nodes_covered(self.root):
+                    self._refresh_noderun_progress(status="complete", message="All nodes complete")
                     self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
                     return
-                self.progress.update({"phase": "blocked", "message": "TREE_BLOCKED — no ready branch runs."})
+                self._refresh_noderun_progress(status="blocked", message="No ready node runs")
+                self.progress.update({"phase": "blocked", "message": "TREE_BLOCKED — no ready node runs."})
                 return
 
+            self._refresh_noderun_progress(
+                status="running",
+                active=[item.node_id for item in in_progress[: self.settings.max_active_node_runs]],
+                message="Running active nodes",
+            )
             await asyncio.gather(
                 *[
-                    self.branch_runner.run_one(item.execution_path)
-                    for item in in_progress[: self.settings.max_active_branch_runs]
+                    self.node_runner.run_one(item.node_id)
+                    for item in in_progress[: self.settings.max_active_node_runs]
                 ]
             )
+            self._refresh_noderun_progress(status="running")
 
     async def prepare_sources(self) -> dict[str, Any]:
         return await prepare_sources(self)
 
-    def _activate_ready_branch_runs(self, state: Any) -> Any:
-        updated = start_ready_branch_runs(
+    def _activate_ready_node_runs(self, state: Any) -> Any:
+        updated = start_ready_node_runs(
             state,
-            load_branches(self.root),
             load_dag(self.root),
             covered_node_ids=ledger_covered_node_ids(self.root),
-            max_active=self.settings.max_active_branch_runs,
+            max_active=self.settings.max_active_node_runs,
             finished_output_ids=ledger_output_ids(self.root),
             now=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
         self.state_mgr.save(updated)
         return updated
 
+    def _refresh_noderun_progress(
+        self,
+        *,
+        status: str | None = None,
+        active: list[str] | None = None,
+        message: str | None = None,
+    ) -> None:
+        nodes = load_dag(self.root).get("nodes", [])
+        covered = ledger_covered_node_ids(self.root)
+        total = len(nodes)
+        done = sum(1 for node in nodes if node.get("node_id") in covered)
+        try:
+            self.progress.set_stage(
+                "noderun",
+                total=total,
+                done=done,
+                status=status or ("complete" if total and done >= total else "running"),
+                active=active or [],
+                message=message or f"{done}/{total} nodes complete",
+            )
+        except Exception:
+            return
+
 
 class Retriever:
-    """RAG adapter consumed by BranchRunner."""
+    """RAG adapter consumed by NodeRunner."""
 
     def __init__(self, rag_client: Any, rag_indexer: Any, root: Path):
         self.rag = rag_client
         self.indexer = rag_indexer
         self.root = root
 
-    def source_hits(self, query: str, *, collections: list[str], top_k: int) -> list[dict]:
+    def source_hits(
+        self, query: str, *, collections: list[str], node_ids: list[str], top_k: int
+    ) -> list[dict]:
         filters: dict[str, Any] = {"content_kind": "source"}
         if collections:
             filters["source_collection"] = collections
+        if node_ids:
+            filters["node_id"] = node_ids
         return self.rag.query(query, top_k=top_k, filters=filters, include_drafts=False)
 
     def finished_hits(self, query: str, *, allowed_paths: set[str], top_k: int) -> list[dict]:
@@ -145,8 +182,8 @@ class Retriever:
             include_drafts=False,
         )
 
-    def index_finished(self, execution_path: str, path: Path) -> int:
-        return self.indexer.index_finished_file(self.root, execution_path, path)
+    def index_finished(self, node_id: str, path: Path) -> int:
+        return self.indexer.index_finished_file(self.root, node_id, path)
 
 
 class _Agents:
@@ -166,9 +203,9 @@ def _make_rag_indexer(rag_client: Any) -> Any:
     return RAGIndexer(rag_client)
 
 
-def _all_branches_covered(root: Path) -> bool:
-    branches = load_branches(root)
-    if not branches:
+def _all_nodes_covered(root: Path) -> bool:
+    nodes = load_dag(root).get("nodes", [])
+    if not nodes:
         return True
     covered = ledger_covered_node_ids(root)
-    return all(set(branch.get("coverage_node_ids", [])) <= covered for branch in branches)
+    return all(node.get("node_id") in covered for node in nodes)

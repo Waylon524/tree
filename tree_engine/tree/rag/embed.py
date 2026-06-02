@@ -2,8 +2,6 @@
 
 Works with the Qwen3-Embedding-4B local server (tree.rag.server) or any
 OpenAI-compatible embedding endpoint.
-
-★ Interface migrated unchanged from the previous engine. See REBUILD-DESIGN §7.1.
 """
 
 import json

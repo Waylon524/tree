@@ -3,14 +3,15 @@
 Three content_kind namespaces: source / finished / draft (drafts read directly,
 not indexed in normal flow). One document per source MTU (doc_id = mtu_id).
 
-★ Embedding/Qdrant interface preserved from the previous engine; source chunking
-is now MTU-driven. See docs/REBUILD-DESIGN.md §5, docs/LEGACY-DESIGN.md §5.
+Embedding/Qdrant access is OpenAI-compatible for embeddings; source chunking is
+MTU-driven.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any, Protocol
@@ -162,6 +163,58 @@ class RAGClient:
         )
         return [_to_hit(r.payload or {}) for r in records]
 
+    def source_mtu_vectors(self, mtu_ids: list[str]) -> dict[str, list[float]]:
+        """Return one representative source vector per MTU from stored Qdrant points."""
+        requested = [mtu_id for mtu_id in mtu_ids if mtu_id]
+        if not requested:
+            return {}
+        records = self._scroll_records(
+            limit=10000,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(key="content_kind", match=models.MatchValue(value="source")),
+                    models.FieldCondition(key="mtu_id", match=models.MatchAny(any=requested)),
+                ]
+            ),
+            with_vectors=True,
+        )
+        grouped: dict[str, list[list[float]]] = {}
+        for record in records:
+            payload = record.payload or {}
+            mtu_id = str(payload.get("mtu_id") or "")
+            if not mtu_id:
+                continue
+            vector = _record_vector(record)
+            if vector:
+                grouped.setdefault(mtu_id, []).append(vector)
+
+        vectors = {mtu_id: _normalized_mean(parts) for mtu_id, parts in grouped.items() if parts}
+        missing = sorted(set(requested) - set(vectors))
+        if missing:
+            raise RuntimeError(f"Missing source MTU vectors in Qdrant: {missing}")
+        return vectors
+
+    def update_source_mtu_node_ids(self, mapping: dict[str, str]) -> None:
+        """Backfill node_id payload for already-indexed source MTU points."""
+        for mtu_id, node_id in mapping.items():
+            if not mtu_id or not node_id:
+                continue
+            self._client.set_payload(
+                collection_name=self.collection_name,
+                payload={"node_id": node_id},
+                points=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="content_kind", match=models.MatchValue(value="source")
+                            ),
+                            models.FieldCondition(key="mtu_id", match=models.MatchValue(value=mtu_id)),
+                        ]
+                    )
+                ),
+                wait=True,
+            )
+
     def document_indexed(self, doc_id: str) -> bool:
         records, _ = self._client.scroll(
             collection_name=self.collection_name,
@@ -221,6 +274,7 @@ class RAGClient:
         *,
         limit: int,
         scroll_filter: models.Filter | None = None,
+        with_vectors: bool = False,
     ) -> list[models.Record]:
         records: list[models.Record] = []
         offset = None
@@ -230,7 +284,7 @@ class RAGClient:
                 limit=limit,
                 scroll_filter=scroll_filter,
                 with_payload=True,
-                with_vectors=False,
+                with_vectors=with_vectors,
                 offset=offset,
             )
             records.extend(page)
@@ -286,3 +340,31 @@ def _payload_chunk_index(payload: dict) -> int | None:
         return None
     match = re.search(r"-(\d+)$", chunk_id)
     return int(match.group(1)) if match else None
+
+
+def _record_vector(record: models.Record) -> list[float]:
+    vector = getattr(record, "vector", None)
+    if isinstance(vector, dict):
+        vector = next(iter(vector.values()), None)
+    if not isinstance(vector, list):
+        return []
+    return [float(value) for value in vector]
+
+
+def _normalized_mean(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    dims = min(len(vector) for vector in vectors)
+    sums = [0.0] * dims
+    for vector in vectors:
+        normalized = _normalize_vector(vector[:dims])
+        for index, value in enumerate(normalized):
+            sums[index] += value
+    return _normalize_vector([value / len(vectors) for value in sums])
+
+
+def _normalize_vector(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm <= 0:
+        return [0.0 for _ in vector]
+    return [value / norm for value in vector]

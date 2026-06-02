@@ -1,20 +1,18 @@
-"""Planner orchestration: scan -> MTUs -> DAG -> branches, envelope-persisted.
+"""Planner orchestration: scan -> MTUs -> DAG, envelope-persisted.
 
 Single entry point shared by the runtime engine and `tre planner rebuild`
 (no dual planner paths). Incremental: unchanged materials reuse cached MTUs.
-
-See docs/REBUILD-DESIGN.md §5.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from tree.io import paths
-from tree.planner.branches import build_branches
 from tree.planner.dag import build_dag
 from tree.planner.manifest import scan_materials
 from tree.planner.models import MTU
@@ -25,11 +23,13 @@ from tree.planner.store import (
     read_json,
     write_json_atomic,
 )
+from tree.planner.svg import write_dag_svg
 
 # A producer turns one material into its MTUs (runs OCR -> clean -> cut + writes
 # cleaned Markdown to runtime/source). Supplied by the ingest driver (step 8);
 # tests inject a fake. None means "no rebuild needed" must hold.
 MtuProducer = Callable[[Path, dict[str, Any]], Awaitable[list[MTU]]]
+PreDagHook = Callable[[list[MTU]], Awaitable[None] | None]
 
 
 class PlannerError(RuntimeError):
@@ -46,6 +46,9 @@ async def rebuild_planner(
     settings: Any,
     agents: HasDagger,
     mtu_producer: MtuProducer | None = None,
+    pre_dag_hook: PreDagHook | None = None,
+    vector_provider: Any | None = None,
+    progress: Any | None = None,
 ) -> dict[str, Any]:
     paths.ensure_workspace_dirs(root)
 
@@ -54,11 +57,25 @@ async def rebuild_planner(
     manifest = scan_materials(root, previous=previous)
     write_json_atomic(manifest_path, manifest)
 
+    changed = [m for m in manifest["materials"] if m["status"] != "unchanged"]
+    _set_stage(
+        progress,
+        "ocr",
+        total=len(changed),
+        done=0,
+        status="running" if changed else "complete",
+        message="Extracting materials" if changed else "No changed materials",
+    )
+    _set_stage(progress, "clean", total=0, done=0, status="pending" if changed else "complete")
+    _set_stage(progress, "cut", total=0, done=0, status="pending" if changed else "complete")
+
     needs_build = any(m["status"] != "unchanged" for m in manifest["materials"])
     if needs_build and mtu_producer is None:
         raise PlannerError("Materials are new/changed but no mtu_producer was supplied.")
 
     mtus = await _collect_mtus(root, manifest, producer=mtu_producer, settings=settings)
+    _complete_stage_if_zero(progress, "clean", "No chunks to clean")
+    _complete_stage_if_zero(progress, "cut", "No chunks to cut")
     mtus_env = envelope(
         schema="tree.mtus",
         data={"mtus": [m.model_dump(mode="json") for m in mtus]},
@@ -67,7 +84,27 @@ async def rebuild_planner(
     )
     write_json_atomic(paths.mtus_path(root), mtus_env)
 
-    dag = await build_dag(agents.dagger, mtus, settings=settings)
+    if pre_dag_hook is not None:
+        hook_result = pre_dag_hook(mtus)
+        if inspect.isawaitable(hook_result):
+            await hook_result
+    elif progress is not None:
+        _set_stage(
+            progress,
+            "embed",
+            total=len(mtus),
+            done=0 if mtus else 0,
+            status="complete" if not mtus else "pending",
+            message="Embedding skipped; no RAG indexer",
+        )
+
+    dag = await build_dag(
+        agents.dagger,
+        mtus,
+        settings=settings,
+        vector_provider=vector_provider,
+        progress=progress,
+    )
     nodes_env = envelope(
         schema="tree.knowledge-nodes",
         data={"knowledge_nodes": dag["nodes"]},
@@ -85,16 +122,7 @@ async def rebuild_planner(
         algorithm_versions={"dagger": "v1"},
     )
     write_json_atomic(paths.knowledge_dag_path(root), dag_env)
-
-    branches = build_branches({"nodes": dag["nodes"], "edges": dag["edges"]})
-    branches_env = envelope(
-        schema="tree.knowledge-branches",
-        data=branches,
-        inputs=[{"path": str(paths.knowledge_dag_path(root)), "hash": artifact_hash(dag_env)}],
-        diagnostics=branches.get("diagnostics", []),
-        algorithm_versions={"branch_build": "v1"},
-    )
-    write_json_atomic(paths.knowledge_branches_path(root), branches_env)
+    dag_svg_path = write_dag_svg(root, dag_env["data"])
 
     edges = dag["edges"]
     return {
@@ -103,7 +131,7 @@ async def rebuild_planner(
         "node_count": len(dag["nodes"]),
         "hard_edge_count": sum(1 for e in edges if e["relation"] == "prerequisite"),
         "soft_order_edge_count": sum(1 for e in edges if e["relation"] == "order"),
-        "branch_count": len(branches["branches"]),
+        "dag_svg_path": str(dag_svg_path),
     }
 
 
@@ -162,9 +190,26 @@ def load_dag(root: Path) -> dict[str, Any]:
     return {"nodes": data.get("nodes", []), "edges": data.get("edges", []), "roots": data.get("roots", [])}
 
 
-def load_branches(root: Path) -> list[dict[str, Any]]:
-    return read_envelope_data(paths.knowledge_branches_path(root)).get("branches", [])
 
 
 def load_nodes(root: Path) -> list[dict[str, Any]]:
     return read_envelope_data(paths.knowledge_nodes_path(root)).get("knowledge_nodes", [])
+
+
+def _set_stage(progress: Any | None, stage: str, **kwargs: Any) -> None:
+    if progress is not None and hasattr(progress, "set_stage"):
+        try:
+            progress.set_stage(stage, **kwargs)
+        except Exception:
+            return
+
+
+def _complete_stage_if_zero(progress: Any | None, stage: str, message: str) -> None:
+    if progress is None or not hasattr(progress, "load") or not hasattr(progress, "complete_stage"):
+        return
+    try:
+        data = progress.load().get("stages", {}).get(stage, {})
+        if int(data.get("total") or 0) == 0:
+            progress.complete_stage(stage, message)
+    except Exception:
+        return

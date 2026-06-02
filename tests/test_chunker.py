@@ -39,6 +39,29 @@ def test_chunk_mtu_carries_metadata():
         assert c["line_range"] == [1, 28]
 
 
+def test_chunk_mtu_keeps_source_mtu_as_one_chunk_under_large_limit():
+    mtu = SimpleNamespace(
+        mtu_id="mtu:multi",
+        collection="课件",
+        source_file="ch1.md",
+        title="光程与干涉",
+        keywords=["光程", "干涉"],
+        unit_kind="concept",
+        line_range=(1, 80),
+    )
+    text = (
+        "## 光程\n\n光程是折射率与几何路程的乘积。\n\n"
+        "## 干涉\n\n干涉条纹由光程差决定。\n\n"
+        "## 应用举例\n\n薄膜干涉使用同一组概念。"
+    )
+
+    chunks = chunk_mtu(mtu, text)
+
+    assert len(chunks) == 1
+    assert chunks[0]["chunk_id"] == "mtu:multi-000"
+    assert "## 干涉" in chunks[0]["text"]
+
+
 def test_chunk_mtu_handles_plain_text_without_heading():
     mtu = SimpleNamespace(
         mtu_id="mtu:x",

@@ -1,7 +1,4 @@
-"""Workspace path helpers (new layout).
-
-See docs/REBUILD-DESIGN.md §7.3 for the directory contract.
-"""
+"""Workspace path helpers for the current runtime layout."""
 
 from __future__ import annotations
 
@@ -113,8 +110,8 @@ def knowledge_dag_path(root: Path) -> Path:
     return planner_root(root) / "knowledge-dag.json"
 
 
-def knowledge_branches_path(root: Path) -> Path:
-    return planner_root(root) / "knowledge-branches.json"
+def knowledge_dag_svg_path(root: Path) -> Path:
+    return planner_root(root) / "knowledge-dag.svg"
 
 
 # --- services ----------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""StudentAgent: zero-baseline blind test answering. See REBUILD-DESIGN §6."""
+"""StudentAgent: zero-baseline blind test answering."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class StudentAgent(Agent):
         *,
         blind_exam: str,
         prior_paths: list[str],
-        prior_contents: list[str],
+        prior_contents: list[str] | None = None,
         draft_text: str | None = None,
         learned_hits: list[dict] | None = None,
     ) -> str:
@@ -21,13 +21,9 @@ class StudentAgent(Agent):
             "## Your Reading List (Pre-Read Protocol)\n",
             "Prior completed files:\n" + "\n".join(f"  - {p}" for p in prior_paths) + "\n",
         ]
-        if prior_contents:
-            parts.append("Prior completed file contents:\n")
-            for i, content in enumerate(prior_contents):
-                parts.append(f"--- File {i + 1} ---\n{content}\n")
         parts.append(
-            f"current branch-span draft:\n{draft_text}\n" if draft_text
-            else "current branch-span draft: 尚未创建\n"
+            f"current active-node draft:\n{draft_text}\n" if draft_text
+            else "current active-node draft: 尚未创建\n"
         )
         if learned_hits:
             parts.append(_format_learned(learned_hits))

@@ -15,15 +15,15 @@ class _FakeRunner:
         self.root = root
         self.calls = []
 
-    async def run_one(self, execution_path: str) -> str:
-        self.calls.append(execution_path)
+    async def run_one(self, node_id: str) -> str:
+        self.calls.append(node_id)
         write_json_atomic(
             paths.knowledge_ledger_path(self.root),
             {
                 "records": [
                     {
-                        "execution_path": execution_path,
-                        "output_path": f"outputs/{execution_path}/01.A.md",
+                        "node_id": node_id,
+                        "output_path": f"outputs/{node_id}.A.md",
                         "title": "A",
                         "node_ids": ["n1"],
                         "file_seq": "01",
@@ -33,10 +33,10 @@ class _FakeRunner:
         )
         state_mgr = StateManager(paths.pipeline_state_path(self.root))
         state = state_mgr.load()
-        state = state_mgr.complete_branch_execution(state, execution_path)
-        state = state_mgr.update_branch_run(state, f"{execution_path}::run", status="complete")
+        state = state_mgr.complete_node_execution(state, node_id)
+        state = state_mgr.update_node_run(state, f"{node_id}::run", status="complete")
         state_mgr.save(state)
-        return "branch_complete"
+        return "node_complete"
 
 
 class _ExplodingDagger:
@@ -44,7 +44,7 @@ class _ExplodingDagger:
         raise AssertionError("run() should not rebuild the planner after prepare_sources()")
 
 
-async def test_tree_engine_run_schedules_ready_branch_and_finishes(tmp_path, monkeypatch):
+async def test_tree_engine_run_schedules_ready_node_and_finishes(tmp_path, monkeypatch):
     paths.ensure_workspace_dirs(tmp_path)
     write_json_atomic(
         paths.knowledge_nodes_path(tmp_path),
@@ -64,26 +64,6 @@ async def test_tree_engine_run_schedules_ready_branch_and_finishes(tmp_path, mon
             },
         ),
     )
-    write_json_atomic(
-        paths.knowledge_branches_path(tmp_path),
-        envelope(
-            schema="tree.knowledge-branches",
-            data={
-                "branches": [
-                    {
-                        "branch_id": "kb:1",
-                        "node_ids": ["n1"],
-                        "coverage_node_ids": ["n1"],
-                        "start_node_id": "n1",
-                        "end_node_id": "n1",
-                        "upstream_branch_ids": [],
-                        "downstream_branch_ids": [],
-                        "display_order": 0,
-                    }
-                ]
-            },
-        ),
-    )
 
     async def _noop_prepare(engine):
         return {"mtu_count": 0}
@@ -92,15 +72,19 @@ async def test_tree_engine_run_schedules_ready_branch_and_finishes(tmp_path, mon
 
     runner = _FakeRunner(tmp_path)
     engine = TreeEngine(
-        SimpleNamespace(project_root=tmp_path, max_active_branch_runs=1),
-        branch_runner=runner,
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1),
+        node_runner=runner,
         agents=SimpleNamespace(dagger=_ExplodingDagger()),
     )
 
     await engine.run()
 
-    assert runner.calls == ["kb:1"]
+    assert runner.calls == ["n1"]
     state = StateManager(paths.pipeline_state_path(tmp_path)).load()
-    assert state.branch_executions[0].status == "completed"
-    assert state.branch_runs[0].status == "complete"
+    assert state.node_executions[0].status == "completed"
+    assert state.node_runs[0].status == "complete"
     assert engine.progress.load()["phase"] == "complete"
+    noderun = engine.progress.load()["stages"]["noderun"]
+    assert noderun["done"] == 1
+    assert noderun["total"] == 1
+    assert noderun["status"] == "complete"

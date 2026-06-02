@@ -3,8 +3,6 @@
 Incremental through planner manifests: changed materials are re-extracted into
 cleaned Markdown, cut into MTUs, folded into the Dagger DAG, then each source MTU
 is embedded and the cleaned Markdown is removed.
-
-See docs/REBUILD-DESIGN.md §4 ⑤, docs/LEGACY-DESIGN.md §4.5.
 """
 
 from __future__ import annotations
@@ -30,19 +28,43 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
     """Build planner artifacts from materials and ensure source MTUs are indexed."""
     root = _root(engine)
     paths.ensure_workspace_dirs(root)
+    indexer = getattr(engine, "rag_indexer", None)
+    _install_ocr_progress_callback(engine)
 
-    summary = await rebuild_planner(
-        root,
-        settings=engine.settings,
-        agents=engine.agents,
-        mtu_producer=lambda root, material: _produce_mtus(engine, root, material),
-    )
-    await ensure_all_embedded(engine)
-    return summary
+    async def pre_dag_index(mtus: list[MTU]) -> None:
+        await _ensure_mtus_embedded(engine, mtus, backfill_node_ids=False)
+
+    try:
+        summary = await rebuild_planner(
+            root,
+            settings=engine.settings,
+            agents=engine.agents,
+            mtu_producer=lambda root, material: _produce_mtus(engine, root, material),
+            pre_dag_hook=pre_dag_index if indexer is not None else None,
+            vector_provider=indexer if indexer is not None else None,
+            progress=getattr(engine, "progress", None),
+        )
+        await ensure_all_embedded(engine)
+        return summary
+    finally:
+        _install_ocr_progress_callback(None)
 
 
 async def ensure_all_embedded(engine: object) -> int:
     """Index every MTU from the latest planner output, then delete intermediates."""
+    root = _root(engine)
+    mtus = _load_mtus(root)
+    indexed = await _ensure_mtus_embedded(engine, mtus, backfill_node_ids=True)
+    _delete_source_markdown(root)
+    return indexed
+
+
+async def _ensure_mtus_embedded(
+    engine: object,
+    mtus: list[MTU],
+    *,
+    backfill_node_ids: bool,
+) -> int:
     root = _root(engine)
     indexer = getattr(engine, "rag_indexer", None)
     if indexer is None:
@@ -51,31 +73,46 @@ async def ensure_all_embedded(engine: object) -> int:
             "service before running TREE."
         )
 
-    mtus = _load_mtus(root)
-    mtu_to_node = _mtu_to_node(root)
+    mtu_to_node = _mtu_to_node(root) if backfill_node_ids else {}
+    _set_stage(
+        engine,
+        "embed",
+        total=len(mtus),
+        done=0,
+        status="running" if mtus else "complete",
+        message="Embedding source MTUs" if not backfill_node_ids else "Backfilling MTU node ids",
+    )
     indexed = 0
     for mtu in mtus:
         if hasattr(indexer, "is_mtu_indexed") and indexer.is_mtu_indexed(mtu.mtu_id):
+            _advance_stage(engine, "embed", message=f"Already indexed {mtu.title}")
             continue
         source_path = source_markdown_path(root, mtu.collection, mtu.source_file)
         if not source_path.exists():
             raise RuntimeError(f"Missing cleaned source Markdown for {mtu.mtu_id}: {source_path}")
         text = mtu_text(source_path.read_text(encoding="utf-8"), mtu.line_range)
+        _set_stage(engine, "embed", status="running", active=mtu.title, message=f"Embedding {mtu.title}")
         indexed += await asyncio.to_thread(
             indexer.index_mtu,
             mtu,
             text,
             node_id=mtu_to_node.get(mtu.mtu_id, ""),
         )
+        _advance_stage(engine, "embed", message=f"Embedded {mtu.title}")
 
-    _delete_source_markdown(root)
+    if backfill_node_ids and mtu_to_node and hasattr(indexer, "update_mtu_node_ids"):
+        indexer.update_mtu_node_ids(mtu_to_node)
+    _complete_stage(engine, "embed", "Embedding complete")
     return indexed
 
 
 async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) -> list[MTU]:
     """Extract one material, clean it, persist source Markdown, and cut MTUs."""
     material_path = paths.materials_root(root) / material["path"]
+    material_label = str(material.get("path") or material_path.name)
+    _set_stage(engine, "ocr", status="running", active=material_label, message=f"Extracting {material_label}")
     raw = remove_ocr_image_html(await asyncio.to_thread(extract_text, material_path))
+    _advance_stage(engine, "ocr", message=f"Extracted {material_label}", active=[])
     ocr_path = persist_ocr_markdown(root, material["collection"], material["source_file"], raw)
     _record_ocr_checkpoint(engine, root, ocr_path, raw)
     checkpoint_raw = ocr_path.read_text(encoding="utf-8")
@@ -83,6 +120,20 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
         return []
 
     raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
+    _add_stage_total(
+        engine,
+        "clean",
+        len(raw_chunks),
+        status="running" if raw_chunks else "complete",
+        message=f"Cleaning {material_label}",
+    )
+    _add_stage_total(
+        engine,
+        "cut",
+        len(raw_chunks),
+        status="running" if raw_chunks else "complete",
+        message=f"Cutting {material_label}",
+    )
     return await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
 
 
@@ -101,16 +152,20 @@ async def _clean_and_cut_chunk(
     order_offset: int,
 ) -> list[MTU]:
     archivist = engine.archivist
+    _set_stage(engine, "clean", status="running", active=source_file, message=f"Cleaning {source_file}")
     cleaned = await archivist.clean(
         raw_chunk,
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
     )
+    _advance_stage(engine, "clean", message=f"Cleaned {source_file}", active=[])
     if not cleaned.strip():
+        _advance_stage(engine, "cut", message=f"Skipped empty cleaned chunk {source_file}", active=[])
         return []
 
     source_path = source_markdown_path(root, collection, source_file)
     file_ops.write_text(source_path, cleaned)
-    return await archivist.cut_mtus(
+    _set_stage(engine, "cut", status="running", active=source_file, message=f"Cutting {source_file}")
+    mtus = await archivist.cut_mtus(
         cleaned,
         collection=collection,
         source_file=source_file,
@@ -118,6 +173,8 @@ async def _clean_and_cut_chunk(
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
         repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
     )
+    _advance_stage(engine, "cut", message=f"Cut {source_file}", active=[])
+    return mtus
 
 
 async def _clean_and_cut_chunks(
@@ -240,11 +297,17 @@ def split_raw_markdown_for_cleaning(raw_markdown: str) -> list[str]:
 
 
 def remove_ocr_image_html(raw_markdown: str) -> str:
-    """Remove OCR-emitted HTML image blocks before chunking or LLM cleanup."""
+    """Remove OCR-emitted HTML image/table blocks before chunking or LLM cleanup."""
+    text = re.sub(
+        r"<table\b.*?</table>",
+        "",
+        raw_markdown,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     text = re.sub(
         r'<div\b[^>]*>\s*<img\b[^>]*>\s*</div>',
         "",
-        raw_markdown,
+        text,
         flags=re.IGNORECASE | re.DOTALL,
     )
     text = re.sub(r"<img\b[^>]*>", "", text, flags=re.IGNORECASE | re.DOTALL)
@@ -333,3 +396,66 @@ def _record_ocr_checkpoint(engine: object, root: Path, path: Path, raw_markdown:
 
 def _root(engine: object) -> Path:
     return Path(engine.settings.project_root)
+
+
+def _install_ocr_progress_callback(engine: object | None) -> None:
+    try:
+        from tree.ingest.ocr_engine import set_progress_callback
+    except Exception:
+        return
+    if engine is None:
+        set_progress_callback(None)
+        return
+
+    def callback(event: dict[str, Any]) -> None:
+        current = event.get("current_file") or event.get("current_chunk") or event.get("job_id") or ""
+        state = event.get("state") or ""
+        pages_done = event.get("pages_done")
+        pages_total = event.get("pages_total")
+        if pages_done is not None and pages_total is not None:
+            message = f"OCR {current}: {pages_done}/{pages_total} pages ({state})"
+        else:
+            message = f"OCR {current}: {state}" if state else f"OCR {current}"
+        _set_stage(engine, "ocr", status="running", active=str(current), message=message)
+
+    set_progress_callback(callback)
+
+
+def _progress(engine: object) -> Any | None:
+    return getattr(engine, "progress", None)
+
+
+def _set_stage(engine: object, stage: str, **kwargs: Any) -> None:
+    progress = _progress(engine)
+    if progress is not None and hasattr(progress, "set_stage"):
+        try:
+            progress.set_stage(stage, **kwargs)
+        except Exception:
+            return
+
+
+def _add_stage_total(engine: object, stage: str, amount: int, **kwargs: Any) -> None:
+    progress = _progress(engine)
+    if progress is not None and hasattr(progress, "add_stage_total"):
+        try:
+            progress.add_stage_total(stage, amount, **kwargs)
+        except Exception:
+            return
+
+
+def _advance_stage(engine: object, stage: str, **kwargs: Any) -> None:
+    progress = _progress(engine)
+    if progress is not None and hasattr(progress, "advance_stage"):
+        try:
+            progress.advance_stage(stage, **kwargs)
+        except Exception:
+            return
+
+
+def _complete_stage(engine: object, stage: str, message: str) -> None:
+    progress = _progress(engine)
+    if progress is not None and hasattr(progress, "complete_stage"):
+        try:
+            progress.complete_stage(stage, message)
+        except Exception:
+            return

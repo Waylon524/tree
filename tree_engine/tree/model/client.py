@@ -1,7 +1,6 @@
 """Multi-role LLM client: one AsyncOpenAI per role + Examiner degradation.
 
 Roles: examiner, student, writer, archivist, dagger.
-See docs/REBUILD-DESIGN.md §7.2.
 """
 
 from __future__ import annotations
@@ -73,6 +72,7 @@ class LLMClient:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
+                    timeout=effective_timeout,
                     **_request_options(role),
                 ),
                 timeout=effective_timeout,

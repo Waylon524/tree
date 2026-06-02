@@ -12,7 +12,7 @@ incrementally rebuildable:
     }
 
 ``artifact_hash`` of the inputs lets a stage skip rebuilding when nothing
-upstream changed. See docs/REBUILD-DESIGN.md §5.
+upstream changed.
 """
 
 from __future__ import annotations

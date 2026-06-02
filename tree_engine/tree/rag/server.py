@@ -3,8 +3,6 @@
 Loads Qwen3-Embedding-4B-Q8_0 (GGUF) via llama-cpp-python and serves
 /v1/embeddings + /health on EMBED_PORT (default 8788).
 
-★ Interface migrated unchanged from the previous engine. See REBUILD-DESIGN §7.1.
-
     python -m tree.rag.server                 # 0.0.0.0:8788, all GPU layers
     python -m tree.rag.server --n-gpu-layers 0  # CPU only
 """

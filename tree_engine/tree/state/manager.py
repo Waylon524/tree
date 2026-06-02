@@ -1,4 +1,4 @@
-"""StateManager: load/save pipeline-state.json and mutate BranchRun records."""
+"""StateManager: load/save pipeline-state.json and mutate NodeRun records."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tree.planner.store import write_json_atomic
-from tree.state.models import BranchExecutionRecord, PipelineState
+from tree.state.models import NodeExecutionRecord, PipelineState
 
 
 class StateManager:
@@ -23,39 +23,39 @@ class StateManager:
     def save(self, state: PipelineState) -> None:
         write_json_atomic(self.state_path, state.model_dump(mode="json"))
 
-    def find_in_progress_all(self, state: PipelineState) -> list[BranchExecutionRecord]:
-        return [c for c in state.branch_executions if c.status == "in_progress"]
+    def find_in_progress_all(self, state: PipelineState) -> list[NodeExecutionRecord]:
+        return [c for c in state.node_executions if c.status == "in_progress"]
 
-    def find_execution(self, state: PipelineState, execution_path: str) -> BranchExecutionRecord | None:
-        return next((c for c in state.branch_executions if c.execution_path == execution_path), None)
+    def find_execution(self, state: PipelineState, node_id: str) -> NodeExecutionRecord | None:
+        return next((c for c in state.node_executions if c.node_id == node_id), None)
 
     # --- mutators (in place, return state for chaining) ----------------------
 
     def add_output_completed(
-        self, state: PipelineState, execution_path: str, filename: str
+        self, state: PipelineState, node_id: str, filename: str
     ) -> PipelineState:
-        be = self.find_execution(state, execution_path)
+        be = self.find_execution(state, node_id)
         if be and filename not in be.outputs_completed:
             be.outputs_completed.append(filename)
         return state
 
-    def complete_branch_execution(self, state: PipelineState, execution_path: str) -> PipelineState:
-        be = self.find_execution(state, execution_path)
+    def complete_node_execution(self, state: PipelineState, node_id: str) -> PipelineState:
+        be = self.find_execution(state, node_id)
         if be:
             be.status = "completed"
         return state
 
-    def update_branch_run(self, state: PipelineState, run_id: str, **fields: Any) -> PipelineState:
-        for run in state.branch_runs:
+    def update_node_run(self, state: PipelineState, run_id: str, **fields: Any) -> PipelineState:
+        for run in state.node_runs:
             if run.run_id == run_id:
                 for key, value in fields.items():
                     setattr(run, key, value)
         return state
 
-    def add_branch_run_file_completed(
+    def add_node_run_file_completed(
         self, state: PipelineState, run_id: str, filename: str
     ) -> PipelineState:
-        for run in state.branch_runs:
+        for run in state.node_runs:
             if run.run_id == run_id and filename not in run.outputs_completed:
                 run.outputs_completed.append(filename)
         return state

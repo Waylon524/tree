@@ -5,6 +5,8 @@ from __future__ import annotations
 from typer.testing import CliRunner
 
 from tree.cli.app import app
+from tree.io import paths
+from tree.planner.store import envelope, write_json_atomic
 
 
 def test_planner_rebuild_invokes_prepare_sources(monkeypatch):
@@ -21,7 +23,7 @@ def test_planner_rebuild_invokes_prepare_sources(monkeypatch):
 
         async def prepare_sources(self):
             calls.append(("prepare", None))
-            return {"mtu_count": 2, "node_count": 2, "branch_count": 1}
+            return {"mtu_count": 2, "node_count": 2, "dag_svg_path": ".tree/runtime/planner/knowledge-dag.svg"}
 
     monkeypatch.setattr("tree.cli.app.Settings", _Settings)
     monkeypatch.setattr("tree.cli.app.TreeEngine", _Engine)
@@ -30,7 +32,39 @@ def test_planner_rebuild_invokes_prepare_sources(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == [("init", "settings"), ("prepare", None)]
-    assert "branches=1" in result.stdout
+    assert "nodes=2" in result.stdout
+    assert "knowledge-dag.svg" in result.stdout
+    assert "branches" not in result.stdout
+
+
+def test_planner_dag_svg_command_writes_from_existing_dag(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_json_atomic(
+        paths.knowledge_dag_path(tmp_path),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [{"node_id": "n1", "title": "根知识点", "source_order_index": 0}],
+                "edges": [],
+                "roots": ["n1"],
+            },
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["planner", "dag-svg"])
+
+    assert result.exit_code == 0
+    assert "knowledge-dag.svg" in result.stdout
+    assert "001. 根知识点" in paths.knowledge_dag_svg_path(tmp_path).read_text(encoding="utf-8")
+
+
+def test_planner_dag_svg_command_requires_existing_dag(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(app, ["planner", "dag-svg"])
+
+    assert result.exit_code != 0
+    assert "knowledge-dag.json not found" in result.output
 
 
 def test_models_and_prompts_commands_show_current_config(monkeypatch):
@@ -67,10 +101,12 @@ def test_models_and_prompts_commands_show_current_config(monkeypatch):
 
 def test_setup_writes_workspace_config(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
     result = CliRunner().invoke(
         app,
         [
             "setup",
+            "--workspace",
             "--llm-api-key",
             "key",
             "--llm-base-url",
@@ -83,3 +119,122 @@ def test_setup_writes_workspace_config(tmp_path, monkeypatch):
     assert result.exit_code == 0
     config = tmp_path / ".tree" / "config.env"
     assert "LLM_API_KEY=key" in config.read_text(encoding="utf-8")
+
+
+def test_setup_wizard_writes_global_config(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    input_text = "\n".join(
+        [
+            "llm-key",
+            "https://llm.test",
+            "default-model",
+            "exam-model",
+            "student-model",
+            "writer-model",
+            "arch-model",
+            "dagger-model",
+            "ocr-key",
+            "",
+        ]
+    )
+
+    result = CliRunner().invoke(app, ["setup"], input=input_text)
+
+    assert result.exit_code == 0
+    config = (tmp_path / "home" / "config.env").read_text(encoding="utf-8")
+    assert "LLM_API_KEY=llm-key" in config
+    assert "LLM_BASE_URL=https://llm.test" in config
+    assert "LLM_MODEL=default-model" in config
+    assert "EXAMINER_MODEL=exam-model" in config
+    assert "STUDENT_MODEL=student-model" in config
+    assert "WRITER_MODEL=writer-model" in config
+    assert "ARCHIVIST_MODEL=arch-model" in config
+    assert "DAGGER_MODEL=dagger-model" in config
+    assert "PADDLEOCR_API_TOKEN=ocr-key" in config
+    assert "PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs" in config
+    assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in config
+
+
+def test_setup_wizard_workspace_scope(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    input_text = "\n".join(
+        [
+            "llm-key",
+            "https://llm.test",
+            "default-model",
+            "exam-model",
+            "student-model",
+            "writer-model",
+            "arch-model",
+            "dagger-model",
+            "ocr-key",
+            "",
+        ]
+    )
+
+    result = CliRunner().invoke(app, ["setup", "--workspace"], input=input_text)
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".tree" / "config.env").exists()
+    assert not (tmp_path / "home" / "config.env").exists()
+
+
+def test_setup_existing_config_requires_force(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    config = tmp_path / "home" / "config.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("LLM_MODEL=old-model\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["setup"], input="unused\n")
+
+    assert result.exit_code == 0
+    assert "already exists" in result.stdout
+    assert config.read_text(encoding="utf-8") == "LLM_MODEL=old-model\n"
+
+
+def test_setup_force_uses_existing_defaults_and_updates(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    config = tmp_path / "home" / "config.env"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "\n".join(
+            [
+                "LLM_API_KEY=old-key",
+                "LLM_BASE_URL=https://old.test",
+                "LLM_MODEL=old-model",
+                "PADDLEOCR_API_TOKEN=old-ocr",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    input_text = "\n".join(
+        [
+            "n",
+            "new-key",
+            "https://new.test",
+            "new-model",
+            "exam-new",
+            "student-new",
+            "writer-new",
+            "arch-new",
+            "dagger-new",
+            "n",
+            "new-ocr",
+            "",
+        ]
+    )
+
+    result = CliRunner().invoke(app, ["setup", "--force"], input=input_text)
+
+    assert result.exit_code == 0
+    written = config.read_text(encoding="utf-8")
+    assert "LLM_API_KEY=new-key" in written
+    assert "LLM_BASE_URL=https://new.test" in written
+    assert "LLM_MODEL=new-model" in written
+    assert "DAGGER_MODEL=dagger-new" in written
+    assert "PADDLEOCR_API_TOKEN=new-ocr" in written

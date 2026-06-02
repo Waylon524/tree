@@ -7,8 +7,6 @@ Configuration via environment variables (or .env):
   - PADDLEOCR_API_URL:   Job endpoint URL
   - PADDLEOCR_API_TOKEN: API access token
   - PADDLEOCR_MODEL:     Model name (default: PaddleOCR-VL-1.6)
-
-★ Interface migrated unchanged from the previous engine. See REBUILD-DESIGN §7.1.
 """
 
 import json

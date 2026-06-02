@@ -3,8 +3,6 @@
 Thin wrapper over RAGClient that knows the document conventions:
   - source MTU -> doc_id = mtu_id, content_kind="source", MTU-aware chunks
   - finished output -> content_kind="finished", generic markdown chunks
-
-See docs/REBUILD-DESIGN.md §4 ⑤.
 """
 
 from __future__ import annotations
@@ -38,14 +36,20 @@ class RAGIndexer:
     def is_mtu_indexed(self, mtu_id: str) -> bool:
         return self.rag.document_indexed(mtu_id)
 
-    def index_finished_file(self, root: Path, execution_path: str, path: Path) -> int:
+    def source_mtu_vectors(self, mtu_ids: list[str]) -> dict[str, list[float]]:
+        return self.rag.source_mtu_vectors(mtu_ids)
+
+    def update_mtu_node_ids(self, mapping: dict[str, str]) -> None:
+        self.rag.update_source_mtu_node_ids(mapping)
+
+    def index_finished_file(self, root: Path, node_id: str, path: Path) -> int:
         text = path.read_text(encoding="utf-8")
         return self.rag.index_file(
             file_seq=path.stem.split(".", 1)[0],
             filename=path.name,
             text=text,
             content_kind="finished",
-            source_collection=execution_path,
+            source_collection=node_id,
             path=_relative(root, path),
         )
 

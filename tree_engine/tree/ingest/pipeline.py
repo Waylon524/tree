@@ -3,10 +3,7 @@
 Routes a material file to the right extractor (all roads lead through OCR for
 PDFs/images for formula fidelity), then hands cleaned Markdown to the Archivist.
 
-See docs/REBUILD-DESIGN.md §1/§4.
-
-Step 2 implemented: detect_type / extract_text.
-TODO (step 4): ingest_file(path, collection, archivist) -> (cleaned_md_path, list[MTU])
+The public entrypoint currently detects material type and extracts raw text.
 """
 
 from __future__ import annotations

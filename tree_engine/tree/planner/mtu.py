@@ -1,7 +1,7 @@
 """MTU helpers: line numbering, cut-plan coverage validation, MTU construction.
 
 Pure functions (no LLM) so they can be unit-tested directly. The Archivist agent
-calls these around its LLM cut-plan call. See docs/REBUILD-DESIGN.md §4 ②.
+calls these around its LLM cut-plan call.
 """
 
 from __future__ import annotations
@@ -12,9 +12,17 @@ from typing import Any
 from tree.planner.ids import normalize_concepts, prefixed_id
 from tree.planner.models import MTU
 
-_VALID_UNIT_KINDS = {"concept", "example", "exercise", "misconception", "procedure", "application"}
-_MAX_KEYWORDS = 10
-_TITLE_MIN_WIDTH = 6
+_VALID_UNIT_KINDS = {
+    "concept",
+    "excercise",
+    "application",
+    "review",
+    "summary",
+    "intro",
+}
+_MAX_DEFINES = 4
+_MIN_FINAL_MTU_LINES = 20
+_TITLE_MIN_WIDTH = 4
 _TITLE_MAX_WIDTH = 40
 _SUMMARY_MIN_WIDTH = 20
 _SUMMARY_MAX_WIDTH = 150
@@ -31,18 +39,19 @@ def number_lines(text: str) -> str:
 
 
 def validate_and_normalize(plan: dict[str, Any], line_count: int) -> tuple[list[dict], list[dict]]:
-    """Validate that units + skipped_ranges tile lines 1..line_count exactly once.
+    """Validate that units tile lines 1..line_count exactly once.
 
-    Returns (normalized_units, normalized_skipped). Raises MtuCoverageError on any
+    Returns (normalized_units, []). Raises MtuCoverageError on any
     gap, overlap, or out-of-bounds range so the agent can repair.
     """
     if line_count <= 0:
         return [], []
 
+    if "skipped_ranges" in plan:
+        raise MtuCoverageError("`skipped_ranges` is not allowed in MTU cut plans")
     raw_units = plan.get("units") or []
-    raw_skipped = plan.get("skipped_ranges") or []
-    if not isinstance(raw_units, list) or not isinstance(raw_skipped, list):
-        raise MtuCoverageError("`units` and `skipped_ranges` must be lists")
+    if not isinstance(raw_units, list):
+        raise MtuCoverageError("`units` must be a list")
 
     spans: list[tuple[int, int, str, dict]] = []
     units: list[dict] = []
@@ -50,13 +59,6 @@ def validate_and_normalize(plan: dict[str, Any], line_count: int) -> tuple[list[
         unit = _normalize_unit(raw, index)
         spans.append((unit["start_line"], unit["end_line"], "unit", unit))
         units.append(unit)
-    skipped: list[dict] = []
-    for index, raw in enumerate(raw_skipped, start=1):
-        start = _int(raw.get("start_line"), f"skipped {index} start_line")
-        end = _int(raw.get("end_line"), f"skipped {index} end_line")
-        entry = {"start_line": start, "end_line": end, "reason": str(raw.get("reason") or "")[:300]}
-        spans.append((start, end, "skip", entry))
-        skipped.append(entry)
 
     spans.sort(key=lambda s: (s[0], s[1]))
     expected = 1
@@ -73,7 +75,7 @@ def validate_and_normalize(plan: dict[str, Any], line_count: int) -> tuple[list[
     if expected != line_count + 1:
         raise MtuCoverageError(f"gap: lines {expected}-{line_count} uncovered")
 
-    return units, skipped
+    return units, []
 
 
 def build_mtus(
@@ -83,6 +85,8 @@ def build_mtus(
     source_file: str,
     order_offset: int = 0,
 ) -> list[MTU]:
+    units = _merge_auxiliary_units(units)
+    _validate_final_units(units)
     mtus: list[MTU] = []
     for offset, unit in enumerate(units):
         start, end = unit["start_line"], unit["end_line"]
@@ -93,13 +97,65 @@ def build_mtus(
                 source_file=source_file,
                 line_range=(start, end),
                 title=unit["title"],
-                keywords=unit["keywords"],
+                defines=unit.get("defines", []),
+                keywords=unit.get("defines", unit.get("keywords", [])),
                 summary=unit["summary"],
                 unit_kind=unit["unit_kind"],
                 source_order_index=order_offset + offset,
             )
         )
     return mtus
+
+
+def _validate_final_units(units: list[dict]) -> None:
+    for index, unit in enumerate(units, start=1):
+        if unit["unit_kind"] != "concept":
+            raise MtuCoverageError(f"final unit {index} must be concept, got {unit['unit_kind']}")
+        if not unit.get("defines"):
+            raise MtuCoverageError(f"final unit {index} concept must contain at least one define")
+        line_count = int(unit["end_line"]) - int(unit["start_line"]) + 1
+        if line_count < _MIN_FINAL_MTU_LINES:
+            raise MtuCoverageError(
+                f"final unit {index} must cover at least {_MIN_FINAL_MTU_LINES} lines; got {line_count}"
+            )
+
+
+def _merge_auxiliary_units(units: list[dict]) -> list[dict]:
+    """Drop/merge non-concept MTUs that should not become planner nodes."""
+    merged = [dict(unit) for unit in sorted(units, key=lambda item: (item["start_line"], item["end_line"]))]
+    removed: set[int] = set()
+
+    for index, unit in enumerate(merged):
+        if unit["unit_kind"] == "application":
+            target_index = _find_concept_index(merged, index, step=-1, removed=removed)
+            if target_index is not None:
+                _absorb_unit(merged[target_index], unit)
+            removed.add(index)
+        elif unit["unit_kind"] in {"intro", "summary", "excercise", "review"}:
+            removed.add(index)
+
+    result = [unit for index, unit in enumerate(merged) if index not in removed]
+    result.sort(key=lambda item: (item["start_line"], item["end_line"]))
+    return result
+
+
+def _find_concept_index(
+    units: list[dict], start_index: int, *, step: int, removed: set[int]
+) -> int | None:
+    index = start_index + step
+    while 0 <= index < len(units):
+        if index not in removed and units[index]["unit_kind"] == "concept":
+            return index
+        index += step
+    return None
+
+
+def _absorb_unit(target: dict, source: dict) -> None:
+    target["start_line"] = min(target["start_line"], source["start_line"])
+    target["end_line"] = max(target["end_line"], source["end_line"])
+    target["defines"] = normalize_concepts(list(target.get("defines") or []) + list(source.get("defines") or []))[
+        :_MAX_DEFINES
+    ]
 
 
 def mtu_text(markdown: str, line_range: tuple[int, int]) -> str:
@@ -121,9 +177,11 @@ def _normalize_unit(raw: Any, index: int) -> dict:
         min_width=_TITLE_MIN_WIDTH,
         max_width=_TITLE_MAX_WIDTH,
     )
-    keywords = normalize_concepts(raw.get("keywords") or [])
-    if len(keywords) > _MAX_KEYWORDS:
-        raise MtuCoverageError(f"unit {index} keywords must contain no more than {_MAX_KEYWORDS} items")
+    if "keywords" in raw:
+        raise MtuCoverageError(f"unit {index} keywords is not allowed; use defines")
+    defines = normalize_concepts(raw.get("defines") or [])
+    if len(defines) > _MAX_DEFINES:
+        raise MtuCoverageError(f"unit {index} defines must contain no more than {_MAX_DEFINES} items")
     summary = str(raw.get("summary") or "").strip()
     _validate_display_width(
         summary,
@@ -138,7 +196,7 @@ def _normalize_unit(raw: Any, index: int) -> dict:
         "start_line": start,
         "end_line": end,
         "title": title,
-        "keywords": keywords,
+        "defines": defines,
         "summary": summary,
         "unit_kind": unit_kind,
     }

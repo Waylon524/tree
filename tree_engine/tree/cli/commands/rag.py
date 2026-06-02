@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tree.cli import theme
 from tree.io import paths
 from tree.planner.pipeline import load_dag, load_nodes
 from tree.planner.store import read_envelope_data
@@ -15,9 +16,9 @@ def status_text(root: Path) -> str:
     rag_store = paths.rag_store_path(root)
     return "\n".join(
         [
-            f"rag-store: {'ok' if rag_store.exists() else 'missing'}",
-            f"nodes: {len(load_nodes(root))}",
-            f"edges: {len(load_dag(root).get('edges', []))}",
+            theme.kv("rag-store", "ok" if rag_store.exists() else "missing", value_style="status"),
+            theme.kv("nodes", len(load_nodes(root))),
+            theme.kv("edges", len(load_dag(root).get("edges", []))),
         ]
     )
 
@@ -37,9 +38,13 @@ def nodes_text(root: Path) -> str:
 
 def graph_text(root: Path) -> str:
     dag = load_dag(root)
-    lines = ["Knowledge DAG"]
+    lines = [theme.section("Knowledge DAG")]
     for edge in dag.get("edges", []):
-        lines.append(f"{edge.get('from_node_id')} -> {edge.get('to_node_id')} [{edge.get('relation')}]")
+        relation = theme.status(str(edge.get("relation") or ""))
+        lines.append(
+            f"{theme.active(str(edge.get('from_node_id')))} -> "
+            f"{theme.active(str(edge.get('to_node_id')))} [{relation}]"
+        )
     return "\n".join(lines)
 
 
@@ -54,10 +59,14 @@ def search_text(root: Path, query: str, *, top_k: int = 5) -> str:
 
 def _node_line(node: dict[str, Any]) -> str:
     collections = ",".join(node.get("collections", []) or [])
-    return f"{node.get('node_id')} | {node.get('title')} | {collections}"
+    return (
+        f"{theme.active(str(node.get('node_id')))} | "
+        f"{theme.label(str(node.get('title')))} | "
+        f"{theme.path(collections)}"
+    )
 
 
 def _hit_text(hit: dict[str, Any], index: int) -> str:
     metadata = hit.get("metadata") or {}
     source = metadata.get("path") or metadata.get("doc_id") or metadata.get("filename") or "unknown"
-    return f"{index}. {source}\n{hit.get('text', '')}"
+    return f"{theme.label(str(index) + '.')} {theme.path(source)}\n{hit.get('text', '')}"

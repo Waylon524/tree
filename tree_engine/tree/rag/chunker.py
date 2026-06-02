@@ -4,8 +4,6 @@ Chunks by heading boundaries + semantic blocks, preserving definition/proof/
 example integrity. The old cut-plan machinery is gone: source MTUs are chunked
 via `chunk_mtu` (one MTU is normally one chunk; oversized MTUs are split), while
 finished outputs / drafts use generic `chunk_markdown`.
-
-See docs/REBUILD-DESIGN.md §4 ⑤ / §5.2.
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ from typing import Any
 MAX_TOKENS = {"def": 2000, "proof": 3000, "example": 2400, "narrative": 1500}
 TOKEN_SAFETY_MARGIN = 8
 MAX_TOKENS_PER_CHUNK = 3000
+MAX_SOURCE_MTU_TOKENS = 20_000
 
 
 # Rough token estimate: 1 token ≈ 1.5 Chinese chars or 4 English chars
@@ -165,16 +164,33 @@ def chunk_mtu(mtu: Any, text: str) -> list[dict]:
     .unit_kind, .line_range. Each chunk carries the MTU metadata so retrieval
     can filter/label by unit.
     """
-    chunks = chunk_markdown(mtu.mtu_id, text, source_collection=mtu.collection)
+    prepared = _prepare_markdown_text(text)
+    token_estimate = _estimate_tokens(prepared)
+    if token_estimate <= MAX_SOURCE_MTU_TOKENS:
+        chunks = [
+            _make_chunk(
+                mtu.mtu_id,
+                mtu.collection,
+                mtu.title,
+                _heading_path(prepared, mtu.title) or [mtu.title],
+                mtu.unit_kind,
+                prepared,
+                0,
+                False,
+                token_estimate,
+            )
+        ]
+    else:
+        chunks = chunk_markdown(mtu.mtu_id, prepared, source_collection=mtu.collection)
     if not chunks:
         chunks = [
             _make_chunk(mtu.mtu_id, mtu.collection, mtu.title, [mtu.title],
-                        mtu.unit_kind, text.strip(), 0, False, _estimate_tokens(text))
+                        mtu.unit_kind, prepared, 0, False, token_estimate)
         ]
     extra = {
         "mtu_id": mtu.mtu_id,
         "title": mtu.title,
-        "keywords": list(mtu.keywords),
+        "keywords": list(getattr(mtu, "defines", None) or mtu.keywords),
         "unit_kind": mtu.unit_kind,
         "line_range": list(mtu.line_range),
     }

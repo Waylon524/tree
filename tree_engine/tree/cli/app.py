@@ -1,7 +1,7 @@
 """Typer application assembly (thin).
 
 Commands live in tree/cli/commands/*; the interactive REPL in tree/cli/repl.py;
-dashboard rendering in tree/cli/dashboard/*. See docs/REBUILD-DESIGN.md §2/§8.
+dashboard rendering in tree/cli/dashboard/*.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 from rich import print as rprint
 
+from tree.cli import theme
 from tree.cli.commands import config_cmd
 from tree.cli.commands import inspect as inspect_cmd
 from tree.cli.commands import lifecycle as lifecycle_cmd
@@ -22,6 +23,8 @@ from tree.config import Settings
 from tree.engine.orchestrator import TreeEngine
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
+from tree.planner.pipeline import load_dag
+from tree.planner.svg import write_dag_svg
 
 app = typer.Typer(no_args_is_help=False, add_completion=False, help="T.R.E.E. engine")
 rag_app = typer.Typer(help="RAG inspection commands")
@@ -43,48 +46,75 @@ def main(ctx: typer.Context) -> None:
 def doctor() -> None:
     """Read-only environment health check."""
     root = Path.cwd()
-    rprint("[bold]T.R.E.E. doctor[/bold]")
-    rprint(f"  python           : {sys.version.split()[0]}")
-    rprint(f"  tre on PATH      : {shutil.which('tre') or '[red]not found[/red]'}")
-    rprint(f"  TREE_HOME        : {paths.app_home()}")
-    rprint(f"  global config    : {_exists(paths.global_config_path())}")
-    rprint(f"  workspace        : {root}")
-    rprint(f"  materials/       : {_exists(paths.materials_root(root))}")
-    rprint(f"  .tree/runtime/   : {_exists(paths.runtime_root(root))}")
+    rprint(f"{theme.brand('T.R.E.E.')} {theme.section('doctor')}")
+    rprint(f"  {theme.label('python')}           : {sys.version.split()[0]}")
+    rprint(
+        f"  {theme.label('tre on PATH')}      : "
+        f"{theme.path(shutil.which('tre')) if shutil.which('tre') else theme.status('not found')}"
+    )
+    rprint(f"  {theme.label('TREE_HOME')}        : {theme.path(paths.app_home())}")
+    rprint(f"  {theme.label('global config')}    : {_exists(paths.global_config_path())}")
+    rprint(f"  {theme.label('workspace')}        : {theme.path(root)}")
+    rprint(f"  {theme.label('materials/')}       : {_exists(paths.materials_root(root))}")
+    rprint(f"  {theme.label('.tree/runtime/')}   : {_exists(paths.runtime_root(root))}")
     try:
         import qdrant_client  # noqa: F401
         import llama_cpp  # noqa: F401
 
-        rprint("  rag deps         : [green]installed[/green]")
+        rprint(f"  {theme.label('rag deps')}         : {theme.status('installed')}")
     except Exception:
-        rprint("  rag deps         : [yellow]missing (pip install '.[rag]')[/yellow]")
+        rprint(f"  {theme.label('rag deps')}         : [yellow]missing (pip install '.[rag]')[/yellow]")
 
 
 @app.command()
 def init() -> None:
     """Create materials/ outputs/ .tree/ in the current folder."""
     paths.ensure_workspace_dirs(Path.cwd())
-    rprint("[green]Initialized workspace.[/green]")
+    rprint(f"{theme.success('Initialized')} {theme.label('workspace')}.")
 
 
 @app.command()
 def setup(
+    force: bool = typer.Option(False, "--force", help="Run setup even if config already exists."),
+    workspace: bool = typer.Option(False, "--workspace", help="Write settings only for this workspace."),
     llm_api_key: str = typer.Option("", "--llm-api-key"),
     llm_base_url: str = typer.Option("", "--llm-base-url"),
     llm_model: str = typer.Option("", "--llm-model"),
     paddleocr_api_token: str = typer.Option("", "--paddleocr-api-token"),
     paddleocr_api_url: str = typer.Option("", "--paddleocr-api-url"),
 ) -> None:
-    """Write workspace .tree/config.env."""
-    path = config_cmd.write_workspace_config(
-        Path.cwd(),
-        llm_api_key=llm_api_key,
-        llm_base_url=llm_base_url,
-        llm_model=llm_model,
-        paddleocr_api_token=paddleocr_api_token,
-        paddleocr_api_url=paddleocr_api_url,
+    """Create or update global/workspace configuration."""
+    root = Path.cwd()
+    paths.ensure_workspace_dirs(root)
+    env_path = paths.workspace_config_path(root) if workspace else paths.global_config_path()
+    has_quick_values = any(
+        (llm_api_key, llm_base_url, llm_model, paddleocr_api_token, paddleocr_api_url)
     )
-    rprint(f"[green]Wrote {path}[/green]")
+    if has_quick_values:
+        path = config_cmd.write_quick_config(
+            root,
+            env_path=env_path,
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model=llm_model,
+            paddleocr_api_token=paddleocr_api_token,
+            paddleocr_api_url=paddleocr_api_url,
+        )
+        rprint(f"{theme.success('Wrote')} {theme.path(path)}")
+        return
+
+    if env_path.exists() and not force:
+        rprint(
+            f"{theme.path(env_path)} {theme.status('ok')} already exists. "
+            f"Use {theme.label('--force')} to run the wizard again."
+        )
+        return
+
+    config_cmd.run_setup_wizard(
+        Path.cwd(),
+        env_path=env_path,
+        scope="workspace" if workspace else "global",
+    )
 
 
 @app.command()
@@ -108,7 +138,7 @@ def status() -> None:
 @app.command()
 def progress() -> None:
     """Print progress.json."""
-    rprint(inspect_cmd.progress_text(Path.cwd()))
+    typer.echo(inspect_cmd.progress_text(Path.cwd()))
 
 
 @app.command()
@@ -180,24 +210,36 @@ def ingest(
     """Manually ingest a file/dir (implemented in step 8)."""
     settings = Settings.from_env()
     copied = _copy_input_to_materials(Path(input), settings.project_root, collection=collection)
-    rprint(f"[green]Copied {copied} material file(s).[/green]")
+    rprint(f"{theme.success('Copied')} {theme.label(str(copied))} material file(s).")
     summary = asyncio.run(TreeEngine(settings).prepare_sources())
     rprint(
-        "[green]Ingest complete.[/green] "
-        f"MTUs={summary.get('mtu_count', 0)}, nodes={summary.get('node_count', 0)}, "
-        f"branches={summary.get('branch_count', 0)}"
+        f"{theme.success('Ingest complete.')} "
+        f"{theme.label('MTUs=')}{summary.get('mtu_count', 0)}, "
+        f"{theme.label('nodes=')}{summary.get('node_count', 0)}"
     )
 
 
 @planner_app.command("rebuild")
 def planner_rebuild() -> None:
-    """Rebuild MTUs/nodes/DAG/branches without running BranchRuns (step 6)."""
+    """Rebuild MTUs/nodes/DAG without running NodeRuns."""
     summary = asyncio.run(TreeEngine(Settings.from_env()).prepare_sources())
+    svg = summary.get("dag_svg_path", "")
     rprint(
-        "[green]Planner rebuilt.[/green] "
-        f"MTUs={summary.get('mtu_count', 0)}, nodes={summary.get('node_count', 0)}, "
-        f"branches={summary.get('branch_count', 0)}"
+        f"{theme.success('Planner rebuilt.')} "
+        f"{theme.label('MTUs=')}{summary.get('mtu_count', 0)}, "
+        f"{theme.label('nodes=')}{summary.get('node_count', 0)}"
+        + (f", {theme.label('svg=')}{theme.path(svg)}" if svg else "")
     )
+
+
+@planner_app.command("dag-svg")
+def planner_dag_svg() -> None:
+    """Generate knowledge-dag.svg from the existing planner DAG."""
+    root = Path.cwd()
+    if not paths.knowledge_dag_path(root).exists():
+        raise typer.BadParameter("knowledge-dag.json not found; run `tre planner rebuild` first.")
+    svg_path = write_dag_svg(root, load_dag(root))
+    rprint(f"{theme.success('Wrote')} {theme.path(svg_path)}")
 
 
 @rag_app.command("status")
@@ -231,7 +273,7 @@ def rag_search(query: str, top_k: int = typer.Option(5, "--top-k")) -> None:
 
 
 def _exists(path: Path) -> str:
-    return "[green]ok[/green]" if path.exists() else "[yellow]missing[/yellow]"
+    return theme.status("ok") if path.exists() else theme.status("missing")
 
 
 def _copy_input_to_materials(input_path: Path, root: Path, *, collection: str | None) -> int:

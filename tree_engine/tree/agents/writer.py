@@ -1,4 +1,4 @@
-"""WriterAgent: CREATE or OPTIMIZE a branch-span draft. See REBUILD-DESIGN §6."""
+"""WriterAgent: CREATE or OPTIMIZE a node draft."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ class WriterAgent(Agent):
         previous_bottleneck: str | None = None,
         writer_instructions: str | None = None,
         retrieved: list[dict] | None = None,
+        node_context: str | None = None,
         branch_context: str | None = None,
     ) -> WriterResult:
         mode = "OPTIMIZE" if draft_text else "CREATE"
@@ -42,7 +43,7 @@ class WriterAgent(Agent):
 
         parts = [
             f"## Task: {mode} mode\n",
-            f"Declared branch span title: {span_title}\n",
+            f"Declared node title: {span_title}\n",
             f"File sequence: {file_seq}\n",
             f"Bottleneck Report:\n{bottleneck_report}\n",
         ]
@@ -54,10 +55,11 @@ class WriterAgent(Agent):
         )
         if writer_instructions:
             parts.append(f"[Writer_Instructions]:\n{writer_instructions}\n")
-        if branch_context:
+        context = node_context or branch_context
+        if context:
             parts.append(
-                "Planner-bound ActiveBranch context. Use it only to enforce the declared branch-span "
-                f"delta and prerequisite boundaries:\n{branch_context}\n"
+                "Planner-bound ActiveNode context. Use it only to enforce the declared single-node "
+                f"delta and prerequisite boundaries:\n{context}\n"
             )
         if retrieved:
             parts.append(_format_retrieved(retrieved))
@@ -93,7 +95,7 @@ def sanitize_writer_context(text: str) -> str:
 def _format_retrieved(retrieved: list[dict]) -> str:
     parts = [
         "Retrieved RAG context:\n"
-        "- content_kind=source hits may teach the current declared branch span.\n"
+        "- content_kind=source hits may teach the current declared node.\n"
         "- content_kind=finished hits are already taught; cite briefly as prerequisites, do not duplicate.\n"
         "- content_kind=ledger hits summarize the delta that must remain after removing duplicates.\n"
     ]

@@ -6,6 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
+from tree.cli import theme
 from tree.cli.dashboard.model import build_watch_model
 from tree.cli.dashboard.panels import render_watch
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
@@ -15,15 +16,15 @@ from tree.observability.progress import load_progress
 
 def status_text(root: Path) -> str:
     model = build_watch_model(root)
+    active_nodes = ", ".join(theme.active(node) for node in model["active_node_runs"]) or "-"
     return "\n".join(
         [
-            f"phase: {model['phase']}",
-            f"message: {model['message']}",
-            f"materials: {model['material_count']}",
-            f"nodes: {model['node_count']}",
-            f"edges: {model['edge_count']}",
-            f"branches: {model['branch_count']}",
-            "active: " + (", ".join(model["active_branch_runs"]) or "-"),
+            theme.kv("phase", model["phase"], value_style="status"),
+            theme.kv("message", model["message"]),
+            theme.kv("materials", model["material_count"]),
+            theme.kv("nodes", model["node_count"]),
+            theme.kv("edges", model["edge_count"]),
+            f"{theme.label('active nodes:')} {active_nodes}",
         ]
     )
 
