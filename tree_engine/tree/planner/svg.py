@@ -87,10 +87,14 @@ def render_dag_svg(dag: dict[str, Any], *, title: str = "Knowledge DAG") -> str:
 
 
 def write_dag_svg(root: Path, dag: dict[str, Any], *, title: str = "Knowledge DAG") -> Path:
-    """Write the planner DAG SVG artifact and return its path."""
+    """Write the planner DAG SVG artifact and a user-facing outputs copy."""
+    svg = render_dag_svg(dag, title=title)
     path = paths.knowledge_dag_svg_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_dag_svg(dag, title=title), encoding="utf-8")
+    path.write_text(svg, encoding="utf-8")
+    output_path = paths.outputs_dag_svg_path(root)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(svg, encoding="utf-8")
     return path
 
 

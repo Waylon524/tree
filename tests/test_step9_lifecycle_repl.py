@@ -10,6 +10,7 @@ from tree.cli.app import app
 from tree.cli import repl
 from tree.cli.repl import handle_slash_command
 from tree.io import paths
+from tree.planner.store import envelope, write_json_atomic
 
 
 def test_no_args_enters_repl_after_embedding_ready(monkeypatch):
@@ -38,6 +39,7 @@ def test_repl_routes_mainstream_commands(tmp_path):
         "/run",
         "/watch",
         "/status",
+        "/dag",
         "/stop",
         "/quit",
         "/help",
@@ -128,6 +130,33 @@ def test_repl_exit_warns_without_exiting(tmp_path):
     assert hasattr(repl, "should_exit_repl")
     assert repl.should_exit_repl("/exit") is False
     assert repl.should_exit_repl("/quit") is True
+
+
+def test_repl_dag_writes_outputs_svg_from_existing_dag(tmp_path):
+    write_json_atomic(
+        paths.knowledge_dag_path(tmp_path),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [{"node_id": "n1", "title": "根知识点", "source_order_index": 0}],
+                "edges": [],
+                "roots": ["n1"],
+            },
+        ),
+    )
+
+    result = handle_slash_command("/dag", root=tmp_path)
+
+    output_svg = paths.outputs_root(tmp_path) / "knowledge-dag.svg"
+    assert str(output_svg) in result
+    assert "001. 根知识点" in output_svg.read_text(encoding="utf-8")
+
+
+def test_repl_dag_requires_existing_dag(tmp_path):
+    result = handle_slash_command("/dag", root=tmp_path)
+
+    assert "knowledge-dag.json not found" in result
+    assert "/run" in result
 
 
 def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):

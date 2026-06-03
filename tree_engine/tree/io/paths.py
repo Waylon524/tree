@@ -48,6 +48,10 @@ def outputs_root(root: Path) -> Path:
     return root / "outputs"
 
 
+def outputs_dag_svg_path(root: Path) -> Path:
+    return outputs_root(root) / "knowledge-dag.svg"
+
+
 # --- runtime artifacts -------------------------------------------------------
 
 def source_markdown_root(root: Path) -> Path:

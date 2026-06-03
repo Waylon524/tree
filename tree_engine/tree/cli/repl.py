@@ -13,6 +13,8 @@ from tree.cli.commands import inspect
 from tree.cli.dashboard.live import run_watch as run_watch_panel
 from tree.cli.commands.lifecycle import quit_tree, start_engine, stop_engine
 from tree.io import paths
+from tree.planner.pipeline import load_dag
+from tree.planner.svg import write_dag_svg
 
 
 _HELP_ROWS = (
@@ -22,6 +24,7 @@ _HELP_ROWS = (
     ("/run", "start the pipeline in the background"),
     ("/watch", "watch the dashboard until ESC"),
     ("/status", "show workspace status"),
+    ("/dag", "write the DAG SVG to outputs"),
     ("/stop", "stop the background engine"),
     ("/quit", "stop TREE services and leave the shell"),
     ("/help", "show this help"),
@@ -79,6 +82,8 @@ def handle_slash_command(command: str, *, root: Path | None = None) -> str:
         return f"{theme.success('Wrote')} {theme.path(path)}"
     if command == "/status":
         return inspect.status_text(root)
+    if command == "/dag":
+        return _dag_text(root)
     if command == "/progress":
         return "Use /status or /watch inside TREE>; raw JSON is available with `tre progress`."
     if command == "/watch":
@@ -94,3 +99,10 @@ def handle_slash_command(command: str, *, root: Path | None = None) -> str:
     if command == "/exit":
         return "Use /quit to stop TREE services and leave the shell."
     return f"Unknown command: {command}"
+
+
+def _dag_text(root: Path) -> str:
+    if not paths.knowledge_dag_path(root).exists():
+        return "knowledge-dag.json not found; run /run first, then try /dag again."
+    write_dag_svg(root, load_dag(root))
+    return f"{theme.success('Wrote')} {theme.path(paths.outputs_dag_svg_path(root))}"

@@ -120,12 +120,14 @@ async def test_rebuild_planner_writes_all_artifacts(tmp_path):
         paths.knowledge_nodes_path(tmp_path),
         paths.knowledge_dag_path(tmp_path),
         paths.knowledge_dag_svg_path(tmp_path),
+        paths.outputs_root(tmp_path) / "knowledge-dag.svg",
     ):
         assert p.exists(), p
 
     assert len(load_nodes(tmp_path)) == 2
     assert len(load_dag(tmp_path)["edges"]) == 1
     assert "001." in paths.knowledge_dag_svg_path(tmp_path).read_text(encoding="utf-8")
+    assert "001." in (paths.outputs_root(tmp_path) / "knowledge-dag.svg").read_text(encoding="utf-8")
     assert not (paths.planner_root(tmp_path) / "knowledge-branches.json").exists()
     stages = progress.load()["stages"]
     assert stages["ocr"]["done"] == 0

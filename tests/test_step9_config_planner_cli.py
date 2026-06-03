@@ -57,6 +57,9 @@ def test_planner_dag_svg_command_writes_from_existing_dag(tmp_path, monkeypatch)
     assert result.exit_code == 0
     assert "knowledge-dag.svg" in result.stdout
     assert "001. 根知识点" in paths.knowledge_dag_svg_path(tmp_path).read_text(encoding="utf-8")
+    assert "001. 根知识点" in (paths.outputs_root(tmp_path) / "knowledge-dag.svg").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_planner_dag_svg_command_requires_existing_dag(tmp_path, monkeypatch):
