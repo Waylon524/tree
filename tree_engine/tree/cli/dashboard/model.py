@@ -23,6 +23,7 @@ def build_watch_model(root: Path) -> dict[str, Any]:
     covered = ledger_covered_node_ids(root)
     active = [be.node_id for be in state.node_executions if be.status == "in_progress"]
     completed = [be.node_id for be in state.node_executions if be.status == "completed"]
+    labels = _node_display_labels(nodes)
 
     return {
         "phase": progress.get("phase", "idle"),
@@ -39,6 +40,7 @@ def build_watch_model(root: Path) -> dict[str, Any]:
         "active_node_runs": active,
         "completed_node_runs": completed,
         "running_node_ids": sorted({run.node_id for run in state.node_runs if run.status == "running"}),
+        "node_display_labels": labels,
         "errors": _collect_errors(root, progress),
     }
 
@@ -54,6 +56,18 @@ def _material_paths(root: Path) -> list[Path]:
         and not path.name.startswith(".")
         and path.suffix.lower() in MATERIAL_EXTENSIONS
     ]
+
+
+def _node_display_labels(nodes: list[dict[str, Any]]) -> dict[str, str]:
+    ordered = sorted(nodes, key=lambda n: (n.get("source_order_index", 0), n.get("node_id", "")))
+    labels: dict[str, str] = {}
+    for index, node in enumerate(ordered, start=1):
+        node_id = str(node.get("node_id") or "")
+        if not node_id:
+            continue
+        title = str(node.get("title") or node_id)
+        labels[node_id] = f"{index:03d}. {title}"
+    return labels
 
 
 def _collect_errors(root: Path, progress: dict[str, Any]) -> list[str]:

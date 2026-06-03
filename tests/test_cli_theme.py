@@ -25,5 +25,5 @@ def test_progress_bar_uses_green_and_brown_segments() -> None:
 
     assert theme.TREE_GREEN in rendered
     assert theme.TREE_BROWN_DIM in rendered
-    assert "##" in rendered
-    assert "--" in rendered
+    assert "██" in rendered
+    assert "░░" in rendered

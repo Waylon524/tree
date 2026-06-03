@@ -5,13 +5,26 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from tree.cli.dashboard.model import build_watch_model
 from tree.cli import theme
 
 _STAGE_ORDER = ("ocr", "clean", "cut", "embed", "cluster", "link", "noderun")
-_BAR_WIDTH = 18
+_BAR_WIDTH = 16
+_STATUS_BADGES = {
+    "complete": "COMPLETE",
+    "completed": "COMPLETE",
+    "running": "RUNNING",
+    "in_progress": "RUNNING",
+    "active": "RUNNING",
+    "failed": "FAILED",
+    "blocked": "FAILED",
+    "error": "FAILED",
+    "pending": "WAIT",
+    "idle": "WAIT",
+}
 
 
 def render_watch(root: Path) -> str:
@@ -22,19 +35,35 @@ def render_watch(root: Path) -> str:
 
 def watch_renderable(root: Path) -> Panel:
     model = build_watch_model(root)
+    active_count = len(
+        set((model.get("active_node_runs") or []) + (model.get("running_node_ids") or []))
+    )
     lines = [
-        theme.kv("phase", model["phase"], value_style="status"),
-        theme.kv("message", model["message"]),
-        theme.kv("materials", model["material_count"]),
-        theme.kv("nodes", model["node_count"]),
-        theme.kv("edges", model["edge_count"]),
-        theme.kv("exit", "Press ESC"),
+        theme.section("Overview"),
+        "  "
+        + "  ".join(
+            [
+                f"{theme.label('materials')} {model['material_count']}",
+                f"{theme.label('nodes')} {model['node_count']}",
+                f"{theme.label('active')} {active_count}",
+                f"{theme.label('exit')} {theme.success('Press ESC')}",
+            ]
+        ),
         "",
         theme.section("Progress"),
+        f"  {theme.label('Stage'.ljust(8))} {theme.label('Progress'.ljust(_BAR_WIDTH))} "
+        f"{theme.label('%'.rjust(4))} {theme.label('Count'.rjust(7))} "
+        f"{theme.label('Status'.ljust(8))} {theme.label('Current')}",
     ]
     stages = model.get("stages") or {}
+    node_labels = model.get("node_display_labels") or {}
     for key in _STAGE_ORDER:
-        lines.append(_render_stage(stages.get(key) or {"label": key.title()}))
+        lines.append(
+            _render_stage(
+                stages.get(key) or {"label": key.title()},
+                node_labels=node_labels if key == "noderun" else {},
+            )
+        )
     errors = model.get("errors") or []
     lines.extend(["", theme.section("Errors")])
     if errors:
@@ -49,13 +78,54 @@ def watch_renderable(root: Path) -> Panel:
     )
 
 
-def _render_stage(stage: dict) -> str:
+def _render_stage(stage: dict, *, node_labels: dict[str, str]) -> str:
     label = theme.label(str(stage.get("label") or "").ljust(8))
     done = int(stage.get("done") or 0)
     total = int(stage.get("total") or 0)
-    status = theme.status(str(stage.get("status") or "pending")).ljust(8)
+    status = str(stage.get("status") or "pending")
+    badge = _watch_state(_status_badge(status)).ljust(8)
     message = str(stage.get("message") or "")
-    active = ", ".join(theme.active(str(item)) for item in (stage.get("active") or []) if str(item))
+    active = ", ".join(
+        theme.active(node_labels.get(str(item), str(item)))
+        for item in (stage.get("active") or [])
+        if str(item)
+    )
     count = f"{done}/{total}" if total else "0/0"
+    percent = _percent(done, total)
     detail = f"当前: {active}" if active else message
-    return f"{label} {theme.progress_bar(done, total, width=_BAR_WIDTH)} {count:>7} {status} {detail}".rstrip()
+    detail = _truncate(detail, 34)
+    return (
+        f"  {label} {theme.progress_bar(done, total, width=_BAR_WIDTH)} "
+        f"{percent:>4} {count:>7} {badge} {detail}"
+    ).rstrip()
+
+
+def _status_badge(status: str) -> str:
+    return _STATUS_BADGES.get(status.strip().lower(), status.strip().upper() or "WAIT")
+
+
+def _watch_state(text: str) -> str:
+    normalized = text.strip().lower()
+    if normalized in {"failed", "blocked", "error"}:
+        color = "red"
+    elif normalized in {"complete", "completed"}:
+        color = theme.TREE_GREEN
+    elif normalized in {"running", "in_progress", "active"}:
+        color = theme.TREE_BROWN
+    elif normalized in {"wait", "pending", "idle"}:
+        color = theme.TREE_BROWN_DIM
+    else:
+        color = theme.TREE_BROWN
+    return f"[{color}]{escape(text)}[/]"
+
+
+def _percent(done: int, total: int) -> str:
+    if total <= 0:
+        return "0%"
+    return f"{round(100 * min(done, total) / total)}%"
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"

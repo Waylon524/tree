@@ -84,7 +84,7 @@ async def build_dag(
         message="Selecting required defines",
     )
     prerequisites = await _build_prerequisites_with_repair(
-        agent, nodes, timeout=timeout, repair=repair
+        agent, nodes, timeout=timeout, repair=repair, progress=progress
     )
     nodes, edges, diagnostics = await _build_edges_with_cycle_repair(
         agent, nodes, prerequisites, diagnostics=diagnostics, timeout=timeout, repair=repair
@@ -643,27 +643,115 @@ def _is_specific_derivative_define(_shorter: str, longer: str) -> bool:
 
 
 async def _build_prerequisites_with_repair(
-    agent: Any, nodes: list[dict[str, Any]], *, timeout: float, repair: int
+    agent: Any,
+    nodes: list[dict[str, Any]],
+    *,
+    timeout: float,
+    repair: int,
+    progress: Any | None = None,
 ) -> list[dict[str, Any]]:
     define_dictionary = _define_dictionary(nodes)
+    prereqs: list[dict[str, Any]] = []
+    node_meta = [_node_prereq_meta(n) for n in nodes]
+    for node in nodes:
+        _set_progress_stage(
+            progress,
+            "link",
+            status="running",
+            active=str(node.get("title") or node["node_id"]),
+            message=f"Selecting required defines for {node.get('title') or node['node_id']}",
+        )
+        prereq = await _build_one_prerequisite_with_repair(
+            agent,
+            node,
+            node_meta,
+            nodes,
+            define_dictionary,
+            timeout=timeout,
+            repair=repair,
+        )
+        prereqs.append(prereq)
+        _advance_progress_stage(
+            progress,
+            "link",
+            message=f"Selected required defines for {node.get('title') or node['node_id']}",
+        )
+    _validate_prerequisites(prereqs, nodes, define_dictionary)
+    return prereqs
+
+
+async def _build_one_prerequisite_with_repair(
+    agent: Any,
+    node: dict[str, Any],
+    node_meta: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    define_dictionary: dict[str, Any],
+    *,
+    timeout: float,
+    repair: int,
+) -> dict[str, Any]:
     feedback = ""
     last_error: Exception | None = None
+    target = _node_prereq_meta(node)
     for attempt in range(repair + 1):
         try:
             payload = {
-                "nodes": [_node_prereq_meta(n) for n in nodes],
+                "nodes": node_meta,
                 "defines": define_dictionary,
-                "instructions": feedback,
+                "target_node": target,
+                "instructions": (
+                    "Return exactly one node_prerequisites item for target_node. "
+                    + feedback
+                ).strip(),
             }
             raw = await _agent_build_prerequisites(agent, payload, timeout_sec=timeout)
-            prereqs = list(raw.get("node_prerequisites") or [])
-            _validate_prerequisites(prereqs, nodes, define_dictionary)
-            return prereqs
+            items = list(raw.get("node_prerequisites") or [])
+            prereq = (
+                _empty_prerequisite(node)
+                if not items
+                else _target_prerequisite(items, node, nodes)
+            )
+            _validate_prerequisites([prereq], nodes, define_dictionary)
+            return prereq
         except (ValueError, KeyError) as exc:
             last_error = exc
-            logger.warning("Dagger prerequisites invalid (attempt %d): %s", attempt + 1, exc)
-            feedback = f"Previous prerequisite output was invalid ({exc}); repair only invalid blocks."
-    raise ValueError(f"Dagger prerequisites remain invalid after {repair + 1} attempt(s): {last_error}")
+            logger.warning(
+                "Dagger prerequisite invalid for %s (attempt %d): %s",
+                node["node_id"],
+                attempt + 1,
+                exc,
+            )
+            feedback = (
+                f"Previous prerequisite output for {node['node_id']} was invalid ({exc}); "
+                "repair only this target node."
+            )
+    raise ValueError(
+        f"Dagger prerequisites remain invalid for {node['node_id']} after "
+        f"{repair + 1} attempt(s): {last_error}"
+    )
+
+
+def _empty_prerequisite(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "node_id": node["node_id"],
+        "required_defines": [],
+        "external_prerequisites": [],
+        "reason": "No prerequisite defines selected.",
+    }
+
+
+def _target_prerequisite(
+    prereqs: list[dict[str, Any]],
+    node: dict[str, Any],
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    title_to_id = {normalize_text_key(n["title"]): n["node_id"] for n in nodes}
+    for item in prereqs:
+        if _prereq_node_id(item, title_to_id) == node["node_id"]:
+            clone = dict(item)
+            clone["node_id"] = node["node_id"]
+            return clone
+    raise ValueError(f"missing prerequisite block for {node['node_id']}")
 
 
 async def _agent_build_prerequisites(agent: Any, payload: dict[str, Any], *, timeout_sec: float) -> dict:

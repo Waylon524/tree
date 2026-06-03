@@ -227,21 +227,21 @@ tre
 
 ```text
 TREE Watch
-phase: running
-message: ...
-materials: 6
-nodes: 74
-edges: 81
-exit: Press ESC
+Overview
+  materials 6  nodes 74  active 4  exit Press ESC
 
 Progress
-OCR      [##################]     6/6 complete
-Clean    [##################]     6/6 complete
-Cut      [##################]     6/6 complete
-Embed    [########----------]   34/74 running   当前: ...
-Cluster  [------------------]     0/0 pending
-Link     [------------------]     0/0 pending
-NodeRun  [##----------------]    4/74 running   当前: kn_xxx, kn_yyy
+  Stage    Progress            %   Count Status   Current
+  OCR      ████████████████ 100%     6/6 COMPLETE
+  Clean    ████████████████ 100%     6/6 COMPLETE
+  Cut      ████████████████ 100%     6/6 COMPLETE
+  Embed    ███████░░░░░░░░░  46%   34/74 RUNNING 当前: ...
+  Cluster  ░░░░░░░░░░░░░░░░   0%     0/0 WAIT
+  Link     ░░░░░░░░░░░░░░░░   0%     0/0 WAIT
+  NodeRun  █░░░░░░░░░░░░░░░   5%    4/74 RUNNING 当前: 001. A, 002. B
+
+Errors
+- none
 ```
 
 七个阶段含义：

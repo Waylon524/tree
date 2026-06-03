@@ -11,7 +11,7 @@ from tree.cli import theme
 from tree.cli.dashboard import live
 from tree.cli.dashboard.dag_view import render_dag
 from tree.cli.dashboard.model import build_watch_model
-from tree.cli.dashboard.panels import render_watch
+from tree.cli.dashboard.panels import render_watch, watch_renderable
 from tree.io import paths
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
@@ -47,8 +47,8 @@ def _seed_workspace(root):
         envelope(
             schema="tree.knowledge-nodes",
             data={"knowledge_nodes": [
-                {"node_id": "n1", "title": "A", "collections": ["课件"]},
-                {"node_id": "n2", "title": "B", "collections": ["课件"]},
+                {"node_id": "n1", "title": "A", "collections": ["课件"], "source_order_index": 0},
+                {"node_id": "n2", "title": "B", "collections": ["课件"], "source_order_index": 1},
             ]},
         ),
     )
@@ -58,8 +58,8 @@ def _seed_workspace(root):
             schema="tree.knowledge-dag",
             data={
                 "nodes": [
-                    {"node_id": "n1", "title": "A", "collections": ["课件"]},
-                    {"node_id": "n2", "title": "B", "collections": ["课件"]},
+                    {"node_id": "n1", "title": "A", "collections": ["课件"], "source_order_index": 0},
+                    {"node_id": "n2", "title": "B", "collections": ["课件"], "source_order_index": 1},
                 ],
                 "edges": [{"from_node_id": "n1", "to_node_id": "n2", "relation": "prerequisite"}],
                 "roots": ["n1"],
@@ -84,6 +84,7 @@ def test_build_watch_model_summarizes_runtime(tmp_path):
     assert model["node_count"] == 2
     assert model["edge_count"] == 1
     assert model["active_node_runs"] == ["n1"]
+    assert model["node_display_labels"]["n1"] == "001. A"
 
 
 def test_render_dag_marks_active_node(tmp_path):
@@ -148,18 +149,46 @@ def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
     progress["phase"] = "blocked"
     progress["message"] = "TREE_BLOCKED - no ready node runs"
+    progress["stages"]["clean"]["done"] = 2
+    progress["stages"]["clean"]["status"] = "complete"
+    progress["stages"]["cut"]["done"] = 2
+    progress["stages"]["cut"]["status"] = "complete"
     progress["stages"]["link"]["status"] = "failed"
     progress["stages"]["link"]["message"] = "invalid prerequisite edge"
     write_json_atomic(paths.progress_path(tmp_path), progress)
 
     output = render_watch(tmp_path)
+    markup = str(watch_renderable(tmp_path).renderable)
 
     assert "╭" in output
     assert "╰" in output
+    assert "Overview" in output
+    assert "materials 1" in output
+    assert "nodes 2" in output
+    assert "edges" not in output
+    assert "phase blocked" not in output
+    assert "message TREE_BLOCKED" not in output
+    assert "active 1" in output
+    assert "Stage" in output
+    assert "█" in output
+    assert "░" in output
+    assert "#" not in output
+    assert "50%" in output
+    assert "RUNNING" in output
+    assert "COMPLETE" in output
+    assert "DONE" not in output
+    assert "WAIT" in output
+    assert "FAILED" in output
+    assert f"[{theme.TREE_BROWN}]RUNNING" in markup
+    assert f"[{theme.TREE_GREEN}]COMPLETE" in markup
+    assert "Press ESC" in output
     assert "Errors" in output
     assert "TREE_BLOCKED - no ready node runs" in output
     assert "Link: failed - invalid prerequisite edge" in output
     assert "RuntimeError: planner failed while linking nodes" in output
+    assert "当前: ch1.pdf" in output
+    assert "当前: 001. A" in output
+    assert "当前: n1" not in output
 
 
 def test_watch_command_delegates_to_live_dashboard(tmp_path, monkeypatch):

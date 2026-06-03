@@ -85,15 +85,20 @@ class TreeEngine:
         self.progress.reset()
         await self.prepare_sources()
         self._refresh_noderun_progress(status="running")
+        running: dict[str, asyncio.Task[str]] = {}
 
         while True:
             state = self.state_mgr.load()
+            state = self._activate_ready_node_runs(state)
             in_progress = self.state_mgr.find_in_progress_all(state)
-            if not in_progress:
-                state = self._activate_ready_node_runs(state)
-                in_progress = self.state_mgr.find_in_progress_all(state)
 
-            if not in_progress:
+            for item in in_progress:
+                if len(running) >= self.settings.max_active_node_runs:
+                    break
+                if item.node_id not in running:
+                    running[item.node_id] = asyncio.create_task(self.node_runner.run_one(item.node_id))
+
+            if not running:
                 if _all_nodes_covered(self.root):
                     self._refresh_noderun_progress(status="complete", message="All nodes complete")
                     self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
@@ -104,16 +109,22 @@ class TreeEngine:
 
             self._refresh_noderun_progress(
                 status="running",
-                active=[item.node_id for item in in_progress[: self.settings.max_active_node_runs]],
+                active=list(running),
                 message="Running active nodes",
             )
-            await asyncio.gather(
-                *[
-                    self.node_runner.run_one(item.node_id)
-                    for item in in_progress[: self.settings.max_active_node_runs]
-                ]
+            completed, _pending = await asyncio.wait(
+                running.values(),
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            self._refresh_noderun_progress(status="running")
+            for task in completed:
+                node_id = next(key for key, value in running.items() if value is task)
+                await task
+                running.pop(node_id, None)
+                self._refresh_noderun_progress(
+                    status="running",
+                    active=list(running),
+                    message="Running active nodes",
+                )
 
     async def prepare_sources(self) -> dict[str, Any]:
         return await prepare_sources(self)

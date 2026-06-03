@@ -52,6 +52,44 @@ class _EchoDagger:
         return {"node_prerequisites": prerequisites}
 
 
+class _RecordingProgress:
+    def __init__(self, inner):
+        self.inner = inner
+        self.link_done_history = []
+
+    def reset(self):
+        return self.inner.reset()
+
+    def load(self):
+        return self.inner.load()
+
+    def _record_link_done(self):
+        done = self.inner.load()["stages"]["link"]["done"]
+        if not self.link_done_history or self.link_done_history[-1] != done:
+            self.link_done_history.append(done)
+
+    def set_stage(self, stage, **kwargs):
+        result = self.inner.set_stage(stage, **kwargs)
+        if stage == "link":
+            self._record_link_done()
+        return result
+
+    def add_stage_total(self, stage, amount, **kwargs):
+        return self.inner.add_stage_total(stage, amount, **kwargs)
+
+    def advance_stage(self, stage, **kwargs):
+        result = self.inner.advance_stage(stage, **kwargs)
+        if stage == "link":
+            self._record_link_done()
+        return result
+
+    def complete_stage(self, stage, message=None):
+        result = self.inner.complete_stage(stage, message)
+        if stage == "link":
+            self._record_link_done()
+        return result
+
+
 def _make_producer(counter):
     async def producer(root, material):
         counter["calls"] += 1
@@ -101,7 +139,7 @@ async def test_rebuild_planner_writes_all_artifacts(tmp_path):
     _seed_material(tmp_path)
     counter = {"calls": 0}
     agents = SimpleNamespace(dagger=_EchoDagger())
-    progress = ProgressTracker(tmp_path)
+    progress = _RecordingProgress(ProgressTracker(tmp_path))
     progress.reset()
     summary = await rebuild_planner(
         tmp_path, settings=_SETTINGS, agents=agents, mtu_producer=_make_producer(counter), progress=progress
@@ -137,6 +175,7 @@ async def test_rebuild_planner_writes_all_artifacts(tmp_path):
     assert stages["cluster"]["status"] == "complete"
     assert stages["link"]["done"] == 2
     assert stages["link"]["status"] == "complete"
+    assert progress.link_done_history == [0, 1, 2]
 
 
 async def test_rebuild_planner_reuses_cache_when_unchanged(tmp_path):

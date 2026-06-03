@@ -54,10 +54,8 @@ def progress_bar(done: int, total: int, *, width: int = 18) -> str:
     else:
         filled = round(width * min(done, total) / total)
     return (
-        "["
-        + _markup("#" * filled, TREE_GREEN)
-        + _markup("-" * (width - filled), TREE_BROWN_DIM)
-        + "]"
+        _markup("█" * filled, TREE_GREEN)
+        + _markup("░" * (width - filled), TREE_BROWN_DIM)
     )
 
 
