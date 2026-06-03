@@ -79,10 +79,10 @@ pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 Windows PowerShell：
 
 ```powershell
-py -3.12 --version
+py --version
 git --version
-py -3.12 -m pip install --user pipx
-py -3.12 -m pipx ensurepath
+py -m pip install --user pipx
+py -m pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
