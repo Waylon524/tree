@@ -24,11 +24,12 @@ def test_run_command_invokes_foreground_engine(monkeypatch):
 
     monkeypatch.setattr("tree.cli.app.Settings", _Settings)
     monkeypatch.setattr("tree.cli.app.TreeEngine", _Engine)
+    monkeypatch.setattr("tree.cli.app.ensure_embedding_ready", lambda: calls.append(("embed", None)))
 
     result = CliRunner().invoke(app, ["run"])
 
     assert result.exit_code == 0
-    assert calls == [("init", "settings"), ("run", None)]
+    assert calls == [("embed", None), ("init", "settings"), ("run", None)]
 
 
 def test_ingest_command_copies_input_into_materials_and_prepares_sources(tmp_path, monkeypatch):
@@ -54,9 +55,10 @@ def test_ingest_command_copies_input_into_materials_and_prepares_sources(tmp_pat
 
     monkeypatch.setattr("tree.cli.app.Settings", _Settings)
     monkeypatch.setattr("tree.cli.app.TreeEngine", _Engine)
+    monkeypatch.setattr("tree.cli.app.ensure_embedding_ready", lambda: calls.append(("embed", None)))
 
     result = CliRunner().invoke(app, ["ingest", "--input", str(source), "--collection", "课件"])
 
     assert result.exit_code == 0
     assert (tmp_path / "materials" / "课件" / "outside.md").read_text(encoding="utf-8") == "hello"
-    assert calls == [("init", tmp_path), ("prepare", None)]
+    assert calls == [("embed", None), ("init", tmp_path), ("prepare", None)]

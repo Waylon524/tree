@@ -8,20 +8,22 @@ from rich.console import Console
 from rich import print as rprint
 
 from tree.cli import theme
+from tree.cli.commands import config_cmd
 from tree.cli.commands import inspect
 from tree.cli.dashboard.live import run_watch as run_watch_panel
 from tree.cli.commands.lifecycle import quit_tree, start_engine, stop_engine
+from tree.io import paths
 
 
 _HELP_ROWS = (
-    ("/start", "start the foreground engine in a background process"),
-    ("/stop", "stop the background engine"),
-    ("/quit", "stop the background engine and leave the shell"),
-    ("/exit", "leave the shell without stopping services"),
-    ("/status", "show workspace status"),
-    ("/progress", "print progress.json"),
-    ("/watch", "watch the dashboard until ESC"),
+    ("/init", "initialize this TREE workspace"),
+    ("/setup", "run the global setup wizard"),
     ("/materials", "list supported materials"),
+    ("/run", "start the pipeline in the background"),
+    ("/watch", "watch the dashboard until ESC"),
+    ("/status", "show workspace status"),
+    ("/stop", "stop the background engine"),
+    ("/quit", "stop TREE services and leave the shell"),
     ("/help", "show this help"),
 )
 
@@ -50,12 +52,13 @@ def run_repl() -> None:
             run_watch_panel(root, console=console)
             continue
         result = handle_slash_command(command, root=root)
-        if command == "/progress":
-            console.print(result, markup=False)
-        else:
-            rprint(result)
-        if command in {"/quit", "/exit"}:
+        rprint(result)
+        if should_exit_repl(command):
             return
+
+
+def should_exit_repl(command: str) -> bool:
+    return command.strip() == "/quit"
 
 
 def handle_slash_command(command: str, *, root: Path | None = None) -> str:
@@ -63,20 +66,31 @@ def handle_slash_command(command: str, *, root: Path | None = None) -> str:
     command = command.strip()
     if command == "/help":
         return _help_text()
+    if command == "/init":
+        paths.ensure_workspace_dirs(root)
+        return f"{theme.success('Initialized')} {theme.label('workspace')}."
+    if command == "/setup":
+        paths.ensure_workspace_dirs(root)
+        path = config_cmd.run_setup_wizard(
+            root,
+            env_path=paths.global_config_path(),
+            scope="global",
+        )
+        return f"{theme.success('Wrote')} {theme.path(path)}"
     if command == "/status":
         return inspect.status_text(root)
     if command == "/progress":
-        return inspect.progress_text(root)
+        return "Use /status or /watch inside TREE>; raw JSON is available with `tre progress`."
     if command == "/watch":
         return inspect.watch_text(root)
     if command == "/materials":
         return inspect.materials_text(root)
-    if command == "/start":
+    if command in {"/run", "/start"}:
         return start_engine(root).message
     if command == "/stop":
         return stop_engine(root).message
     if command == "/quit":
         return quit_tree(root).message
     if command == "/exit":
-        return "bye"
+        return "Use /quit to stop TREE services and leave the shell."
     return f"Unknown command: {command}"

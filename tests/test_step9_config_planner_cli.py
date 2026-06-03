@@ -27,11 +27,12 @@ def test_planner_rebuild_invokes_prepare_sources(monkeypatch):
 
     monkeypatch.setattr("tree.cli.app.Settings", _Settings)
     monkeypatch.setattr("tree.cli.app.TreeEngine", _Engine)
+    monkeypatch.setattr("tree.cli.app.ensure_embedding_ready", lambda: calls.append(("embed", None)))
 
     result = CliRunner().invoke(app, ["planner", "rebuild"])
 
     assert result.exit_code == 0
-    assert calls == [("init", "settings"), ("prepare", None)]
+    assert calls == [("embed", None), ("init", "settings"), ("prepare", None)]
     assert "nodes=2" in result.stdout
     assert "knowledge-dag.svg" in result.stdout
     assert "branches" not in result.stdout
@@ -65,6 +66,56 @@ def test_planner_dag_svg_command_requires_existing_dag(tmp_path, monkeypatch):
 
     assert result.exit_code != 0
     assert "knowledge-dag.json not found" in result.output
+
+
+def test_doctor_shows_embedding_model_and_server_status(monkeypatch):
+    monkeypatch.setattr("tree.cli.app.embedding_model_status", lambda: "cached")
+    monkeypatch.setattr("tree.cli.app.embedding_service_status", lambda: "running")
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "embedding model" in result.stdout
+    assert "cached" in result.stdout
+    assert "embedding server" in result.stdout
+    assert "running" in result.stdout
+
+
+def test_embedding_commands_route_to_model_and_service_helpers(tmp_path, monkeypatch):
+    from tree.rag.model_cache import EmbeddingModel
+
+    calls = []
+    model_path = tmp_path / "model.gguf"
+    model_path.write_text("model", encoding="utf-8")
+    monkeypatch.setattr(
+        "tree.cli.app.ensure_embedding_model",
+        lambda: calls.append("install") or EmbeddingModel(path=model_path, source="env"),
+    )
+    monkeypatch.setattr("tree.cli.app.embedding_model_status", lambda: "cached")
+    monkeypatch.setattr("tree.cli.app.embedding_service_status", lambda: "running")
+    monkeypatch.setattr(
+        "tree.cli.app.start_embedding_service",
+        lambda: calls.append("start") or type("Result", (), {"message": "embedding started"})(),
+    )
+    monkeypatch.setattr(
+        "tree.cli.app.stop_embedding_service",
+        lambda force=True: calls.append(("stop", force))
+        or type("Result", (), {"message": "embedding stopped"})(),
+    )
+    runner = CliRunner()
+
+    install = runner.invoke(app, ["embedding", "install"])
+    status = runner.invoke(app, ["embedding", "status"])
+    start = runner.invoke(app, ["embedding", "start"])
+    stop = runner.invoke(app, ["embedding", "stop"])
+
+    assert install.exit_code == 0
+    assert "env" in install.stdout
+    assert "cached" in status.stdout
+    assert "running" in status.stdout
+    assert "embedding started" in start.stdout
+    assert "embedding stopped" in stop.stdout
+    assert calls == ["install", "start", ("stop", True)]
 
 
 def test_models_and_prompts_commands_show_current_config(monkeypatch):

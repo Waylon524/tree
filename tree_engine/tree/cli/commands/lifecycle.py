@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tree.cli import theme
 from tree.io import paths
+from tree.rag.service import start_embedding_service, stop_embedding_service
 
 
 @dataclass(frozen=True)
@@ -20,10 +21,12 @@ class LifecycleResult:
 
 def start_engine(root: Path) -> LifecycleResult:
     paths.ensure_workspace_dirs(root)
+    embedding = start_embedding_service()
     pid_path = paths.service_pid_path(root, "engine")
     if pid_path.exists():
         pid = pid_path.read_text(encoding="utf-8").strip()
         return LifecycleResult(
+            f"{embedding.message}\n"
             f"{theme.label('engine')} {theme.status('running')} "
             f"({theme.label('pid')} {theme.path(pid)})"
         )
@@ -40,6 +43,7 @@ def start_engine(root: Path) -> LifecycleResult:
     )
     pid_path.write_text(str(proc.pid), encoding="utf-8")
     return LifecycleResult(
+        f"{embedding.message}\n"
         f"{theme.label('engine')} {theme.success('started')} "
         f"({theme.label('pid')} {theme.path(proc.pid)})"
     )
@@ -59,7 +63,9 @@ def stop_engine(root: Path) -> LifecycleResult:
 
 
 def quit_tree(root: Path) -> LifecycleResult:
-    return stop_engine(root)
+    engine = stop_engine(root)
+    embedding = stop_embedding_service(force=True)
+    return LifecycleResult(f"{engine.message}\n{embedding.message}")
 
 
 def _kill_pid(pid: int) -> None:

@@ -10,7 +10,6 @@ Loads Qwen3-Embedding-4B-Q8_0 (GGUF) via llama-cpp-python and serves
 import argparse
 import asyncio
 import logging
-import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,18 +22,23 @@ from llama_cpp import Llama
 from llama_cpp import llama as llama_module
 from pydantic import BaseModel, Field
 
+from tree.rag.model_cache import (
+    GGUF_FILE,
+    HF_REPO,
+    MODEL_NAME,
+    ensure_embedding_model,
+    resolve_embedding_model_path,
+)
+
 logger = logging.getLogger(__name__)
 
-_HF_REPO = "Qwen/Qwen3-Embedding-4B-GGUF"
-_GGUF_FILE = "Qwen3-Embedding-4B-Q8_0.gguf"
-_MODEL_NAME = "Qwen3-Embedding-4B-Q8_0"
 _DEFAULT_PORT = 8788
 _DEFAULT_N_CTX = 32768
 _DEFAULT_N_SEQ_MAX = 1
 
 
 class EmbedRequest(BaseModel):
-    model: str = Field(default=_MODEL_NAME)
+    model: str = Field(default=MODEL_NAME)
     input: str | list[str]
 
 
@@ -49,7 +53,7 @@ async def lifespan(app: FastAPI):
     n_seq_max = app.state.n_seq_max
     logger.info(
         "Loading %s/%s (n_gpu_layers=%d, n_ctx=%d, n_seq_max=%d)...",
-        _HF_REPO, _GGUF_FILE, n_gpu, n_ctx, n_seq_max,
+        HF_REPO, GGUF_FILE, n_gpu, n_ctx, n_seq_max,
     )
     t0 = time.time()
     _model = _load_llama_model(n_gpu_layers=n_gpu, n_ctx=n_ctx, n_seq_max=n_seq_max)
@@ -63,7 +67,7 @@ app = FastAPI(title="Qwen3-Embedding-4B Server", lifespan=lifespan)
 
 @app.get("/v1/models")
 async def list_models():
-    return {"object": "list", "data": [{"id": _MODEL_NAME, "object": "model", "owned": "local"}]}
+    return {"object": "list", "data": [{"id": MODEL_NAME, "object": "model", "owned": "local"}]}
 
 
 @app.post("/v1/embeddings")
@@ -80,7 +84,7 @@ async def create_embeddings(req: EmbedRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": _MODEL_NAME, "loaded": _model is not None}
+    return {"status": "ok", "model": MODEL_NAME, "loaded": _model is not None}
 
 
 def _create_embedding_response(texts: list[str]) -> dict[str, Any]:
@@ -89,7 +93,7 @@ def _create_embedding_response(texts: list[str]) -> dict[str, Any]:
 
     data = []
     usage: dict[str, int] = {}
-    model_name = _MODEL_NAME
+    model_name = MODEL_NAME
     for index, text in enumerate(texts):
         result = _model.create_embedding(text)
         model_name = result.get("model", model_name)
@@ -122,37 +126,15 @@ def _load_llama_model(n_gpu_layers: int, n_ctx: int, n_seq_max: int) -> Llama:
         if model_path is not None:
             logger.info("Loading embedding model from local file: %s", model_path)
             return Llama(model_path=str(model_path), **kwargs)
-        return Llama.from_pretrained(repo_id=_HF_REPO, filename=_GGUF_FILE, **kwargs)
+        model = ensure_embedding_model()
+        logger.info("Loading embedding model from resolved file: %s", model.path)
+        return Llama(model_path=str(model.path), **kwargs)
     finally:
         llama_module.llama_cpp.llama_max_parallel_sequences = original
 
 
 def _resolve_model_path() -> Path | None:
-    env_path = os.environ.get("EMBED_MODEL_PATH")
-    if env_path:
-        path = Path(env_path).expanduser()
-        if path.is_file():
-            return path
-
-    try:
-        from huggingface_hub import try_to_load_from_cache
-
-        cached = try_to_load_from_cache(_HF_REPO, _GGUF_FILE)
-        if isinstance(cached, str):
-            path = Path(cached)
-            if path.is_file():
-                return path
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Could not resolve model through HuggingFace cache: %s", exc)
-
-    cache_pattern = (
-        ".cache/huggingface/hub/models--Qwen--Qwen3-Embedding-4B-GGUF/"
-        "snapshots/*/Qwen3-Embedding-4B-Q8_0.gguf"
-    )
-    for path in Path.home().glob(cache_pattern):
-        if path.is_file():
-            return path
-    return None
+    return resolve_embedding_model_path()
 
 
 def main():

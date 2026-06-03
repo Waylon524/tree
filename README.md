@@ -128,7 +128,22 @@ pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 tre
 ```
 
+首次启动时，TREE 会检查本机是否已有 `Qwen3-Embedding-4B-Q8_0.gguf`。如果没有，TREE 会自动从 Hugging Face 下载模型并启动本地 embedding server；后续运行会复用本机缓存。
+
 即可进入 `TREE>` 交互界面。
+
+推荐的交互式流程：
+
+```text
+tre
+/init
+/setup
+# 将 PDF / PPTX / DOCX / Markdown / 文本资料放入 materials/
+/materials
+/run
+/watch
+/quit
+```
 
 ### 更新
 
@@ -353,16 +368,18 @@ tre
 进入 `TREE>` 后常用 slash commands：
 
 ```text
-/start      后台启动 TREE engine
-/watch      实时刷新全流程进度面板，按 ESC 退出
-/progress   打印 progress.json
-/status     查看当前 workspace 状态
+/init       初始化当前 TREE workspace
+/setup      运行全局配置向导
 /materials  列出 materials/ 下支持的资料
-/stop       停止后台 engine
-/quit       停止后台 engine 并离开 shell
-/exit       只离开 shell，不停止后台服务
+/run        后台启动完整 pipeline，并自动准备 embedding
+/watch      实时刷新全流程进度面板，按 ESC 退出
+/status     查看当前 workspace 状态
+/stop       只停止后台 engine，保留 embedding server
+/quit       停止后台 engine 和 TREE 托管的 embedding server，并离开 shell
 /help       查看交互命令
 ```
+
+`/start` 仍作为 `/run` 的兼容别名可用，但不再作为推荐命令展示。需要打印原始 `progress.json` 时，在 shell 外运行 `tre progress`。
 
 ### 前台运行
 
@@ -480,24 +497,7 @@ TREE 的 RAG 默认使用本地 OpenAI-compatible embeddings endpoint：
 http://localhost:8788/v1/embeddings
 ```
 
-项目内置 Qwen3-Embedding-4B GGUF server：
-
-```bash
-python -m tree.rag.server
-```
-
-常用启动方式：
-
-```bash
-# 默认：0.0.0.0:8788，尽量使用 GPU/Metal
-python -m tree.rag.server
-
-# CPU only
-python -m tree.rag.server --n-gpu-layers 0
-
-# 指定地址和端口
-python -m tree.rag.server --host 127.0.0.1 --port 8788
-```
+项目内置 Qwen3-Embedding-4B GGUF server。普通用户不需要手动启动：`tre`、`tre run`、`tre start`、`tre ingest`、`tre planner rebuild` 和 `tre rag search` 会在需要 RAG 时自动检查模型并启动服务。`tre quit` 会停止 TREE 托管的 engine 和 embedding server。
 
 默认模型：
 
@@ -506,10 +506,32 @@ Qwen/Qwen3-Embedding-4B-GGUF
 Qwen3-Embedding-4B-Q8_0.gguf
 ```
 
-首次启动时，如果本地 Hugging Face cache 没有模型，`llama-cpp-python` 会尝试下载。也可以指定本地模型路径：
+手动预下载或检查状态：
 
 ```bash
-EMBED_MODEL_PATH=/path/to/Qwen3-Embedding-4B-Q8_0.gguf python -m tree.rag.server
+tre embedding install
+tre embedding status
+```
+
+手动控制服务：
+
+```bash
+tre embedding start
+tre embedding stop
+```
+
+如果 Hugging Face 无法访问，也可以先下载 GGUF 文件并指定本地路径：
+
+```bash
+EMBED_MODEL_PATH=/path/to/Qwen3-Embedding-4B-Q8_0.gguf tre
+```
+
+高级用法仍可直接运行 server：
+
+```bash
+python -m tree.rag.server
+python -m tree.rag.server --n-gpu-layers 0
+python -m tree.rag.server --host 127.0.0.1 --port 8788
 ```
 
 Embedding 相关环境变量：
@@ -518,7 +540,12 @@ Embedding 相关环境变量：
 EMBED_API_URL=http://localhost:8788
 EMBED_MODEL=Qwen3-Embedding-4B-Q8_0
 EMBED_MODEL_PATH=
+EMBED_AUTO_DOWNLOAD=true
+EMBED_AUTO_START=true
+EMBED_SERVER_START_TIMEOUT_SEC=300
 ```
+
+如果 `EMBED_API_URL` 指向非本机地址，TREE 会认为你使用外部 embedding endpoint，并跳过本地模型下载和 server 自动启动。
 
 健康检查：
 
@@ -557,7 +584,7 @@ tre                      # 进入 TREE> shell
 tre run                  # 前台运行完整 pipeline
 tre start                # 后台启动 engine
 tre stop                 # 停止后台 engine
-tre quit                 # 停止后台 engine
+tre quit                 # 停止后台 engine 和 TREE 托管的 embedding server
 tre resume               # 等同于 tre run
 tre continue             # 等同于 tre run
 ```
@@ -769,14 +796,13 @@ PADDLEOCR_API_TOKEN=...
 
 ### RAG indexer unavailable
 
-完整端到端运行需要安装 `[rag]` 并启动 embedding server：
+完整端到端运行需要安装 `[rag]`。如果本地没有 embedding 模型，首次启动 TREE 会自动下载并启动本地 embedding server：
 
 ```bash
 pip install -e ".[rag,dev]"
-python -m tree.rag.server
 ```
 
-另开一个终端回到同一 workspace 后运行：
+回到同一 workspace 后运行：
 
 ```bash
 tre run

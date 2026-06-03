@@ -26,18 +26,27 @@ from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
 from tree.planner.pipeline import load_dag
 from tree.planner.svg import write_dag_svg
+from tree.rag.model_cache import EmbeddingModelError, embedding_model_status, ensure_embedding_model
+from tree.rag.service import (
+    embedding_service_status,
+    start_embedding_service,
+    stop_embedding_service,
+)
 
 app = typer.Typer(no_args_is_help=False, add_completion=False, help="T.R.E.E. engine")
 rag_app = typer.Typer(help="RAG inspection commands")
 planner_app = typer.Typer(help="Planner commands")
+embedding_app = typer.Typer(help="Embedding model/server commands")
 app.add_typer(rag_app, name="rag")
 app.add_typer(planner_app, name="planner")
+app.add_typer(embedding_app, name="embedding")
 
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
     """Run `tre` with no command to enter the interactive TREE> shell."""
     if ctx.invoked_subcommand is None:
+        ensure_embedding_ready()
         from tree.cli.repl import run_repl
 
         run_repl()
@@ -65,6 +74,8 @@ def doctor() -> None:
         rprint(f"  {theme.label('rag deps')}         : {theme.status('installed')}")
     except Exception:
         rprint(f"  {theme.label('rag deps')}         : [yellow]missing (pip install '.[rag]')[/yellow]")
+    rprint(f"  {theme.label('embedding model')}  : {theme.status(embedding_model_status())}")
+    rprint(f"  {theme.label('embedding server')} : {theme.status(embedding_service_status())}")
 
 
 @app.command()
@@ -169,6 +180,7 @@ def clean() -> None:
 @app.command()
 def run() -> None:
     """Run the pipeline in the foreground (implemented in step 8)."""
+    ensure_embedding_ready()
     settings = Settings.from_env()
     asyncio.run(TreeEngine(settings).run())
 
@@ -209,6 +221,7 @@ def ingest(
     collection: str | None = typer.Option(None, "--collection"),
 ) -> None:
     """Manually ingest a file/dir (implemented in step 8)."""
+    ensure_embedding_ready()
     settings = Settings.from_env()
     copied = _copy_input_to_materials(Path(input), settings.project_root, collection=collection)
     rprint(f"{theme.success('Copied')} {theme.label(str(copied))} material file(s).")
@@ -223,6 +236,7 @@ def ingest(
 @planner_app.command("rebuild")
 def planner_rebuild() -> None:
     """Rebuild MTUs/nodes/DAG without running NodeRuns."""
+    ensure_embedding_ready()
     summary = asyncio.run(TreeEngine(Settings.from_env()).prepare_sources())
     svg = summary.get("dag_svg_path", "")
     rprint(
@@ -270,7 +284,50 @@ def rag_graph() -> None:
 @rag_app.command("search")
 def rag_search(query: str, top_k: int = typer.Option(5, "--top-k")) -> None:
     """Search the local RAG store."""
+    ensure_embedding_ready()
     rprint(rag_cmd.search_text(Path.cwd(), query, top_k=top_k))
+
+
+@embedding_app.command("install")
+def embedding_install() -> None:
+    """Download or verify the local embedding model."""
+    try:
+        model = ensure_embedding_model()
+    except EmbeddingModelError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    rprint(
+        f"{theme.label('embedding model')} {theme.status('ready')} "
+        f"({theme.label('source')} {theme.path(model.source)}, {theme.label('path')} {theme.path(model.path)})"
+    )
+
+
+@embedding_app.command("status")
+def embedding_status() -> None:
+    """Show embedding model and server status."""
+    rprint(theme.kv("embedding model", embedding_model_status(), value_style="status"))
+    rprint(theme.kv("embedding server", embedding_service_status(), value_style="status"))
+
+
+@embedding_app.command("start")
+def embedding_start() -> None:
+    """Start the shared local embedding server."""
+    rprint(start_embedding_service().message)
+
+
+@embedding_app.command("stop")
+def embedding_stop() -> None:
+    """Stop the TREE-managed embedding server."""
+    rprint(stop_embedding_service(force=True).message)
+
+
+def ensure_embedding_ready() -> None:
+    """Ensure the local embedding model/server is available for RAG-backed commands."""
+    try:
+        start_embedding_service()
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"Embedding unavailable: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
 
 def _exists(path: Path) -> str:

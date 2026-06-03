@@ -122,6 +122,21 @@ def test_status_progress_materials_and_rag_nodes_cli(tmp_path, monkeypatch):
     assert "A" in result.stdout
 
 
+def test_rag_search_ensures_embedding_service(tmp_path, monkeypatch):
+    _seed_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    monkeypatch.setattr("tree.cli.app.ensure_embedding_ready", lambda: calls.append("embed"))
+    monkeypatch.setattr("tree.cli.commands.rag.search_text", lambda root, query, top_k=5: "hit")
+
+    result = CliRunner().invoke(app, ["rag", "search", "化学平衡"])
+
+    assert result.exit_code == 0
+    assert calls == ["embed"]
+    assert "hit" in result.stdout
+
+
 def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     _seed_workspace(tmp_path)
     log_path = paths.service_log_path(tmp_path, "engine")
