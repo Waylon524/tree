@@ -144,6 +144,19 @@ class ArchivistAgent(Agent):
                     collection, source_file, attempt + 1, exc,
                 )
                 if attempt >= repair_attempts:
+                    try:
+                        if _merge_short_units_fallback(partition, line_count=line_count):
+                            final_plan = {"units": partition["valid_units"]}
+                            units, _skipped = validate_and_normalize(final_plan, line_count)
+                            units = sorted(units, key=lambda unit: (unit["start_line"], unit["end_line"]))
+                            return build_mtus(
+                                units,
+                                collection=collection,
+                                source_file=source_file,
+                                order_offset=order_offset,
+                            )
+                    except MtuCoverageError as fallback_exc:
+                        last_error = fallback_exc
                     break
                 try:
                     while True:
@@ -646,6 +659,81 @@ def _first_semantic_problem(
     for problem in partition["semantic_unit_problems"]:
         if problem_types is None or problem["problem_type"] in problem_types:
             return problem
+    return None
+
+
+def _merge_short_units_fallback(partition: dict[str, Any], *, line_count: int) -> bool:
+    if partition["invalid_units"] or partition["missing_ranges"] or partition["overlap_ranges"]:
+        return False
+    problems = partition["semantic_unit_problems"]
+    if not problems or any(problem.get("problem_type") != "short_unit" for problem in problems):
+        return False
+
+    merged = False
+    while True:
+        problem = _first_semantic_problem(partition, {"short_unit"})
+        if problem is None:
+            return merged
+        if not _merge_one_short_unit(partition["valid_units"], problem):
+            raise MtuCoverageError(f"short unit fallback failed for {problem}: no adjacent concept candidate")
+        merged = True
+        _refresh_mtu_partition_problems(partition, line_count=line_count)
+        if partition["invalid_units"] or partition["missing_ranges"] or partition["overlap_ranges"]:
+            raise MtuCoverageError(
+                "short unit fallback failed after merge: "
+                f"invalid_units={partition['invalid_units']}; "
+                f"missing_ranges={partition['missing_ranges']}; "
+                f"overlap_ranges={partition['overlap_ranges']}"
+            )
+        if any(problem.get("problem_type") != "short_unit" for problem in partition["semantic_unit_problems"]):
+            raise MtuCoverageError(
+                "short unit fallback failed after merge: "
+                f"semantic_unit_problems={partition['semantic_unit_problems']}"
+            )
+
+
+def _merge_one_short_unit(units: list[dict[str, Any]], problem: dict[str, Any]) -> bool:
+    target_index = _semantic_problem_unit_index(units, problem)
+    if target_index is None:
+        return False
+    previous = _nearest_concept_before(units, target_index)
+    next_unit = _nearest_concept_after(units, target_index)
+    if previous is None and next_unit is None:
+        return False
+
+    target = units[target_index]
+    if previous is None:
+        assert next_unit is not None
+        next_unit["start_line"] = min(int(next_unit["start_line"]), int(target["start_line"]))
+    else:
+        previous["end_line"] = max(int(previous["end_line"]), int(target["end_line"]))
+    units.pop(target_index)
+    return True
+
+
+def _semantic_problem_unit_index(units: list[dict[str, Any]], problem: dict[str, Any]) -> int | None:
+    problem_range = problem.get("range") or {}
+    for index, unit in enumerate(units):
+        if (
+            int(unit["start_line"]) == int(problem_range.get("start_line", -1))
+            and int(unit["end_line"]) == int(problem_range.get("end_line", -1))
+            and unit.get("title") == problem.get("title")
+        ):
+            return index
+    return None
+
+
+def _nearest_concept_before(units: list[dict[str, Any]], target_index: int) -> dict[str, Any] | None:
+    for unit in reversed(units[:target_index]):
+        if unit.get("unit_kind") == "concept":
+            return unit
+    return None
+
+
+def _nearest_concept_after(units: list[dict[str, Any]], target_index: int) -> dict[str, Any] | None:
+    for unit in units[target_index + 1:]:
+        if unit.get("unit_kind") == "concept":
+            return unit
     return None
 
 

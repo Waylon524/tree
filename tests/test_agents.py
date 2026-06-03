@@ -562,6 +562,75 @@ async def test_archivist_cut_mtus_repairs_short_concept_with_local_units_window(
     assert len(client.calls) == 2
 
 
+async def test_archivist_cut_mtus_fallback_merges_final_short_concept_to_previous():
+    plan = """{
+      "units": [
+        {"start_line": 1, "end_line": 40, "title": "沉淀溶解平衡",
+         "defines": ["沉淀溶解平衡"], "summary": "说明沉淀溶解平衡的计算方法与应用边界。",
+         "unit_kind": "concept"},
+        {"start_line": 41, "end_line": 52, "title": "沉淀转化",
+         "defines": ["沉淀转化"], "summary": "说明沉淀转化的平衡常数关系。",
+         "unit_kind": "concept"}
+      ]
+    }"""
+    client = _FakeClient({"archivist": plan})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus(_markdown_lines(52), collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 52)]
+    assert mtus[0].title == "沉淀溶解平衡"
+    assert mtus[0].defines == ["沉淀溶解平衡"]
+    assert len(client.calls) == 1
+
+
+async def test_archivist_cut_mtus_fallback_merges_initial_short_concept_to_next():
+    plan = """{
+      "units": [
+        {"start_line": 1, "end_line": 12, "title": "导入片段",
+         "defines": ["课程导入"], "summary": "说明本节的导入背景与问题设置。",
+         "unit_kind": "concept"},
+        {"start_line": 13, "end_line": 52, "title": "沉淀溶解平衡",
+         "defines": ["沉淀溶解平衡"], "summary": "说明沉淀溶解平衡的计算方法与应用边界。",
+         "unit_kind": "concept"}
+      ]
+    }"""
+    client = _FakeClient({"archivist": plan})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus(_markdown_lines(52), collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 52)]
+    assert mtus[0].title == "沉淀溶解平衡"
+    assert mtus[0].defines == ["沉淀溶解平衡"]
+    assert len(client.calls) == 1
+
+
+async def test_archivist_cut_mtus_fallback_merges_middle_short_concept_without_gap():
+    plan = """{
+      "units": [
+        {"start_line": 1, "end_line": 30, "title": "溶度积",
+         "defines": ["溶度积"], "summary": "说明溶度积常数的定义与计算边界。",
+         "unit_kind": "concept"},
+        {"start_line": 31, "end_line": 42, "title": "沉淀转化",
+         "defines": ["沉淀转化"], "summary": "说明沉淀转化的平衡常数关系。",
+         "unit_kind": "concept"},
+        {"start_line": 43, "end_line": 82, "title": "分步沉淀",
+         "defines": ["分步沉淀"], "summary": "说明分步沉淀的判定方法与计算边界。",
+         "unit_kind": "concept"}
+      ]
+    }"""
+    client = _FakeClient({"archivist": plan})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus(_markdown_lines(82), collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 42), (43, 82)]
+    assert mtus[0].title == "溶度积"
+    assert mtus[1].title == "分步沉淀"
+    assert len(client.calls) == 1
+
+
 async def test_archivist_cut_mtus_repairs_short_units_before_metadata():
     plan = """{
       "units": [
