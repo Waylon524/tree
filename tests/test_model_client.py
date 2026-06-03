@@ -61,6 +61,16 @@ def test_settings_default_dagger_repair_attempts_is_three(monkeypatch, tmp_path)
     assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_repair_attempts == 3
 
 
+def test_settings_default_dagger_prerequisite_concurrency_is_five(monkeypatch, tmp_path):
+    monkeypatch.delenv("DAGGER_PREREQUISITE_CONCURRENCY", raising=False)
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_prerequisite_concurrency == 5
+
+
+def test_settings_reads_dagger_prerequisite_concurrency(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAGGER_PREREQUISITE_CONCURRENCY", "3")
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_prerequisite_concurrency == 3
+
+
 async def test_llm_client_sets_role_specific_deepseek_options(monkeypatch):
     _FakeAsyncOpenAI.instances = []
     monkeypatch.setattr(model_client, "AsyncOpenAI", _FakeAsyncOpenAI)

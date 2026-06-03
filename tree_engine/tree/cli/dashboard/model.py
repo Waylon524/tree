@@ -25,6 +25,7 @@ def build_watch_model(root: Path) -> dict[str, Any]:
     completed = [be.node_id for be in state.node_executions if be.status == "completed"]
     labels = _node_display_labels(nodes)
 
+    node_count = _watch_node_count(progress, nodes)
     return {
         "phase": progress.get("phase", "idle"),
         "message": progress.get("message", ""),
@@ -32,7 +33,7 @@ def build_watch_model(root: Path) -> dict[str, Any]:
         "progress": progress,
         "stages": progress.get("stages", {}),
         "material_count": len(_material_paths(root)),
-        "node_count": len(nodes),
+        "node_count": node_count,
         "edge_count": len(dag.get("edges", [])),
         "dag": dag,
         "nodes": nodes,
@@ -68,6 +69,16 @@ def _node_display_labels(nodes: list[dict[str, Any]]) -> dict[str, str]:
         title = str(node.get("title") or node_id)
         labels[node_id] = f"{index:03d}. {title}"
     return labels
+
+
+def _watch_node_count(progress: dict[str, Any], nodes: list[dict[str, Any]]) -> int:
+    planner = progress.get("planner") or {}
+    if isinstance(planner, dict):
+        try:
+            return max(0, int(planner["node_count"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return len(nodes)
 
 
 def _collect_errors(root: Path, progress: dict[str, Any]) -> list[str]:

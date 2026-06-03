@@ -56,6 +56,7 @@ class _RecordingProgress:
     def __init__(self, inner):
         self.inner = inner
         self.link_done_history = []
+        self.planner_node_count_history = []
 
     def reset(self):
         return self.inner.reset()
@@ -76,6 +77,13 @@ class _RecordingProgress:
 
     def add_stage_total(self, stage, amount, **kwargs):
         return self.inner.add_stage_total(stage, amount, **kwargs)
+
+    def update(self, patch):
+        result = self.inner.update(patch)
+        planner = self.inner.load().get("planner") or {}
+        if "node_count" in planner:
+            self.planner_node_count_history.append(planner["node_count"])
+        return result
 
     def advance_stage(self, stage, **kwargs):
         result = self.inner.advance_stage(stage, **kwargs)
@@ -176,6 +184,8 @@ async def test_rebuild_planner_writes_all_artifacts(tmp_path):
     assert stages["link"]["done"] == 2
     assert stages["link"]["status"] == "complete"
     assert progress.link_done_history == [0, 1, 2]
+    assert progress.planner_node_count_history == [2]
+    assert progress.load()["planner"]["node_count"] == 2
 
 
 async def test_rebuild_planner_reuses_cache_when_unchanged(tmp_path):

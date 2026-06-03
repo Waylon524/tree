@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +77,48 @@ class _DefinesAgent:
 _SETTINGS = SimpleNamespace(
     dagger_build_timeout_sec=1.0, dagger_repair_attempts=0, dagger_max_nodes_per_call=400
 )
+
+
+class _ProgressSpy:
+    def __init__(self):
+        self.stages = {}
+        self.link_done_history = []
+        self.link_active_history = []
+
+    def set_stage(self, stage, **kwargs):
+        data = self.stages.setdefault(stage, {"done": 0, "total": 0, "active": []})
+        data.update(kwargs)
+        if stage == "link":
+            self._record_link(data)
+
+    def advance_stage(self, stage, step=1, **kwargs):
+        data = self.stages.setdefault(stage, {"done": 0, "total": 0, "active": []})
+        data["done"] = data.get("done", 0) + step
+        data.update(kwargs)
+        if data.get("total") and data["done"] >= data["total"]:
+            data["status"] = "complete"
+            data["active"] = []
+        if stage == "link":
+            self._record_link(data)
+
+    def complete_stage(self, stage, message=None):
+        data = self.stages.setdefault(stage, {"done": 0, "total": 0, "active": []})
+        if data.get("total"):
+            data["done"] = data["total"]
+        data["status"] = "complete"
+        data["active"] = []
+        if message is not None:
+            data["message"] = message
+        if stage == "link":
+            self._record_link(data)
+
+    def _record_link(self, data):
+        done = data.get("done", 0)
+        if not self.link_done_history or self.link_done_history[-1] != done:
+            self.link_done_history.append(done)
+        active = tuple(data.get("active") or [])
+        if active:
+            self.link_active_history.append(active)
 
 
 async def test_build_dag_merges_duplicates_and_resolves_edges():
@@ -798,6 +841,77 @@ async def test_build_dag_allows_cluster_split_with_member_mtu_defines_only():
     )
 
     assert {node["title"] for node in dag["nodes"]} == {"A", "B"}
+
+
+async def test_build_dag_links_prerequisites_with_bounded_concurrency_and_sequence_active_labels():
+    mtus = [_mtu(f"mtu:{index}", f"N{index}", "课件", index, keywords=[f"D{index}"]) for index in range(5)]
+    release = asyncio.Event()
+
+    class _ConcurrentPrereqAgent:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.calls = []
+            self.started = asyncio.Event()
+
+        async def build_nodes(self, payload, *, timeout_sec=None):
+            return {
+                "nodes": [
+                    {"title": item["title"], "member_mtu_ids": [item["mtu_id"]], "defines": item["defines"]}
+                    for item in payload
+                ]
+            }
+
+        async def build_prerequisites(self, payload, *, timeout_sec=None):
+            target = payload["target_node"]
+            self.calls.append(target["node_id"])
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            if self.max_active >= 3:
+                self.started.set()
+            await release.wait()
+            self.active -= 1
+            required = []
+            if target["source_order_index"] > 0:
+                required = [f"D{target['source_order_index'] - 1}"]
+            return {
+                "node_prerequisites": [
+                    {
+                        "node_id": target["node_id"],
+                        "required_defines": required,
+                        "reason": "ordered prerequisite",
+                    }
+                ]
+            }
+
+    agent = _ConcurrentPrereqAgent()
+    progress = _ProgressSpy()
+    settings = SimpleNamespace(
+        **{
+            **_SETTINGS.__dict__,
+            "dagger_prerequisite_concurrency": 3,
+        }
+    )
+
+    task = asyncio.create_task(build_dag(agent, mtus, settings=settings, progress=progress))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    assert agent.max_active == 3
+    assert ("001", "002", "003") in progress.link_active_history
+    assert not any("N0" in item for active in progress.link_active_history for item in active)
+
+    release.set()
+    dag = await task
+
+    assert agent.max_active == 3
+    assert progress.link_done_history == [0, 1, 2, 3, 4, 5]
+    assert [call for call in agent.calls[:3]]
+    assert [(edge["from_node_id"], edge["to_node_id"]) for edge in dag["edges"]] == [
+        (dag["nodes"][0]["node_id"], dag["nodes"][1]["node_id"]),
+        (dag["nodes"][1]["node_id"], dag["nodes"][2]["node_id"]),
+        (dag["nodes"][2]["node_id"], dag["nodes"][3]["node_id"]),
+        (dag["nodes"][3]["node_id"], dag["nodes"][4]["node_id"]),
+    ]
 
 
 async def test_build_dag_calls_dagger_once_per_candidate_cluster():

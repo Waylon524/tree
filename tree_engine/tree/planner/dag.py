@@ -8,6 +8,7 @@ define requirements back to defining nodes and builds the prerequisite DAG.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import inspect
 from typing import Any
@@ -36,12 +37,14 @@ async def build_dag(
 ) -> dict[str, Any]:
     """Build canonical nodes + prerequisite edges from MTUs."""
     if not mtus:
+        _update_progress(progress, {"planner": {"node_count": 0}})
         _complete_progress_stage(progress, "cluster", "No MTUs to cluster")
         _complete_progress_stage(progress, "link", "No nodes to link")
         return {"nodes": [], "edges": [], "roots": [], "diagnostics": []}
 
     timeout = getattr(settings, "dagger_build_timeout_sec", 480.0)
     repair = getattr(settings, "dagger_repair_attempts", 1)
+    prerequisite_concurrency = max(1, int(getattr(settings, "dagger_prerequisite_concurrency", 5)))
     max_nodes = getattr(settings, "dagger_max_nodes_per_call", 400)
 
     if getattr(settings, "dagger_embed_cluster_enabled", False):
@@ -74,6 +77,7 @@ async def build_dag(
     nodes, diagnostics = await _canonicalize_nodes_with_define_repair(
         agent, mtus, nodes_raw, timeout=timeout, repair=repair
     )
+    _update_progress(progress, {"planner": {"node_count": len(nodes)}})
     _complete_progress_stage(progress, "cluster", "Cluster complete")
     _set_progress_stage(
         progress,
@@ -84,7 +88,12 @@ async def build_dag(
         message="Selecting required defines",
     )
     prerequisites = await _build_prerequisites_with_repair(
-        agent, nodes, timeout=timeout, repair=repair, progress=progress
+        agent,
+        nodes,
+        timeout=timeout,
+        repair=repair,
+        progress=progress,
+        concurrency=prerequisite_concurrency,
     )
     nodes, edges, diagnostics = await _build_edges_with_cycle_repair(
         agent, nodes, prerequisites, diagnostics=diagnostics, timeout=timeout, repair=repair
@@ -649,35 +658,53 @@ async def _build_prerequisites_with_repair(
     timeout: float,
     repair: int,
     progress: Any | None = None,
+    concurrency: int = 5,
 ) -> list[dict[str, Any]]:
     define_dictionary = _define_dictionary(nodes)
-    prereqs: list[dict[str, Any]] = []
+    prereqs: list[dict[str, Any] | None] = [None] * len(nodes)
     node_meta = [_node_prereq_meta(n) for n in nodes]
-    for node in nodes:
+    labels = _node_sequence_labels(nodes)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    active: set[str] = set()
+
+    def refresh_active() -> None:
         _set_progress_stage(
             progress,
             "link",
             status="running",
-            active=str(node.get("title") or node["node_id"]),
-            message=f"Selecting required defines for {node.get('title') or node['node_id']}",
+            active=sorted(active),
+            message="Selecting required defines",
         )
-        prereq = await _build_one_prerequisite_with_repair(
-            agent,
-            node,
-            node_meta,
-            nodes,
-            define_dictionary,
-            timeout=timeout,
-            repair=repair,
-        )
-        prereqs.append(prereq)
-        _advance_progress_stage(
-            progress,
-            "link",
-            message=f"Selected required defines for {node.get('title') or node['node_id']}",
-        )
-    _validate_prerequisites(prereqs, nodes, define_dictionary)
-    return prereqs
+
+    async def build_one(index: int, node: dict[str, Any]) -> None:
+        label = labels.get(node["node_id"], f"{index + 1:03d}")
+        async with semaphore:
+            active.add(label)
+            refresh_active()
+            try:
+                prereqs[index] = await _build_one_prerequisite_with_repair(
+                    agent,
+                    node,
+                    node_meta,
+                    nodes,
+                    define_dictionary,
+                    timeout=timeout,
+                    repair=repair,
+                )
+                _advance_progress_stage(progress, "link", message="Selected required defines")
+            finally:
+                active.discard(label)
+                refresh_active()
+
+    await asyncio.gather(*(build_one(index, node) for index, node in enumerate(nodes)))
+    completed = [item for item in prereqs if item is not None]
+    _validate_prerequisites(completed, nodes, define_dictionary)
+    return completed
+
+
+def _node_sequence_labels(nodes: list[dict[str, Any]]) -> dict[str, str]:
+    ordered = sorted(nodes, key=lambda n: (n.get("source_order_index", 0), n.get("node_id", "")))
+    return {str(node["node_id"]): f"{index:03d}" for index, node in enumerate(ordered, start=1)}
 
 
 async def _build_one_prerequisite_with_repair(
@@ -1069,5 +1096,13 @@ def _complete_progress_stage(progress: Any | None, stage: str, message: str) -> 
     if progress is not None and hasattr(progress, "complete_stage"):
         try:
             progress.complete_stage(stage, message)
+        except Exception:
+            return
+
+
+def _update_progress(progress: Any | None, patch: dict[str, Any]) -> None:
+    if progress is not None and hasattr(progress, "update"):
+        try:
+            progress.update(patch)
         except Exception:
             return

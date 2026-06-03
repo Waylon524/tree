@@ -61,6 +61,7 @@ def watch_renderable(root: Path) -> Panel:
         lines.append(
             _render_stage(
                 stages.get(key) or {"label": key.title()},
+                stage_key=key,
                 node_labels=node_labels if key == "noderun" else {},
             )
         )
@@ -78,21 +79,25 @@ def watch_renderable(root: Path) -> Panel:
     )
 
 
-def _render_stage(stage: dict, *, node_labels: dict[str, str]) -> str:
+def _render_stage(stage: dict, *, stage_key: str, node_labels: dict[str, str]) -> str:
     label = theme.label(str(stage.get("label") or "").ljust(8))
     done = int(stage.get("done") or 0)
     total = int(stage.get("total") or 0)
     status = str(stage.get("status") or "pending")
     badge = _watch_state(_status_badge(status)).ljust(8)
     message = str(stage.get("message") or "")
+    active_items = [str(item) for item in (stage.get("active") or []) if str(item)]
+    active_style = theme.path if stage_key == "noderun" else theme.active
     active = ", ".join(
-        theme.active(node_labels.get(str(item), str(item)))
-        for item in (stage.get("active") or [])
-        if str(item)
+        active_style(node_labels.get(item, item))
+        for item in active_items
     )
     count = f"{done}/{total}" if total else "0/0"
     percent = _percent(done, total)
-    detail = f"当前: {active}" if active else message
+    show_active = bool(active) and (
+        stage_key != "noderun" or status.strip().lower() in {"running", "in_progress", "active"}
+    )
+    detail = f"当前: {active}" if show_active else message
     detail = _truncate(detail, 34)
     return (
         f"  {label} {theme.progress_bar(done, total, width=_BAR_WIDTH)} "

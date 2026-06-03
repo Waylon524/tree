@@ -65,6 +65,7 @@ class Settings:
     # Dagger (DAG build)
     dagger_build_timeout_sec: float = 480.0
     dagger_repair_attempts: int = 3
+    dagger_prerequisite_concurrency: int = 5
     dagger_max_nodes_per_call: int = 400  # above this, fall back to per-collection batching
     dagger_embed_cluster_enabled: bool = True
     dagger_cluster_similarity_threshold: float = 0.80
@@ -127,6 +128,7 @@ class Settings:
             archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 8),
             dagger_build_timeout_sec=_env_float("DAGGER_BUILD_TIMEOUT_SEC", 480.0),
             dagger_repair_attempts=_env_int("DAGGER_REPAIR_ATTEMPTS", 3),
+            dagger_prerequisite_concurrency=max(1, _env_int("DAGGER_PREREQUISITE_CONCURRENCY", 5)),
             dagger_max_nodes_per_call=_env_int("DAGGER_MAX_NODES_PER_CALL", 400),
             dagger_embed_cluster_enabled=_env_bool("DAGGER_EMBED_CLUSTER_ENABLED", True),
             dagger_cluster_similarity_threshold=_env_float("DAGGER_CLUSTER_SIMILARITY_THRESHOLD", 0.80),

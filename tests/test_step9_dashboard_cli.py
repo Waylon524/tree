@@ -87,6 +87,21 @@ def test_build_watch_model_summarizes_runtime(tmp_path):
     assert model["node_display_labels"]["n1"] == "001. A"
 
 
+def test_build_watch_model_prefers_planner_node_count_during_link(tmp_path):
+    _seed_workspace(tmp_path)
+    progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
+    progress["planner"]["node_count"] = 94
+    progress["stages"]["link"]["total"] = 94
+    progress["stages"]["link"]["status"] = "running"
+    write_json_atomic(paths.progress_path(tmp_path), progress)
+
+    model = build_watch_model(tmp_path)
+
+    assert len(model["nodes"]) == 2
+    assert model["node_count"] == 94
+    assert "nodes 94" in render_watch(tmp_path)
+
+
 def test_render_dag_marks_active_node(tmp_path):
     _seed_workspace(tmp_path)
 
@@ -189,6 +204,24 @@ def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     assert "当前: ch1.pdf" in output
     assert "当前: 001. A" in output
     assert "当前: n1" not in output
+    assert f"当前: [{theme.TREE_GREEN}]ch1.pdf" in markup
+    assert f"当前: [{theme.TREE_BROWN}]001. A" in markup
+    assert f"当前: [{theme.TREE_GREEN}]001. A" not in markup
+
+
+def test_watch_noderun_pending_does_not_show_stale_current(tmp_path):
+    _seed_workspace(tmp_path)
+    progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
+    progress["stages"]["noderun"]["status"] = "pending"
+    progress["stages"]["noderun"]["active"] = ["n1"]
+    progress["stages"]["noderun"]["message"] = ""
+    write_json_atomic(paths.progress_path(tmp_path), progress)
+
+    output = render_watch(tmp_path)
+    noderun_line = next(line for line in output.splitlines() if "NodeRun" in line)
+
+    assert "WAIT" in noderun_line
+    assert "当前:" not in noderun_line
 
 
 def test_watch_command_delegates_to_live_dashboard(tmp_path, monkeypatch):
