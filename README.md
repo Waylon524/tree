@@ -54,25 +54,26 @@ materials/
 
 ## 安装
 
-TREE 要求 Python `>=3.12`。普通用户推荐用 `pipx` 安装；安装后可以在任意课程文件夹运行 `tre` 进入交互式 `TREE>` shell。
+TREE 要求 Python `>=3.12`，建议优先使用 Python 3.12。下面命令统一写作 `python`；
+如果你电脑上的 `python --version` 低于 3.12，请改用你本机可用的 3.12+ 解释器命令，
+例如 `python3.12`。普通用户推荐用 `pipx` 安装；安装后可以在任意课程文件夹运行 `tre`
+进入交互式 `TREE>` shell。
 
-macOS 推荐先安装 `pipx`：
+macOS / Linux：
 
 ```bash
-python3.12 --version
+python --version
 git --version
-brew install pipx
-pipx ensurepath
+python -m pip install --user pipx
+python -m pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
-Linux：
+macOS 用户如果已经使用 Homebrew，也可以用 Homebrew 安装 `pipx`：
 
 ```bash
-python3.12 --version
-git --version
-python3.12 -m pip install --user pipx
-python3.12 -m pipx ensurepath
+brew install pipx
+pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
@@ -92,10 +93,10 @@ wsl
 然后在 WSL2 Ubuntu 终端中安装：
 
 ```bash
-python3.12 --version
+python --version
 git --version
-python3.12 -m pip install --user pipx
-python3.12 -m pipx ensurepath
+python -m pip install --user pipx
+python -m pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
@@ -331,7 +332,7 @@ macOS / Linux：
 ```bash
 git clone <TREE_REPOSITORY_URL> Tree
 cd Tree
-python3.12 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e ".[rag,dev]"
@@ -346,7 +347,7 @@ Ubuntu，并在 WSL2 终端中执行与 macOS / Linux 相同的步骤：
 ```bash
 git clone <TREE_REPOSITORY_URL> Tree
 cd Tree
-python3.12 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e ".[rag,dev]"
