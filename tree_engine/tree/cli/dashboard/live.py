@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import select
 import sys
-import termios
-import tty
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Iterator
@@ -45,14 +44,38 @@ def _can_run_live(console: Console, input_stream: IO[str]) -> bool:
 
 
 def _escape_pressed(input_stream: IO[str], *, timeout: float) -> bool:
+    if sys.platform == "win32":
+        return _windows_escape_pressed(timeout=timeout)
+
     readable, _, _ = select.select([input_stream], [], [], timeout)
     if not readable:
         return False
     return input_stream.read(1) == "\x1b"
 
 
+def _windows_escape_pressed(*, timeout: float) -> bool:
+    import msvcrt
+
+    deadline = time.monotonic() + timeout
+    while True:
+        if msvcrt.kbhit():
+            return msvcrt.getwch() == "\x1b"
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
+
+
 @contextmanager
 def _raw_terminal(input_stream: IO[str]) -> Iterator[None]:
+    if sys.platform == "win32":
+        yield
+        return
+
+    import termios
+    import tty
+
     fd = input_stream.fileno()
     old = termios.tcgetattr(fd)
     try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from typer.testing import CliRunner
 
@@ -269,6 +270,30 @@ def test_live_watch_loop_exits_on_escape(tmp_path, monkeypatch):
 
     assert printed == []
     assert updates == []
+
+
+def test_live_watch_uses_msvcrt_on_windows(monkeypatch):
+    calls = []
+
+    class _Msvcrt:
+        @staticmethod
+        def kbhit():
+            calls.append("kbhit")
+            return True
+
+        @staticmethod
+        def getwch():
+            calls.append("getwch")
+            return "\x1b"
+
+    monkeypatch.setattr(live.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "msvcrt", _Msvcrt)
+
+    assert live._escape_pressed(_TtyInput(), timeout=0.01) is True
+    with live._raw_terminal(_TtyInput()):
+        calls.append("raw")
+
+    assert calls == ["kbhit", "getwch", "raw"]
 
 
 class _TtyInput:
