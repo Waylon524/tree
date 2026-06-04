@@ -9,6 +9,7 @@ TREE 的核心目标不是简单总结资料，而是生成能够被“零基础
 - [当前能力](#当前能力)
 - [整体流程](#整体流程)
 - [安装](#安装)
+- [卸载与删除](#卸载与删除)
 - [初始化与配置](#初始化与配置)
 - [准备资料](#准备资料)
 - [运行 TREE](#运行-tree)
@@ -144,6 +145,51 @@ pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
 更新不会删除课程工作区中的 `materials/`、`outputs/` 和 `.tree/`。
+
+## 卸载与删除
+
+如果 TREE 或 embedding server 正在运行，先在 `TREE>` 中执行 `/quit`，或在终端中执行：
+
+```bash
+tre embedding stop
+tre stop
+```
+
+卸载通过 `pipx` 安装的 TREE 程序：
+
+```bash
+pipx uninstall tree-engine
+```
+
+这只会删除 `tree-engine` 命令和它的 Python 环境，不会删除课程 workspace 中的资料、输出或运行时文件。
+
+清理当前课程 workspace 的运行时产物：
+
+```bash
+tre clean
+```
+
+`tre clean` 只删除当前目录下的 `.tree/runtime/`，不会删除 `materials/` 或 `outputs/`。如果你确定要删除当前 workspace 的全部 TREE 配置和运行状态，可以手动删除：
+
+```bash
+rm -rf .tree
+```
+
+删除自动下载的默认 embedding 模型缓存：
+
+```bash
+rm -rf ~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B-GGUF
+```
+
+如果你设置过 `HF_HOME`，Hugging Face 缓存会在 `$HF_HOME/hub/` 下；请删除其中的 `models--Qwen--Qwen3-Embedding-0.6B-GGUF` 目录。
+
+删除 TREE 的全局配置和全局 embedding 服务状态：
+
+```bash
+rm -rf ~/.tree
+```
+
+这会删除全局 `config.env`、embedding server 的 pid/log 等服务状态。执行前请确认你不再需要其中保存的 API 配置。
 
 ## 初始化与配置
 
