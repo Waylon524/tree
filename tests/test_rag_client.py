@@ -5,6 +5,15 @@ import pytest
 from tree.rag.client import RAGClient
 
 
+def test_default_dimensions_match_qwen3_embedding_0_6b(tmp_path):
+    rag = RAGClient(store_path=tmp_path / "rag", embedder=_FakeEmbedder())
+
+    try:
+        assert rag.dimensions == 1024
+    finally:
+        rag.close()
+
+
 class _FakeEmbedder:
     def embed(self, texts: str | list[str]) -> list[list[float]]:
         if isinstance(texts, str):

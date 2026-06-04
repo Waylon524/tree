@@ -1,6 +1,6 @@
 """Local embedding client (OpenAI-compatible /v1/embeddings API).
 
-Works with the Qwen3-Embedding-4B local server (tree.rag.server) or any
+Works with the Qwen3 Embedding local server (tree.rag.server) or any
 OpenAI-compatible embedding endpoint.
 """
 
@@ -12,7 +12,7 @@ import urllib.request
 logger = logging.getLogger(__name__)
 
 _DEFAULT_URL = "http://localhost:8788"
-_DEFAULT_MODEL = "Qwen3-Embedding-4B-Q8_0"
+_DEFAULT_MODEL = "Qwen3-Embedding-0.6B-Q8_0"
 
 
 class EmbeddingClient:

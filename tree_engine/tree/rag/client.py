@@ -25,7 +25,7 @@ from tree.rag.embed import EmbeddingClient
 logger = logging.getLogger(__name__)
 
 _COLLECTION = "tree-knowledge"
-_DEFAULT_DIMENSIONS = 2560  # Qwen3-Embedding-4B-Q8_0 full dimensions
+_DEFAULT_DIMENSIONS = 1024  # Qwen3-Embedding-0.6B-Q8_0 full dimensions
 
 _FILTERABLE_KEYS = (
     "file_seq", "chunk_type", "section_id", "filename",

@@ -106,7 +106,7 @@ pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 tre
 ```
 
-首次启动时，TREE 会检查本机是否已有 `Qwen3-Embedding-4B-Q8_0.gguf`。如果没有，TREE 会自动从 Hugging Face 下载模型并启动本地 embedding server；后续运行会复用本机缓存。
+首次启动时，TREE 会检查本机是否已有 `Qwen3-Embedding-0.6B-Q8_0.gguf`。如果没有，TREE 会自动从 Hugging Face 下载模型并启动本地 embedding server；后续运行会复用本机缓存。
 
 在 WSL2 中运行时，建议把课程 workspace、`.tree/runtime/` 和 embedding 模型都放在 WSL2
 自己的 Linux 文件系统中，例如 `~/courses/my-class/`，不要直接放在 `/mnt/c/...` 下，以免文件
@@ -303,19 +303,19 @@ TREE 的 RAG 默认使用本地 OpenAI-compatible embeddings endpoint：
 http://localhost:8788/v1/embeddings
 ```
 
-项目内置 Qwen3-Embedding-4B GGUF server。普通用户不需要手动启动：进入 `TREE>` 后，`/run` 会在需要 RAG 时自动检查模型、下载缺失模型并启动本地 embedding server；`/quit` 会停止 TREE 托管的 engine 和 embedding server。
+项目内置 Qwen3 Embedding GGUF server，默认使用更轻量的 0.6B Q8 模型。普通用户不需要手动启动：进入 `TREE>` 后，`/run` 会在需要 RAG 时自动检查模型、下载缺失模型并启动本地 embedding server；`/quit` 会停止 TREE 托管的 engine 和 embedding server。
 
 默认模型：
 
 ```text
-Qwen/Qwen3-Embedding-4B-GGUF
-Qwen3-Embedding-4B-Q8_0.gguf
+Qwen/Qwen3-Embedding-0.6B-GGUF
+Qwen3-Embedding-0.6B-Q8_0.gguf
 ```
 
 如果 Hugging Face 无法访问，也可以先下载 GGUF 文件并指定本地路径：
 
 ```bash
-EMBED_MODEL_PATH=/path/to/Qwen3-Embedding-4B-Q8_0.gguf tre
+EMBED_MODEL_PATH=/path/to/Qwen3-Embedding-0.6B-Q8_0.gguf tre
 ```
 
 如果 `EMBED_API_URL` 指向非本机地址，TREE 会认为你使用外部 embedding endpoint，并跳过本地模型下载和 server 自动启动。
@@ -466,7 +466,7 @@ Embedding 相关环境变量：
 
 ```bash
 EMBED_API_URL=http://localhost:8788
-EMBED_MODEL=Qwen3-Embedding-4B-Q8_0
+EMBED_MODEL=Qwen3-Embedding-0.6B-Q8_0
 EMBED_MODEL_PATH=
 EMBED_AUTO_DOWNLOAD=true
 EMBED_AUTO_START=true
@@ -484,7 +484,7 @@ curl http://localhost:8788/health
 ```bash
 curl -X POST http://localhost:8788/v1/embeddings \
   -H "Content-Type: application/json" \
-  -d '{"model":"Qwen3-Embedding-4B-Q8_0","input":"化学平衡状态是正逆反应速率相等的状态"}'
+  -d '{"model":"Qwen3-Embedding-0.6B-Q8_0","input":"化学平衡状态是正逆反应速率相等的状态"}'
 ```
 
 如果你希望在 macOS 上使用 Metal，需要确保 `llama-cpp-python` 是带 Metal 支持编译安装的版本。

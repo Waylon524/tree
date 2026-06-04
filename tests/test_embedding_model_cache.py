@@ -5,10 +5,18 @@ from __future__ import annotations
 import pytest
 
 
+def test_default_embedding_model_metadata_targets_0_6b():
+    from tree.rag import model_cache
+
+    assert model_cache.HF_REPO == "Qwen/Qwen3-Embedding-0.6B-GGUF"
+    assert model_cache.GGUF_FILE == "Qwen3-Embedding-0.6B-Q8_0.gguf"
+    assert model_cache.MODEL_NAME == "Qwen3-Embedding-0.6B-Q8_0"
+
+
 def test_env_model_path_is_used_without_download(tmp_path, monkeypatch):
     from tree.rag import model_cache
 
-    model = tmp_path / "Qwen3-Embedding-4B-Q8_0.gguf"
+    model = tmp_path / "Qwen3-Embedding-0.6B-Q8_0.gguf"
     model.write_text("model", encoding="utf-8")
     downloads = []
 

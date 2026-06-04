@@ -6,9 +6,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-HF_REPO = "Qwen/Qwen3-Embedding-4B-GGUF"
-GGUF_FILE = "Qwen3-Embedding-4B-Q8_0.gguf"
-MODEL_NAME = "Qwen3-Embedding-4B-Q8_0"
+HF_REPO = "Qwen/Qwen3-Embedding-0.6B-GGUF"
+GGUF_FILE = "Qwen3-Embedding-0.6B-Q8_0.gguf"
+MODEL_NAME = "Qwen3-Embedding-0.6B-Q8_0"
 
 
 class EmbeddingModelError(RuntimeError):
@@ -88,8 +88,8 @@ def _try_hf_cache() -> Path | None:
 
 def _try_legacy_hf_cache_glob() -> Path | None:
     pattern = (
-        ".cache/huggingface/hub/models--Qwen--Qwen3-Embedding-4B-GGUF/"
-        "snapshots/*/Qwen3-Embedding-4B-Q8_0.gguf"
+        ".cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B-GGUF/"
+        "snapshots/*/Qwen3-Embedding-0.6B-Q8_0.gguf"
     )
     for path in Path.home().glob(pattern):
         if path.is_file():

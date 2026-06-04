@@ -1,6 +1,6 @@
-"""Local Qwen3-Embedding-4B embedding server (OpenAI-compatible API).
+"""Local Qwen3 Embedding server (OpenAI-compatible API).
 
-Loads Qwen3-Embedding-4B-Q8_0 (GGUF) via llama-cpp-python and serves
+Loads the configured Qwen3 Embedding GGUF via llama-cpp-python and serves
 /v1/embeddings + /health on EMBED_PORT (default 8788).
 
     python -m tree.rag.server                 # 0.0.0.0:8788, all GPU layers
@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     _model = None
 
 
-app = FastAPI(title="Qwen3-Embedding-4B Server", lifespan=lifespan)
+app = FastAPI(title="Qwen3 Embedding Server", lifespan=lifespan)
 
 
 @app.get("/v1/models")
@@ -138,7 +138,7 @@ def _resolve_model_path() -> Path | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Qwen3-Embedding-4B local embedding server")
+    parser = argparse.ArgumentParser(description="Qwen3 Embedding local server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
     parser.add_argument("--n-gpu-layers", type=int, default=-1, help="GPU layers: -1=all, 0=CPU only")
