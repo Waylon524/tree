@@ -76,13 +76,26 @@ python3.12 -m pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
-Windows PowerShell：
+Windows：
+
+TREE 暂时不支持原生 Windows（PowerShell / CMD）完整运行。完整端到端流程依赖本地
+embedding / RAG 组件，其中 `llama-cpp-python` 等原生依赖在 Windows 上安装和运行不稳定。
+Windows 用户请优先使用 WSL2 Ubuntu，在 WSL2 里按 Linux 环境安装和运行 TREE。
+
+先在 Windows PowerShell 中安装并进入 WSL2：
 
 ```powershell
-py --version
+wsl --install -d Ubuntu
+wsl
+```
+
+然后在 WSL2 Ubuntu 终端中安装：
+
+```bash
+python3.12 --version
 git --version
-py -m pip install --user pipx
-py -m pipx ensurepath
+python3.12 -m pip install --user pipx
+python3.12 -m pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
@@ -93,6 +106,10 @@ tre
 ```
 
 首次启动时，TREE 会检查本机是否已有 `Qwen3-Embedding-4B-Q8_0.gguf`。如果没有，TREE 会自动从 Hugging Face 下载模型并启动本地 embedding server；后续运行会复用本机缓存。
+
+在 WSL2 中运行时，建议把课程 workspace、`.tree/runtime/` 和 embedding 模型都放在 WSL2
+自己的 Linux 文件系统中，例如 `~/courses/my-class/`，不要直接放在 `/mnt/c/...` 下，以免文件
+IO 和本地向量库访问明显变慢。
 
 即可进入 `TREE>` 交互界面。
 
@@ -321,14 +338,17 @@ pip install -e ".[rag,dev]"
 tre doctor
 ```
 
-Windows PowerShell：
+Windows：
 
-```powershell
+暂不支持在原生 Windows PowerShell / CMD 中运行源码开发环境。Windows 开发请使用 WSL2
+Ubuntu，并在 WSL2 终端中执行与 macOS / Linux 相同的步骤：
+
+```bash
 git clone <TREE_REPOSITORY_URL> Tree
 cd Tree
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install -e ".[rag,dev]"
 tre doctor
 ```
@@ -611,16 +631,17 @@ PYTHONPATH=tree_engine .venv/bin/python -m pytest -q tests/test_step9_dashboard_
 
 ### `tre` 找不到命令
 
-如果刚运行过 `pipx ensurepath`，请重新打开终端，然后检查：
+如果刚运行过 `pipx ensurepath`，请重新打开安装 TREE 的终端，然后检查。macOS / Linux /
+WSL2 Ubuntu：
 
 ```bash
 pipx list
 ```
 
-Windows PowerShell：
+如果需要从 Windows PowerShell 检查 WSL2 内的 `pipx` 安装状态：
 
 ```powershell
-pipx list
+wsl -e bash -lc "pipx list"
 ```
 
 ### 缺少 LLM 配置
@@ -648,13 +669,18 @@ PADDLEOCR_API_TOKEN=...
 
 ### RAG indexer unavailable
 
-完整端到端运行需要安装 `[rag]`。如果本地没有 embedding 模型，首次启动 TREE 会自动下载并启动本地 embedding server：
+完整端到端运行需要安装 `[rag]`。如果本地没有 embedding 模型，首次启动 TREE 会自动下载并启动本地 embedding server。
+
+macOS / Linux / WSL2：
 
 ```bash
 pip install -e ".[rag,dev]"
 ```
 
 回到同一 workspace 后进入 `TREE>`，运行 `/run`。
+
+原生 Windows 暂不支持本地 `[rag]` 安装和运行。请改用 WSL2 Ubuntu，或在后续版本支持外部
+embedding endpoint 后配置 `EMBED_API_URL`。
 
 ### 清理运行时产物
 
