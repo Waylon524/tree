@@ -216,6 +216,17 @@ outputs/
 - Examiner / Student / Writer / Archivist / Dagger 五个角色模型
 - PaddleOCR API key
 
+### PaddleOCR API Key 获取方法
+
+TREE 使用 PaddleOCR 处理 PDF 和图片资料的版式、公式、表格和图像内容。PaddleOCR 是开源 OCR 项目，当前官方服务每天提供 20000 页免费解析额度。
+
+获取 API Key：
+
+1. 打开 [PaddleOCR 服务页面](https://aistudio.baidu.com/paddleocr)。
+2. 登录或注册百度 AI Studio 账号。
+3. 在页面中开通 / 创建 PaddleOCR 服务，并复制生成的 API Key。
+4. 回到 `TREE>` 运行 `/setup`，在 `PaddleOCR API key` 步骤粘贴该 Key。
+
 TREE 有五个 LLM 角色。普通用户可以在 `/setup` 中直接接受默认角色模型，也可以按需覆盖：
 
 ```text
