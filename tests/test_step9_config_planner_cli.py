@@ -210,6 +210,36 @@ def test_setup_wizard_writes_global_config(tmp_path, monkeypatch):
     assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in config
 
 
+def test_setup_wizard_defaults_to_deepseek_v4_flash(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    input_text = "\n".join(
+        [
+            "llm-key",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "ocr-key",
+            "",
+        ]
+    )
+
+    result = CliRunner().invoke(app, ["setup"], input=input_text)
+
+    assert result.exit_code == 0
+    config = (tmp_path / "home" / "config.env").read_text(encoding="utf-8")
+    assert "LLM_MODEL=deepseek-v4-flash" in config
+    assert "EXAMINER_MODEL=deepseek-v4-flash" in config
+    assert "STUDENT_MODEL=deepseek-v4-flash" in config
+    assert "WRITER_MODEL=deepseek-v4-flash" in config
+    assert "ARCHIVIST_MODEL=deepseek-v4-flash" in config
+    assert "DAGGER_MODEL=deepseek-v4-flash" in config
+
+
 def test_setup_wizard_workspace_scope(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))

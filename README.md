@@ -84,26 +84,33 @@ TREE 暂时不支持原生 Windows（PowerShell / CMD）完整运行。完整端
 embedding / RAG 组件，其中 `llama-cpp-python` 等原生依赖在 Windows 上安装和运行不稳定。
 Windows 用户请优先使用 WSL2 Ubuntu，在 WSL2 里按 Linux 环境安装和运行 TREE。
 
-先在 Windows PowerShell 中安装并进入 WSL2：
+先在 Windows PowerShell 中安装 WSL。`wsl --install` 会自动安装默认 Ubuntu；如果系统提示重启，
+请重启后重新打开 PowerShell，再执行 `wsl` 进入 Ubuntu 终端：
 
 ```powershell
-wsl --install -d Ubuntu
+wsl --install
 wsl
 ```
 
-然后在 WSL2 Ubuntu 终端中安装：
+然后在 WSL2 Ubuntu 终端中安装 Git、Python、pipx，并用 pipx 安装 TREE：
 
 ```bash
-python --version
+sudo apt update
+sudo apt install -y git python3 python3-pip python3-venv pipx
+
+python3 --version
 git --version
-python -m pip install --user pipx
-python -m pipx ensurepath
+pipx --version
+pipx ensurepath
 pipx install "tree-engine[rag] @ git+https://github.com/Waylon524/tree.git"
 ```
 
-如果 `pipx ensurepath` 修改了 PATH，请重新打开终端。安装后在任意课程文件夹运行：
+请确认 `python3 --version` 是 `3.12` 或更高。如果 `pipx ensurepath` 修改了 PATH，请关闭当前
+Ubuntu 终端并重新执行 `wsl` 进入。安装后在 WSL2 的 Linux 文件系统中创建课程目录并运行：
 
 ```bash
+mkdir -p ~/courses/my-class
+cd ~/courses/my-class
 tre
 ```
 
@@ -215,6 +222,18 @@ outputs/
 - Default LLM model
 - Examiner / Student / Writer / Archivist / Dagger 五个角色模型
 - PaddleOCR API key
+
+### 推荐 LLM 模型
+
+普通用户推荐使用 DeepSeek 的 `deepseek-v4-flash`。先在 [DeepSeek API Keys](https://platform.deepseek.com/api_keys) 页面创建 API key，然后在 `/setup` 中按下面填写：
+
+```text
+Shared LLM / agent API key: <你的 DeepSeek API key>
+LLM base URL: https://api.deepseek.com
+Default LLM model: deepseek-v4-flash
+```
+
+五个角色模型如果没有特殊需求，可以直接回车接受默认值，复用 `deepseek-v4-flash`。
 
 ### PaddleOCR API Key 获取方法
 

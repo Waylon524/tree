@@ -89,7 +89,7 @@ class Settings:
 
         default_key = os.environ.get("LLM_API_KEY", "")
         default_url = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
-        default_model = os.environ.get("LLM_MODEL", "deepseek-chat")
+        default_model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
 
         if require_llm and not default_key:
             any_key = any(os.environ.get(f"{r.upper()}_API_KEY") for r in ROLES)

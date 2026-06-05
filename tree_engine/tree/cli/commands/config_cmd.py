@@ -16,7 +16,7 @@ from tree.io import paths
 
 _DEFAULT_ENV = {
     "LLM_BASE_URL": "https://api.deepseek.com",
-    "LLM_MODEL": "deepseek-chat",
+    "LLM_MODEL": "deepseek-v4-flash",
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
 }

@@ -56,6 +56,18 @@ def test_settings_default_llm_timeout_is_480_seconds(monkeypatch, tmp_path):
     assert Settings.from_env(project_root=tmp_path, require_llm=False).llm_timeout_sec == 480.0
 
 
+def test_settings_default_model_is_deepseek_v4_flash(monkeypatch, tmp_path):
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    for role in model_client.ROLES:
+        monkeypatch.delenv(f"{role.upper()}_MODEL", raising=False)
+
+    settings = Settings.from_env(project_root=tmp_path, require_llm=False)
+
+    for role in model_client.ROLES:
+        assert settings.role(role).model == "deepseek-v4-flash"
+
+
 def test_settings_default_dagger_repair_attempts_is_three(monkeypatch, tmp_path):
     monkeypatch.delenv("DAGGER_REPAIR_ATTEMPTS", raising=False)
     assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_repair_attempts == 3
