@@ -68,6 +68,31 @@ def test_missing_model_downloads_from_huggingface(tmp_path, monkeypatch):
     assert result.source == "downloaded"
 
 
+def test_huggingface_download_uses_embedding_hf_endpoint(tmp_path, monkeypatch):
+    from tree.rag import model_cache
+    import huggingface_hub
+
+    downloaded = tmp_path / "downloaded.gguf"
+    downloaded.write_text("model", encoding="utf-8")
+    call = {}
+
+    def fake_download(**kwargs):
+        call.update(kwargs)
+        return str(downloaded)
+
+    monkeypatch.setenv("EMBED_HF_ENDPOINT", " https://hf-mirror.com/ ")
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+
+    result = model_cache._download_from_huggingface()
+
+    assert result == downloaded
+    assert call == {
+        "repo_id": model_cache.HF_REPO,
+        "filename": model_cache.GGUF_FILE,
+        "endpoint": "https://hf-mirror.com",
+    }
+
+
 def test_missing_model_with_download_disabled_raises_clear_error(monkeypatch):
     from tree.rag import model_cache
 

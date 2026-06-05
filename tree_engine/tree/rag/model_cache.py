@@ -106,7 +106,12 @@ def _download_from_huggingface() -> Path:
             "Install tree-engine with the [rag] extra."
         ) from exc
 
-    return Path(hf_hub_download(repo_id=HF_REPO, filename=GGUF_FILE))
+    return Path(hf_hub_download(repo_id=HF_REPO, filename=GGUF_FILE, endpoint=_hf_endpoint()))
+
+
+def _hf_endpoint() -> str | None:
+    raw = os.environ.get("EMBED_HF_ENDPOINT", "").strip()
+    return raw.rstrip("/") if raw else None
 
 
 def _env_bool(name: str, default: bool) -> bool:

@@ -369,7 +369,21 @@ Qwen/Qwen3-Embedding-0.6B-GGUF
 Qwen3-Embedding-0.6B-Q8_0.gguf
 ```
 
-如果 Hugging Face 无法访问，也可以先下载 GGUF 文件并指定本地路径：
+如果 Hugging Face 官方站访问慢或无法访问，可以让自动下载改用 mirror endpoint：
+
+```bash
+EMBED_HF_ENDPOINT=https://hf-mirror.com tre
+```
+
+长期使用可以写入 shell 配置：
+
+```bash
+export EMBED_HF_ENDPOINT=https://hf-mirror.com
+```
+
+`EMBED_HF_ENDPOINT` 只影响 embedding 模型文件下载；模型启动后，TREE 仍然默认访问本机 `http://localhost:8788/v1/embeddings`。
+
+也可以先下载 GGUF 文件并指定本地路径：
 
 ```bash
 EMBED_MODEL_PATH=/path/to/Qwen3-Embedding-0.6B-Q8_0.gguf tre
@@ -525,6 +539,7 @@ Embedding 相关环境变量：
 EMBED_API_URL=http://localhost:8788
 EMBED_MODEL=Qwen3-Embedding-0.6B-Q8_0
 EMBED_MODEL_PATH=
+EMBED_HF_ENDPOINT=
 EMBED_AUTO_DOWNLOAD=true
 EMBED_AUTO_START=true
 EMBED_SERVER_START_TIMEOUT_SEC=300
