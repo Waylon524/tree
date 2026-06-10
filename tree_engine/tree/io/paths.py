@@ -156,3 +156,11 @@ def ensure_workspace_dirs(root: Path) -> None:
         services_root(root),
     ):
         path.mkdir(parents=True, exist_ok=True)
+    _ensure_workspace_gitignore(root)
+
+
+def _ensure_workspace_gitignore(root: Path) -> None:
+    """Keep workspace config (API keys) and runtime state out of any enclosing git repo."""
+    gitignore = workspace_home(root) / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text("*\n", encoding="utf-8")

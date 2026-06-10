@@ -3,8 +3,11 @@
 Loads the configured Qwen3 Embedding GGUF via llama-cpp-python and serves
 /v1/embeddings + /health on EMBED_PORT (default 8788).
 
-    python -m tree.rag.server                 # 0.0.0.0:8788, all GPU layers
+    python -m tree.rag.server                 # 127.0.0.1:8788, all GPU layers
     python -m tree.rag.server --n-gpu-layers 0  # CPU only
+
+The server has no authentication; it binds loopback only unless --host is
+passed explicitly.
 """
 
 import argparse
@@ -139,7 +142,7 @@ def _resolve_model_path() -> Path | None:
 
 def main():
     parser = argparse.ArgumentParser(description="Qwen3 Embedding local server")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)
     parser.add_argument("--n-gpu-layers", type=int, default=-1, help="GPU layers: -1=all, 0=CPU only")
     parser.add_argument("--n-ctx", type=int, default=_DEFAULT_N_CTX)

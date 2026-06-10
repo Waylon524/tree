@@ -138,6 +138,9 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
     keys = [key for key in _WRITE_ORDER if values.get(key)]
     keys.extend(sorted(key for key, value in values.items() if value and key not in set(keys)))
     lines = [f"{key}={values[key]}" for key in keys]
+    # Contains API keys: keep it owner-only. No-op on filesystems without POSIX modes.
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 

@@ -3,10 +3,13 @@
 Roles: examiner, student, writer, archivist, dagger.
 Load order: ~/.tree/config.env  ->  ./.env  ->  ./.tree/config.env
 Blank values never override an already-set key.
+Workspace files (./.env, ./.tree/config.env) may only override *_BASE_URL /
+PADDLEOCR_API_URL when the same file also sets the matching API key/token.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,7 +18,18 @@ from dotenv import dotenv_values
 
 from tree.io import paths
 
+logger = logging.getLogger(__name__)
+
 ROLES = ("examiner", "student", "writer", "archivist", "dagger")
+
+# Endpoint keys a workspace-level (untrusted, cwd-controlled) env file may only set
+# when the same file also provides the credential that would be sent to that endpoint.
+# Otherwise a malicious workspace could redirect globally-configured API keys.
+_ENDPOINT_CREDENTIAL_KEYS: dict[str, tuple[str, ...]] = {
+    "LLM_BASE_URL": ("LLM_API_KEY",),
+    "PADDLEOCR_API_URL": ("PADDLEOCR_API_TOKEN",),
+    **{f"{role.upper()}_BASE_URL": (f"{role.upper()}_API_KEY", "LLM_API_KEY") for role in ROLES},
+}
 
 
 class ConfigurationError(Exception):
@@ -84,8 +98,8 @@ class Settings:
     def from_env(cls, project_root: Path | None = None, require_llm: bool = True) -> "Settings":
         root = project_root or Path.cwd()
         _load_env_file(paths.global_config_path())
-        _load_env_file(paths.legacy_workspace_env_path(root))
-        _load_env_file(paths.workspace_config_path(root))
+        _load_env_file(paths.legacy_workspace_env_path(root), trusted=False)
+        _load_env_file(paths.workspace_config_path(root), trusted=False)
 
         default_key = os.environ.get("LLM_API_KEY", "")
         default_url = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
@@ -153,12 +167,24 @@ def _role_config(role: str, default_key: str, default_url: str, default_model: s
     )
 
 
-def _load_env_file(path: Path, *, override: bool = True) -> None:
+def _load_env_file(path: Path, *, override: bool = True, trusted: bool = True) -> None:
     if not path.exists():
         return
-    for key, value in dotenv_values(path).items():
-        if value is None or value == "":
-            continue
+    values = {
+        key: value for key, value in dotenv_values(path).items() if value is not None and value != ""
+    }
+    for key, value in values.items():
+        if not trusted and key in _ENDPOINT_CREDENTIAL_KEYS:
+            required = _ENDPOINT_CREDENTIAL_KEYS[key]
+            if not any(values.get(credential) for credential in required):
+                logger.warning(
+                    "Ignoring %s from %s: workspace config may only set it together with %s "
+                    "in the same file.",
+                    key,
+                    path,
+                    " or ".join(required),
+                )
+                continue
         if override or key not in os.environ:
             os.environ[key] = value
 
