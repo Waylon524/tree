@@ -7,6 +7,7 @@ dashboard rendering in tree/cli/dashboard/*.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import shutil
 import sys
 from pathlib import Path
@@ -67,13 +68,18 @@ def doctor() -> None:
     rprint(f"  {theme.label('workspace')}        : {theme.path(root)}")
     rprint(f"  {theme.label('materials/')}       : {_exists(paths.materials_root(root))}")
     rprint(f"  {theme.label('.tree/runtime/')}   : {_exists(paths.runtime_root(root))}")
-    try:
-        import qdrant_client  # noqa: F401
-        import llama_cpp  # noqa: F401
-
+    if importlib.util.find_spec("qdrant_client") is not None:
         rprint(f"  {theme.label('rag deps')}         : {theme.status('installed')}")
-    except Exception:
+    else:
         rprint(f"  {theme.label('rag deps')}         : [yellow]missing (pip install '.[rag]')[/yellow]")
+    local_missing = [m for m in ("llama_cpp", "fastapi", "uvicorn") if importlib.util.find_spec(m) is None]
+    if not local_missing:
+        rprint(f"  {theme.label('local embed')}      : {theme.status('installed')}")
+    else:
+        rprint(
+            f"  {theme.label('local embed')}      : "
+            f"[yellow]missing (pip install '.[local-embed]', or set EMBED_API_URL)[/yellow]"
+        )
     rprint(f"  {theme.label('embedding model')}  : {theme.status(embedding_model_status())}")
     rprint(f"  {theme.label('embedding server')} : {theme.status(embedding_service_status())}")
 

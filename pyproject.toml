@@ -17,10 +17,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Portable RAG stack: vector store + model-cache discovery. Works on all
+# platforms (incl. native Windows) and is enough to run the pipeline against
+# any OpenAI-compatible embeddings endpoint (e.g. a local Ollama server).
 rag = [
-    "llama-cpp-python>=0.3.0",
-    "huggingface-hub>=0.20.0",
     "qdrant-client>=1.14.0",
+    "huggingface-hub>=0.20.0",
+]
+# Self-hosted local embedding server (tree.rag.server). Pulls native deps that
+# are painful on native Windows; Windows users should prefer an external
+# endpoint via EMBED_API_URL instead of installing this.
+local-embed = [
+    "llama-cpp-python>=0.3.0",
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
 ]

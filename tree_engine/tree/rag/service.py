@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
-import signal
-import subprocess
 import sys
 import time
 import urllib.request
@@ -13,10 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from tree.io import paths
+from tree.io import paths, process
 from tree.rag.model_cache import ensure_embedding_model
 
 DEFAULT_EMBED_API_URL = "http://localhost:8788"
+
+# Native deps required only to host the embedding server locally (the [local-embed]
+# extra). The embedding *client* and an external endpoint need none of these.
+_LOCAL_SERVER_MODULES = ("llama_cpp", "fastapi", "uvicorn")
 
 
 @dataclass(frozen=True)
@@ -40,22 +43,22 @@ def start_embedding_service(*, timeout_sec: float | None = None) -> EmbeddingSer
     pid_path = paths.service_pid_path(root, "embedding")
     if pid_path.exists():
         pid = _read_pid(pid_path)
-        if pid is not None and _pid_alive(pid):
+        if pid is not None and process.pid_alive(pid):
             if _wait_for_health(base_url, timeout_sec=timeout_sec):
                 return EmbeddingServiceResult("running", f"embedding server running (pid {pid})")
-            _kill_pid(pid)
+            process.terminate_pid(pid)
         pid_path.unlink(missing_ok=True)
 
+    _require_local_server_deps()
     model = ensure_embedding_model()
     host, port = _host_port(base_url)
     log_path = paths.service_log_path(root, "embedding")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = log_path.open("ab")
-    proc = subprocess.Popen(
+    proc = process.spawn_detached(
         [sys.executable, "-m", "tree.rag.server", "--host", host, "--port", str(port)],
         stdout=log,
         stderr=log,
-        start_new_session=True,
     )
     pid_path.write_text(str(proc.pid), encoding="utf-8")
     if not _wait_for_health(base_url, timeout_sec=timeout_sec):
@@ -75,19 +78,22 @@ def stop_embedding_service(*, force: bool = False) -> EmbeddingServiceResult:
         return EmbeddingServiceResult("not found", "embedding server not found")
     pid = _read_pid(pid_path)
     if pid is not None:
-        _kill_pid(pid, force=force)
+        process.terminate_pid(pid, force=force)
     pid_path.unlink(missing_ok=True)
     return EmbeddingServiceResult("stopped", f"embedding server stopped (pid {pid})")
 
 
 def embedding_service_status() -> str:
     base_url = _embed_base_url()
+    if not _env_bool("EMBED_AUTO_START", True):
+        # User brings their own endpoint (e.g. Ollama on loopback); not TREE-managed.
+        return "external"
     if not _is_local_embed_url(base_url):
         return "external"
     if _embedding_health(base_url):
         return "running"
     pid = _read_pid(paths.service_pid_path(Path.cwd(), "embedding"))
-    if pid is not None and _pid_alive(pid):
+    if pid is not None and process.pid_alive(pid):
         return "starting"
     return "not found"
 
@@ -145,26 +151,17 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-
-
-def _kill_pid(pid: int, *, force: bool = False) -> None:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+def _require_local_server_deps() -> None:
+    """Fail fast with actionable guidance instead of timing out on a dead server."""
+    missing = [name for name in _LOCAL_SERVER_MODULES if importlib.util.find_spec(name) is None]
+    if not missing:
         return
-    if force:
-        time.sleep(0.1)
-        if _pid_alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                return
+    raise RuntimeError(
+        "Local embedding server needs the [local-embed] extra "
+        f"(missing: {', '.join(missing)}). Install it with "
+        "`pip install 'tree-engine[local-embed]'`, or point EMBED_API_URL at an "
+        "external OpenAI-compatible embeddings endpoint (e.g. Ollama)."
+    )
 
 
 def _env_bool(name: str, default: bool) -> bool:

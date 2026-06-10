@@ -168,12 +168,15 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
     class _Proc:
         pid = 4242
 
-    def _fake_popen(cmd, cwd, stdout, stderr, start_new_session):
-        started.append((cmd, cwd, start_new_session))
+    def _fake_spawn(cmd, *, cwd=None, stdout=None, stderr=None):
+        started.append((cmd, cwd))
         return _Proc()
 
-    monkeypatch.setattr("tree.cli.commands.lifecycle.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr("tree.cli.commands.lifecycle._kill_pid", lambda pid: killed.append(pid))
+    monkeypatch.setattr("tree.cli.commands.lifecycle.process.spawn_detached", _fake_spawn)
+    monkeypatch.setattr(
+        "tree.cli.commands.lifecycle.process.terminate_pid",
+        lambda pid, *, force=False: killed.append(pid),
+    )
     monkeypatch.setattr(
         "tree.cli.commands.lifecycle.start_embedding_service",
         lambda: embedding_starts.append("embedding") or SimpleNamespace(message="embedding started"),
