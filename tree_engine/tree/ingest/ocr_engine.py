@@ -65,23 +65,28 @@ class OCREngine:
 
     def __new__(cls, job_url: str | None = None, token: str | None = None, **kwargs):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._job_url = (job_url or os.environ.get("PADDLEOCR_API_URL", _DEFAULT_JOB_URL)).rstrip("/")
-            cls._instance._token = token or os.environ.get("PADDLEOCR_API_TOKEN", "")
-            cls._instance._model = kwargs.pop("model", os.environ.get("PADDLEOCR_MODEL", _DEFAULT_MODEL))
-            cls._instance._poll_interval = kwargs.pop("poll_interval", _POLL_INTERVAL)
-            cls._instance._poll_timeout = kwargs.pop("poll_timeout", _POLL_TIMEOUT)
-            cls._instance._pdf_max_pages_per_job = kwargs.pop(
+            instance = super().__new__(cls)
+            instance._job_url = (job_url or os.environ.get("PADDLEOCR_API_URL", _DEFAULT_JOB_URL)).rstrip("/")
+            instance._token = token or os.environ.get("PADDLEOCR_API_TOKEN", "")
+            instance._model = kwargs.pop("model", os.environ.get("PADDLEOCR_MODEL", _DEFAULT_MODEL))
+            instance._poll_interval = kwargs.pop("poll_interval", _POLL_INTERVAL)
+            instance._poll_timeout = kwargs.pop("poll_timeout", _POLL_TIMEOUT)
+            instance._pdf_max_pages_per_job = kwargs.pop(
                 "pdf_max_pages_per_job",
                 int(os.environ.get("SOURCE_OCR_PDF_MAX_PAGES_PER_JOB", _PDF_MAX_PAGES_PER_JOB)),
             )
-            cls._instance._ocr_concurrency = max(
+            instance._ocr_concurrency = max(
                 1, kwargs.pop("ocr_concurrency", int(os.environ.get("SOURCE_OCR_CONCURRENCY", _OCR_CONCURRENCY)))
             )
-            cls._ocr_semaphore = threading.BoundedSemaphore(cls._instance._ocr_concurrency)
-            cls._instance._options = {**_DEFAULT_OPTIONS, **kwargs.pop("options", {})}
-            cls._instance._client = httpx.Client(timeout=kwargs.pop("timeout", 30.0))
-            logger.info("OCR API client: %s", cls._instance._job_url)
+            instance._options = {**_DEFAULT_OPTIONS, **kwargs.pop("options", {})}
+            instance._client = httpx.Client(timeout=kwargs.pop("timeout", 30.0))
+            # Publish the singleton only after construction fully succeeds. Assigning
+            # cls._instance mid-init would cache a half-built object, so any later
+            # failure (e.g. httpx.Client) would surface as a confusing permanent
+            # `AttributeError: '_client'` on every request instead of the real cause.
+            cls._ocr_semaphore = threading.BoundedSemaphore(instance._ocr_concurrency)
+            cls._instance = instance
+            logger.info("OCR API client: %s", instance._job_url)
         elif "pdf_max_pages_per_job" in kwargs:
             cls._instance._pdf_max_pages_per_job = kwargs["pdf_max_pages_per_job"]
         elif "ocr_concurrency" in kwargs:
@@ -401,7 +406,9 @@ class OCREngine:
         return text
 
     def close(self):
-        self._client.close()
+        client = getattr(self, "_client", None)
+        if client is not None:
+            client.close()
 
     def _request_with_retries(
         self,

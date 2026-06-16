@@ -159,3 +159,32 @@ def test_pdf_chunk_retry_waits_for_completed_file_after_concurrency_error(tmp_pa
 
     assert engine._ocr_local_pdf(pdf).split("\n\n") == ["overloaded text", "slow text"]
     assert events.index("slow-complete") < events.index("overloaded-attempt-2")
+
+
+def test_failed_init_does_not_cache_broken_singleton(monkeypatch):
+    """A mid-init failure must not leave a half-built singleton (no '_client')."""
+    import tree.ingest.ocr_engine as oe
+
+    real_client = oe.httpx.Client
+    calls = {"n": 0}
+
+    def flaky_client(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(oe.httpx, "Client", flaky_client)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        oe.OCREngine(token="t")
+    # The real cause surfaced and no broken instance was cached.
+    assert oe.OCREngine._instance is None
+
+    engine = oe.OCREngine(token="t")
+    assert engine._client is not None  # would AttributeError under the old bug
+
+
+def test_close_without_client_is_safe():
+    bare = object.__new__(OCREngine)
+    bare.close()  # must not raise AttributeError: '_client'
