@@ -30,6 +30,7 @@ from tree.planner.svg import write_dag_svg
 from tree.rag.model_cache import EmbeddingModelError, embedding_model_status, ensure_embedding_model
 from tree.rag.service import (
     embedding_service_status,
+    local_embed_backend_status,
     start_embedding_service,
     stop_embedding_service,
 )
@@ -72,14 +73,7 @@ def doctor() -> None:
         rprint(f"  {theme.label('rag deps')}         : {theme.status('installed')}")
     else:
         rprint(f"  {theme.label('rag deps')}         : [yellow]missing (pip install '.[rag]')[/yellow]")
-    local_missing = [m for m in ("llama_cpp", "fastapi", "uvicorn") if importlib.util.find_spec(m) is None]
-    if not local_missing:
-        rprint(f"  {theme.label('local embed')}      : {theme.status('installed')}")
-    else:
-        rprint(
-            f"  {theme.label('local embed')}      : "
-            f"[yellow]missing (pip install '.[local-embed]', or set EMBED_API_URL)[/yellow]"
-        )
+    rprint(f"  {theme.label('local embed')}      : {theme.status(local_embed_backend_status())}")
     rprint(f"  {theme.label('embedding model')}  : {theme.status(embedding_model_status())}")
     rprint(f"  {theme.label('embedding server')} : {theme.status(embedding_service_status())}")
 

@@ -13,12 +13,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from tree.io import paths, process
+from tree.rag import llama_server
 from tree.rag.model_cache import ensure_embedding_model
 
 DEFAULT_EMBED_API_URL = "http://localhost:8788"
 
-# Native deps required only to host the embedding server locally (the [local-embed]
-# extra). The embedding *client* and an external endpoint need none of these.
+# Python deps for the in-process llama-cpp-python server (the [local-embed] extra).
+# The prebuilt llama-server binary backend needs none of these; the embedding
+# client and external endpoints need none either.
 _LOCAL_SERVER_MODULES = ("llama_cpp", "fastapi", "uvicorn")
 
 
@@ -49,17 +51,12 @@ def start_embedding_service(*, timeout_sec: float | None = None) -> EmbeddingSer
             process.terminate_pid(pid)
         pid_path.unlink(missing_ok=True)
 
-    _require_local_server_deps()
-    model = ensure_embedding_model()
     host, port = _host_port(base_url)
+    argv, backend, model_source = _resolve_server_launch(host, port)
     log_path = paths.service_log_path(root, "embedding")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = log_path.open("ab")
-    proc = process.spawn_detached(
-        [sys.executable, "-m", "tree.rag.server", "--host", host, "--port", str(port)],
-        stdout=log,
-        stderr=log,
-    )
+    proc = process.spawn_detached(argv, stdout=log, stderr=log)
     pid_path.write_text(str(proc.pid), encoding="utf-8")
     if not _wait_for_health(base_url, timeout_sec=timeout_sec):
         raise RuntimeError(
@@ -67,7 +64,8 @@ def start_embedding_service(*, timeout_sec: float | None = None) -> EmbeddingSer
             f"See {log_path}."
         )
     return EmbeddingServiceResult(
-        "started", f"embedding server started (pid {proc.pid}, model {model.source})"
+        "started",
+        f"embedding server started (pid {proc.pid}, backend {backend}, model {model_source})",
     )
 
 
@@ -119,10 +117,16 @@ def _host_port(base_url: str) -> tuple[str, int]:
 def _embedding_health(base_url: str) -> bool:
     try:
         with urllib.request.urlopen(f"{base_url}/health", timeout=1) as resp:
+            if resp.status != 200:
+                return False
             data = json.loads(resp.read())
     except Exception:
+        # llama-server returns HTTP 503 while still loading the model -> not ready.
         return False
-    return bool(data.get("loaded"))
+    if not isinstance(data, dict):
+        return False
+    # legacy FastAPI server reports {"loaded": true}; llama-server reports {"status": "ok"}.
+    return data.get("loaded") is True or data.get("status") == "ok"
 
 
 def _wait_for_health(base_url: str, *, timeout_sec: float | None = None) -> bool:
@@ -151,17 +155,74 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
-def _require_local_server_deps() -> None:
-    """Fail fast with actionable guidance instead of timing out on a dead server."""
+def _resolve_server_launch(host: str, port: int) -> tuple[list[str], str, str]:
+    """Pick a local embedding backend and return (argv, backend_label, model_source).
+
+    Fails fast with actionable guidance instead of timing out on a dead server.
+    """
+    backend = os.environ.get("EMBED_SERVER_BACKEND", "auto").strip().lower()
+    if backend not in {"auto", "llama-server", "python"}:
+        backend = "auto"
+
+    if backend == "python":
+        _require_python_server_deps()
+        return _python_launch(host, port)
+    if backend == "llama-server":
+        return _llama_server_launch(host, port)
+
+    # auto: keep existing [local-embed] installs on the in-process server (no
+    # behaviour change); otherwise fall back to the prebuilt llama-server binary.
+    if _python_server_deps_available():
+        return _python_launch(host, port)
+    try:
+        return _llama_server_launch(host, port)
+    except llama_server.LlamaServerError as exc:
+        raise RuntimeError(
+            "Cannot host a local embedding server: the [local-embed] python deps are "
+            f"not installed and no llama-server binary is available ({exc}). Either "
+            "install 'tree-engine[local-embed]', allow TREE to download llama-server "
+            "(default), or set EMBED_API_URL to an external OpenAI-compatible endpoint "
+            "(e.g. Ollama) together with EMBED_AUTO_START=false."
+        ) from exc
+
+
+def _python_launch(host: str, port: int) -> tuple[list[str], str, str]:
+    model = ensure_embedding_model()
+    argv = [sys.executable, "-m", "tree.rag.server", "--host", host, "--port", str(port)]
+    return argv, "python (llama-cpp-python)", model.source
+
+
+def _llama_server_launch(host: str, port: int) -> tuple[list[str], str, str]:
+    binary = llama_server.ensure_llama_server()
+    model = ensure_embedding_model()
+    argv = llama_server.build_argv(binary, model.path, host=host, port=port)
+    return argv, f"llama-server ({binary.name})", model.source
+
+
+def _python_server_deps_available() -> bool:
+    return all(importlib.util.find_spec(name) is not None for name in _LOCAL_SERVER_MODULES)
+
+
+def local_embed_backend_status() -> str:
+    """Read-only summary of how a local embedding server would be hosted (no download)."""
+    if _python_server_deps_available():
+        return "python (llama-cpp-python)"
+    found = llama_server.resolve_llama_server()
+    if found is not None:
+        return f"llama-server ({found.name})"
+    if not _env_bool("LLAMA_SERVER_AUTO_DOWNLOAD", True):
+        return "unavailable (set EMBED_API_URL or LLAMA_SERVER_BIN)"
+    return "llama-server (auto-download on first run)"
+
+
+def _require_python_server_deps() -> None:
     missing = [name for name in _LOCAL_SERVER_MODULES if importlib.util.find_spec(name) is None]
-    if not missing:
-        return
-    raise RuntimeError(
-        "Local embedding server needs the [local-embed] extra "
-        f"(missing: {', '.join(missing)}). Install it with "
-        "`pip install 'tree-engine[local-embed]'`, or point EMBED_API_URL at an "
-        "external OpenAI-compatible embeddings endpoint (e.g. Ollama)."
-    )
+    if missing:
+        raise RuntimeError(
+            "EMBED_SERVER_BACKEND=python needs the [local-embed] extra "
+            f"(missing: {', '.join(missing)}). Install 'tree-engine[local-embed]', use "
+            "EMBED_SERVER_BACKEND=llama-server, or point EMBED_API_URL at an external endpoint."
+        )
 
 
 def _env_bool(name: str, default: bool) -> bool:

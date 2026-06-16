@@ -22,6 +22,14 @@ def global_services_root() -> Path:
     return app_home() / "services"
 
 
+def llama_server_cache_root() -> Path:
+    """Per-user cache for TREE-managed prebuilt llama.cpp ``llama-server`` binaries."""
+    override = os.environ.get("LLAMA_SERVER_CACHE_DIR")
+    if override:
+        return Path(override).expanduser()
+    return app_home() / "bin"
+
+
 # --- workspace ---------------------------------------------------------------
 
 def workspace_home(root: Path) -> Path:
