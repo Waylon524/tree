@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TREE</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <span class="brand">T.R.E.E.</span>
+    <span class="workspace" title="workspace">{{ workspace }}</span>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="controls">
+        <button hx-post="/api/run" hx-target="#panel" hx-swap="innerHTML">Run</button>
+        <button class="ghost" hx-post="/api/stop" hx-target="#panel" hx-swap="innerHTML">Stop</button>
+        <span class="hint">Run starts the pipeline in the background; the panel refreshes every second.</span>
+      </div>
+      <div id="panel" hx-get="/partials/progress" hx-trigger="load, every 1s" hx-swap="innerHTML">
+        {% include "_progress.html" %}
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Knowledge DAG</h2>
+      <object id="dag" type="image/svg+xml" data="/dag.svg">
+        <p class="muted">DAG not generated yet — run the pipeline first.</p>
+      </object>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Outputs</h2>
+        <div hx-get="/partials/outputs" hx-trigger="load, every 5s" hx-swap="innerHTML">
+          <p class="muted">Loading…</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Reader</h2>
+        <article id="reader"><p class="muted">Select an output on the left.</p></article>
+      </div>
+    </section>
+
+    <section class="card">
+      <details>
+        <summary>Setup (global config)</summary>
+        <form hx-post="/api/setup" hx-target="#setup-result" hx-swap="innerHTML" class="setup">
+          <label>LLM API key <input type="password" name="llm_api_key" autocomplete="off"></label>
+          <label>LLM base URL <input type="text" name="llm_base_url" placeholder="https://api.deepseek.com"></label>
+          <label>LLM model <input type="text" name="llm_model" placeholder="deepseek-v4-flash"></label>
+          <label>PaddleOCR token <input type="password" name="paddleocr_api_token" autocomplete="off"></label>
+          <button type="submit">Save</button>
+          <span id="setup-result"></span>
+        </form>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

@@ -32,6 +32,14 @@ local-embed = [
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
 ]
+# Local browser GUI (tre gui): FastAPI + server-rendered HTML + htmx.
+gui = [
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+    "jinja2>=3.1.0",
+    "markdown>=3.5",
+    "python-multipart>=0.0.9",
+]
 dev = [
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
@@ -50,6 +58,9 @@ tree-run = "tree.cli.app:app"
 [tool.setuptools.packages.find]
 where = ["tree_engine"]
 include = ["tree*"]
+
+[tool.setuptools.package-data]
+"tree.gui" = ["templates/*.html", "static/*"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

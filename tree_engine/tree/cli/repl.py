@@ -23,6 +23,7 @@ _HELP_ROWS = (
     ("/materials", "list supported materials"),
     ("/run", "start the pipeline in the background"),
     ("/watch", "watch the dashboard until ESC"),
+    ("/gui", "launch the local browser GUI"),
     ("/status", "show workspace status"),
     ("/dag", "write the DAG SVG to outputs"),
     ("/stop", "stop the background engine"),
@@ -53,6 +54,9 @@ def run_repl() -> None:
             continue
         if command == "/watch":
             run_watch_panel(root, console=console)
+            continue
+        if command == "/gui":
+            _launch_gui(root)
             continue
         result = handle_slash_command(command, root=root)
         rprint(result)
@@ -88,6 +92,8 @@ def handle_slash_command(command: str, *, root: Path | None = None) -> str:
         return "Use /status or /watch inside TREE>; raw JSON is available with `tre progress`."
     if command == "/watch":
         return inspect.watch_text(root)
+    if command == "/gui":
+        return "Launching the browser GUI; press Ctrl+C to return. Or run `tre gui`."
     if command == "/materials":
         return inspect.materials_text(root)
     if command in {"/run", "/start"}:
@@ -99,6 +105,17 @@ def handle_slash_command(command: str, *, root: Path | None = None) -> str:
     if command == "/exit":
         return "Use /quit to stop TREE services and leave the shell."
     return f"Unknown command: {command}"
+
+
+def _launch_gui(root: Path) -> None:
+    from tree.gui.launch import GuiDependencyError, run_gui
+
+    try:
+        run_gui(root)
+    except GuiDependencyError as exc:
+        rprint(theme.label(str(exc)))
+    except KeyboardInterrupt:
+        rprint(theme.success("GUI stopped."))
 
 
 def _dag_text(root: Path) -> str:

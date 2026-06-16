@@ -1,0 +1,9 @@
+{% if files %}
+<ul class="outputs">
+  {% for name in files %}
+  <li><a href="#" hx-get="/outputs/{{ name }}" hx-target="#reader" hx-swap="innerHTML">{{ name }}</a></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No outputs yet — they appear here as nodes PASS.</p>
+{% endif %}

@@ -1,0 +1,33 @@
+<div class="status">
+  <span class="pill phase-{{ status.phase }}">{{ status.phase }}</span>
+  <span class="kv">materials <b>{{ status.materials }}</b></span>
+  <span class="kv">nodes <b>{{ status.nodes }}</b></span>
+  <span class="kv">edges <b>{{ status.edges }}</b></span>
+  <span class="kv">active <b>{{ status.active }}</b></span>
+  <span class="kv">embed <b>{{ status.embedding_server }}</b> · {{ status.embedding_backend }}</span>
+</div>
+{% if status.message %}<p class="muted msg">{{ status.message }}</p>{% endif %}
+
+<table class="stages">
+  <tbody>
+  {% for row in status.rows %}
+    <tr>
+      <td class="stage-name">{{ row.label }}</td>
+      <td class="stage-bar">
+        <div class="bar"><div class="fill badge-{{ row.badge }}" style="width: {{ row.pct }}%"></div></div>
+      </td>
+      <td class="stage-pct">{{ row.pct }}%</td>
+      <td class="stage-count">{{ row.done }}/{{ row.total }}</td>
+      <td class="stage-status"><span class="badge badge-{{ row.badge }}">{{ row.badge }}</span></td>
+      <td class="stage-current" title="{{ row.current }}">{{ row.current }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if status.errors %}
+<div class="errors">
+  <b>Errors</b>
+  <ul>{% for e in status.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}

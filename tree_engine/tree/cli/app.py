@@ -178,6 +178,21 @@ def clean() -> None:
 
 
 @app.command()
+def gui(
+    port: int = typer.Option(0, "--port", help="Port (0 = 8799 if free, else a free port)."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open a browser."),
+) -> None:
+    """Launch the local browser GUI (loopback only)."""
+    from tree.gui.launch import GuiDependencyError, run_gui
+
+    try:
+        run_gui(Path.cwd(), port=port or None, open_browser=not no_browser)
+    except GuiDependencyError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@app.command()
 def run() -> None:
     """Run the pipeline in the foreground (implemented in step 8)."""
     ensure_embedding_ready()
