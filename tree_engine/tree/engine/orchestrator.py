@@ -83,6 +83,7 @@ class TreeEngine:
     async def run(self) -> None:
         """Run until all DAG nodes are covered, or until the planner is blocked."""
         self.progress.reset()
+        _clear_stale_run_logs(self.root)
         await self.prepare_sources()
         self._refresh_noderun_progress(status="running")
         running: dict[str, asyncio.Task[str]] = {}
@@ -212,6 +213,18 @@ def _make_rag_indexer(rag_client: Any) -> Any:
     from tree.rag.indexer import RAGIndexer
 
     return RAGIndexer(rag_client)
+
+
+def _clear_stale_run_logs(root: Path) -> None:
+    """Drop diagnostic logs from prior runs so the error panel is run-scoped."""
+    temp_root = paths.pipeline_temp_root(root)
+    if not temp_root.exists():
+        return
+    for log_path in temp_root.glob("*.log"):
+        try:
+            log_path.unlink()
+        except OSError:
+            pass
 
 
 def _all_nodes_covered(root: Path) -> bool:

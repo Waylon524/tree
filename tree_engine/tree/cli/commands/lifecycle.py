@@ -30,7 +30,9 @@ def start_engine(root: Path) -> LifecycleResult:
 
     log_path = paths.service_log_path(root, "engine")
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log = log_path.open("ab")
+    # Truncate (not append): each fresh engine start gets its own log, so the
+    # /watch error panel never resurfaces tracebacks from a previous run.
+    log = log_path.open("wb")
     proc = process.spawn_detached(
         [sys.executable, "-m", "tree.cli.app", "run"],
         cwd=root,

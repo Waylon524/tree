@@ -523,3 +523,99 @@ async def test_prepare_sources_waits_for_completed_part_before_retrying_concurre
     await prepare_sources(engine)
 
     assert archivist.events.index("slow-complete") < archivist.events.index("overloaded-attempt-2")
+
+
+def _ingest_engine(tmp_path, indexer=None):
+    return SimpleNamespace(
+        settings=_settings(tmp_path),
+        archivist=_FakeArchivist(),
+        agents=SimpleNamespace(dagger=_EchoDagger()),
+        rag_indexer=indexer or _FakeIndexer(),
+        progress=ProgressTracker(tmp_path),
+    )
+
+
+def test_reuse_ocr_checkpoint_validates_fingerprint(tmp_path):
+    from tree.engine.ingest_driver import (
+        _reuse_ocr_checkpoint,
+        _write_ocr_fingerprint,
+        persist_ocr_markdown,
+    )
+
+    ocr_path = persist_ocr_markdown(tmp_path, "课件", "ch1.md", "hello")
+    assert _reuse_ocr_checkpoint(ocr_path, "100-200") is None  # no fingerprint yet
+    _write_ocr_fingerprint(ocr_path, "100-200")
+    assert _reuse_ocr_checkpoint(ocr_path, "100-200") == "hello"
+    assert _reuse_ocr_checkpoint(ocr_path, "999-999") is None  # material changed
+    assert _reuse_ocr_checkpoint(ocr_path, "") is None  # no fingerprint -> never reuse
+
+
+async def test_clean_cut_totals_count_materials_not_chunks(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "long.md"
+    material.parent.mkdir(parents=True)
+    raw = "raw line 1\nraw line 2\n" + "x" * 70_000 + "\n# Next\nraw line 3\nraw line 4\n" + "y" * 40_000
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    engine = _ingest_engine(tmp_path)
+    await prepare_sources(engine)
+
+    stages = engine.progress.load()["stages"]
+    # One material that split into two chunks: counters are per-material, not per-chunk.
+    assert stages["clean"]["total"] == 1
+    assert stages["clean"]["done"] == 1
+    assert stages["clean"]["status"] == "complete"
+    assert stages["cut"]["total"] == 1
+    assert stages["cut"]["done"] == 1
+    assert stages["cut"]["status"] == "complete"
+
+
+async def test_unchanged_material_resumes_from_cache_without_reocr(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.parent.mkdir(parents=True)
+    raw = _raw_lines(62)
+    material.write_text(raw, encoding="utf-8")
+    calls = {"n": 0}
+
+    def fake_extract(path):
+        calls["n"] += 1
+        return raw
+
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", fake_extract)
+
+    # Shared indexer mirrors the persistent Qdrant store across runs (already
+    # embedded MTUs are skipped, just like a real resume).
+    indexer = _FakeIndexer()
+    await prepare_sources(_ingest_engine(tmp_path, indexer=indexer))
+    assert calls["n"] == 1
+    cache_file = paths.planner_root(tmp_path) / "mtu-cache" / "课件" / "ch1.md.json"
+    assert cache_file.exists()
+
+    # Second run, material unchanged: per-material cache hit, producer not invoked.
+    await prepare_sources(_ingest_engine(tmp_path, indexer=indexer))
+    assert calls["n"] == 1
+
+
+async def test_resumes_via_ocr_checkpoint_when_mtu_cache_missing(tmp_path, monkeypatch):
+    import shutil
+
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.parent.mkdir(parents=True)
+    raw = _raw_lines(62)
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    await prepare_sources(_ingest_engine(tmp_path))
+
+    # Simulate a crash before MTUs were persisted: drop both MTU caches but keep
+    # the OCR checkpoint. The material is still unchanged, so the producer reruns
+    # and must reuse the OCR checkpoint instead of re-extracting.
+    paths.mtus_path(tmp_path).unlink()
+    shutil.rmtree(paths.planner_root(tmp_path) / "mtu-cache")
+
+    def boom(path):
+        raise AssertionError("extract_text should not be called; OCR checkpoint must be reused")
+
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", boom)
+    summary = await prepare_sources(_ingest_engine(tmp_path))
+    assert summary["mtu_count"] == 2

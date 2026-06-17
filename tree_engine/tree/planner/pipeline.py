@@ -66,16 +66,23 @@ async def rebuild_planner(
         status="running" if changed else "complete",
         message="Extracting materials" if changed else "No changed materials",
     )
-    _set_stage(progress, "clean", total=0, done=0, status="pending" if changed else "complete")
-    _set_stage(progress, "cut", total=0, done=0, status="pending" if changed else "complete")
+    # Clean/Cut totals = number of changed materials (known upfront), advanced
+    # once per material in the ingest driver. Stable, monotonic counters even
+    # though OCR/Clean/Cut overlap across concurrently-processed materials.
+    _set_stage(progress, "clean", total=len(changed), done=0,
+               status="running" if changed else "complete")
+    _set_stage(progress, "cut", total=len(changed), done=0,
+               status="running" if changed else "complete")
 
     needs_build = any(m["status"] != "unchanged" for m in manifest["materials"])
     if needs_build and mtu_producer is None:
         raise PlannerError("Materials are new/changed but no mtu_producer was supplied.")
 
     mtus = await _collect_mtus(root, manifest, producer=mtu_producer, settings=settings)
-    _complete_stage_if_zero(progress, "clean", "No chunks to clean")
-    _complete_stage_if_zero(progress, "cut", "No chunks to cut")
+    # All changed materials are ingested once _collect_mtus returns; clamp the
+    # ingest stages to complete regardless of per-material advance timing.
+    _complete_stage(progress, "clean", "Cleaning complete")
+    _complete_stage(progress, "cut", "Cutting complete")
     mtus_env = envelope(
         schema="tree.mtus",
         data={"mtus": [m.model_dump(mode="json") for m in mtus]},
@@ -148,7 +155,11 @@ async def _collect_mtus(
         if producer is None:
             return []
         async with semaphore:
-            return await producer(root, material)
+            mtus = await producer(root, material)
+        # Persist this material's MTUs as soon as it finishes, so a crash mid-run
+        # resumes at material granularity (no re-OCR / re-cut of done materials).
+        _save_material_cache(root, material, mtus)
+        return mtus
 
     for material in manifest["materials"]:
         key = (material["collection"], material["source_file"])
@@ -167,14 +178,54 @@ async def _collect_mtus(
     return collected
 
 
+def _material_cache_root(root: Path) -> Path:
+    return paths.planner_root(root) / "mtu-cache"
+
+
+def _material_cache_path(root: Path, collection: str, source_file: str) -> Path:
+    return _material_cache_root(root) / collection / f"{source_file}.json"
+
+
+def _save_material_cache(root: Path, material: dict[str, Any], mtus: list[MTU]) -> None:
+    """Write one material's MTUs to its own cache file (crash-safe, incremental)."""
+    path = _material_cache_path(root, material["collection"], material["source_file"])
+    write_json_atomic(
+        path,
+        {
+            "fingerprint": material.get("fingerprint", ""),
+            "mtus": [m.model_dump(mode="json") for m in mtus],
+        },
+    )
+
+
+def _add_to_cache(cache: dict[tuple[str, str], list[MTU]], mtu: MTU) -> None:
+    cache.setdefault((mtu.collection, mtu.source_file), []).append(mtu)
+    if original_source_file := _chunk_original_source_file(mtu.source_file):
+        cache.setdefault((mtu.collection, original_source_file), []).append(mtu)
+
+
 def _load_mtu_cache(root: Path) -> dict[tuple[str, str], list[MTU]]:
-    data = read_envelope_data(paths.mtus_path(root))
+    """Reuse cache for unchanged materials.
+
+    Prefer the per-material cache files (written incrementally, so they survive a
+    crash mid-run); fall back to the assembled mtus.json for workspaces created
+    before per-material caches existed.
+    """
     cache: dict[tuple[str, str], list[MTU]] = {}
-    for raw in data.get("mtus", []):
-        mtu = MTU.model_validate(raw)
-        cache.setdefault((mtu.collection, mtu.source_file), []).append(mtu)
-        if original_source_file := _chunk_original_source_file(mtu.source_file):
-            cache.setdefault((mtu.collection, original_source_file), []).append(mtu)
+    cache_root = _material_cache_root(root)
+    cache_files = sorted(cache_root.rglob("*.json")) if cache_root.exists() else []
+    if cache_files:
+        for path in cache_files:
+            try:
+                data = read_json(path)
+            except (OSError, ValueError):
+                continue
+            for raw in data.get("mtus", []):
+                _add_to_cache(cache, MTU.model_validate(raw))
+        return cache
+
+    for raw in read_envelope_data(paths.mtus_path(root)).get("mtus", []):
+        _add_to_cache(cache, MTU.model_validate(raw))
     return cache
 
 
@@ -204,12 +255,9 @@ def _set_stage(progress: Any | None, stage: str, **kwargs: Any) -> None:
             return
 
 
-def _complete_stage_if_zero(progress: Any | None, stage: str, message: str) -> None:
-    if progress is None or not hasattr(progress, "load") or not hasattr(progress, "complete_stage"):
-        return
-    try:
-        data = progress.load().get("stages", {}).get(stage, {})
-        if int(data.get("total") or 0) == 0:
+def _complete_stage(progress: Any | None, stage: str, message: str) -> None:
+    if progress is not None and hasattr(progress, "complete_stage"):
+        try:
             progress.complete_stage(stage, message)
-    except Exception:
-        return
+        except Exception:
+            return

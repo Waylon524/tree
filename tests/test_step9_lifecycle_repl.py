@@ -197,6 +197,31 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
     assert not paths.service_pid_path(tmp_path, "engine").exists()
 
 
+def test_start_engine_truncates_stale_log(tmp_path, monkeypatch):
+    from tree.cli.commands.lifecycle import start_engine
+
+    log_path = paths.service_log_path(tmp_path, "engine")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("OLD Traceback: boom from a previous run\n", encoding="utf-8")
+
+    class _Proc:
+        pid = 4242
+
+    monkeypatch.setattr(
+        "tree.cli.commands.lifecycle.process.spawn_detached",
+        lambda cmd, *, cwd=None, stdout=None, stderr=None: _Proc(),
+    )
+    monkeypatch.setattr(
+        "tree.cli.commands.lifecycle.start_embedding_service",
+        lambda: SimpleNamespace(message="embedding started"),
+    )
+
+    start_engine(tmp_path)
+
+    # Fresh start truncates the engine log so /watch never resurfaces old errors.
+    assert log_path.read_text(encoding="utf-8") == ""
+
+
 def test_quit_delegates_to_stop(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     calls = []

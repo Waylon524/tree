@@ -236,3 +236,17 @@ async def test_tree_engine_starts_child_only_after_parent_is_covered(tmp_path, m
 async def _wait_until(predicate):
     while not predicate():
         await asyncio.sleep(0.01)
+
+
+def test_clear_stale_run_logs_removes_only_pipeline_temp_logs(tmp_path):
+    from tree.engine.orchestrator import _clear_stale_run_logs
+
+    temp = paths.pipeline_temp_root(tmp_path)
+    temp.mkdir(parents=True, exist_ok=True)
+    (temp / "examiner-1.log").write_text("old error\n", encoding="utf-8")
+    (temp / "keep.json").write_text("{}", encoding="utf-8")
+
+    _clear_stale_run_logs(tmp_path)
+
+    assert not (temp / "examiner-1.log").exists()
+    assert (temp / "keep.json").exists()  # only *.log files are cleared

@@ -107,34 +107,47 @@ async def _ensure_mtus_embedded(
 
 
 async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) -> list[MTU]:
-    """Extract one material, clean it, persist source Markdown, and cut MTUs."""
+    """Extract one material, clean it, persist source Markdown, and cut MTUs.
+
+    OCR reuses a saved checkpoint when the material is unchanged (no re-OCR on
+    resume). OCR / Clean / Cut each advance exactly once per material, so their
+    totals (= number of changed materials, set upfront) stay stable and correct
+    even though materials and chunks run concurrently.
+    """
     material_path = paths.materials_root(root) / material["path"]
     material_label = str(material.get("path") or material_path.name)
-    _set_stage(engine, "ocr", status="running", active=material_label, message=f"Extracting {material_label}")
-    raw = remove_ocr_image_html(await asyncio.to_thread(extract_text, material_path))
-    _advance_stage(engine, "ocr", message=f"Extracted {material_label}", active=[])
-    ocr_path = persist_ocr_markdown(root, material["collection"], material["source_file"], raw)
-    _record_ocr_checkpoint(engine, root, ocr_path, raw)
-    checkpoint_raw = ocr_path.read_text(encoding="utf-8")
-    if not checkpoint_raw.strip():
-        return []
+    collection = material["collection"]
+    source_file = material["source_file"]
+    fingerprint = str(material.get("fingerprint") or "")
+    ocr_path = paths.ocr_markdown_path(root, collection, source_file)
+    try:
+        cached = _reuse_ocr_checkpoint(ocr_path, fingerprint)
+        if cached is not None:
+            _set_stage(engine, "ocr", status="running", active=material_label,
+                       message=f"Reusing OCR checkpoint {material_label}")
+            raw = cached
+        else:
+            _set_stage(engine, "ocr", status="running", active=material_label,
+                       message=f"Extracting {material_label}")
+            raw = remove_ocr_image_html(await asyncio.to_thread(extract_text, material_path))
+            persist_ocr_markdown(root, collection, source_file, raw)
+            _write_ocr_fingerprint(ocr_path, fingerprint)
+        _advance_stage(engine, "ocr", message=f"Extracted {material_label}", active=[])
+        _record_ocr_checkpoint(engine, root, ocr_path, raw)
 
-    raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
-    _add_stage_total(
-        engine,
-        "clean",
-        len(raw_chunks),
-        status="running" if raw_chunks else "complete",
-        message=f"Cleaning {material_label}",
-    )
-    _add_stage_total(
-        engine,
-        "cut",
-        len(raw_chunks),
-        status="running" if raw_chunks else "complete",
-        message=f"Cutting {material_label}",
-    )
-    return await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
+        checkpoint_raw = ocr_path.read_text(encoding="utf-8")
+        if not checkpoint_raw.strip():
+            return []
+        raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
+        _set_stage(engine, "clean", status="running", active=material_label,
+                   message=f"Cleaning {material_label}")
+        _set_stage(engine, "cut", status="running", active=material_label,
+                   message=f"Cutting {material_label}")
+        return await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
+    finally:
+        # One advance per material (covers the empty-checkpoint early return too).
+        _advance_stage(engine, "clean", active=[])
+        _advance_stage(engine, "cut", active=[])
 
 
 def source_markdown_path(root: Path, collection: str, source_file: str) -> Path:
@@ -152,14 +165,16 @@ async def _clean_and_cut_chunk(
     order_offset: int,
 ) -> list[MTU]:
     archivist = engine.archivist
+    # Per-chunk calls update the display only; the done counter advances once per
+    # material in _produce_mtus, so concurrent chunks never inflate the count.
     _set_stage(engine, "clean", status="running", active=source_file, message=f"Cleaning {source_file}")
     cleaned = await archivist.clean(
         raw_chunk,
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
     )
-    _advance_stage(engine, "clean", message=f"Cleaned {source_file}", active=[])
+    _set_stage(engine, "clean", message=f"Cleaned {source_file}")
     if not cleaned.strip():
-        _advance_stage(engine, "cut", message=f"Skipped empty cleaned chunk {source_file}", active=[])
+        _set_stage(engine, "cut", message=f"Skipped empty cleaned chunk {source_file}")
         return []
 
     source_path = source_markdown_path(root, collection, source_file)
@@ -173,7 +188,7 @@ async def _clean_and_cut_chunk(
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
         repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
     )
-    _advance_stage(engine, "cut", message=f"Cut {source_file}", active=[])
+    _set_stage(engine, "cut", message=f"Cut {source_file}")
     return mtus
 
 
@@ -347,6 +362,30 @@ def persist_ocr_markdown(root: Path, collection: str, source_file: str, raw_mark
     path = paths.ocr_markdown_path(root, collection, source_file)
     file_ops.write_text(path, raw_markdown)
     return path
+
+
+def _ocr_fingerprint_path(ocr_path: Path) -> Path:
+    return ocr_path.with_name(ocr_path.name + ".fingerprint")
+
+
+def _reuse_ocr_checkpoint(ocr_path: Path, fingerprint: str) -> str | None:
+    """Return the saved OCR Markdown if it is still valid for this material.
+
+    Valid means the material's fingerprint matches the one recorded when the
+    checkpoint was written, so a re-run (e.g. resuming after a crash) skips the
+    paid OCR call instead of re-extracting.
+    """
+    if not fingerprint or not ocr_path.exists():
+        return None
+    fp_path = _ocr_fingerprint_path(ocr_path)
+    if not fp_path.exists() or fp_path.read_text(encoding="utf-8").strip() != fingerprint:
+        return None
+    return ocr_path.read_text(encoding="utf-8")
+
+
+def _write_ocr_fingerprint(ocr_path: Path, fingerprint: str) -> None:
+    if fingerprint:
+        file_ops.write_text(_ocr_fingerprint_path(ocr_path), fingerprint)
 
 
 def _load_mtus(root: Path) -> list[MTU]:
