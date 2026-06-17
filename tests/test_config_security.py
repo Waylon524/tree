@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from unittest import mock
+
+import pytest
 
 from tree.config import Settings
 from tree.io import paths
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX file-mode bits not honored on Windows"
+)
 
 
 def _write(path, text):
@@ -126,6 +133,7 @@ def test_init_keeps_existing_workspace_gitignore(tmp_path):
     assert custom.read_text(encoding="utf-8") == "runtime/\n"
 
 
+@posix_only
 def test_write_env_file_sets_owner_only_permissions(tmp_path):
     from tree.cli.commands.config_cmd import write_env_file
 
@@ -136,6 +144,15 @@ def test_write_env_file_sets_owner_only_permissions(tmp_path):
     assert config.read_text(encoding="utf-8") == "LLM_API_KEY=secret\n"
 
 
+def test_write_env_file_writes_expected_contents(tmp_path):
+    from tree.cli.commands.config_cmd import write_env_file
+
+    config = tmp_path / "config.env"
+    write_env_file(config, {"LLM_API_KEY": "secret"})
+    assert config.read_text(encoding="utf-8") == "LLM_API_KEY=secret\n"
+
+
+@posix_only
 def test_write_env_file_tightens_existing_permissions(tmp_path):
     from tree.cli.commands.config_cmd import write_env_file
 
