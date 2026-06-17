@@ -35,7 +35,7 @@ table.stages { width: 100%; border-collapse: collapse; }
 table.stages td { padding: 5px 6px; vertical-align: middle; }
 .stage-name { font-weight: 600; width: 72px; }
 .stage-bar { width: 40%; }
-.bar { background: var(--bar-bg); border-radius: 99px; height: 8px; overflow: hidden; }
+.track { width: 160px; max-width: 100%; background: var(--bar-bg); border-radius: 99px; height: 8px; overflow: hidden; }
 .fill { height: 100%; border-radius: 99px; background: var(--accent); transition: width .3s ease; }
 .stage-pct, .stage-count { font-variant-numeric: tabular-nums; color: var(--muted); width: 56px; }
 .stage-current { color: var(--muted); font-size: 12px; max-width: 220px; overflow: hidden;

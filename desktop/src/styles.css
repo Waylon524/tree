@@ -139,7 +139,9 @@ table.stages td {
 .stage-bar {
   width: 40%;
 }
-.bar {
+.track {
+  width: 160px;
+  max-width: 100%;
   background: var(--bar-bg);
   border-radius: 99px;
   height: 8px;

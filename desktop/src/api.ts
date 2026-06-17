@@ -6,10 +6,28 @@ export const API_BASE: string =
   (import.meta.env.VITE_TREE_API as string | undefined)?.replace(/\/$/, "") ??
   "http://127.0.0.1:8799";
 
+const TOKEN_KEY = "tree_token";
+
+// Token resolution order: URL ?token= (the `tre gui` deep-link), then a token
+// entered via the connect screen (persisted), then a build-time env var.
 export function getToken(): string {
   const fromUrl = new URL(window.location.href).searchParams.get("token");
   if (fromUrl) return fromUrl;
+  try {
+    const stored = sessionStorage.getItem(TOKEN_KEY);
+    if (stored) return stored;
+  } catch {
+    /* sessionStorage unavailable */
+  }
   return (import.meta.env.VITE_TREE_TOKEN as string | undefined) ?? "";
+}
+
+export function setToken(value: string): void {
+  try {
+    sessionStorage.setItem(TOKEN_KEY, value);
+  } catch {
+    /* sessionStorage unavailable */
+  }
 }
 
 function url(path: string): string {

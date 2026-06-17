@@ -28,7 +28,7 @@ export function ProgressPanel({ status }: { status: Status | null }) {
             <tr key={row.label}>
               <td className="stage-name">{row.label}</td>
               <td className="stage-bar">
-                <div className="bar">
+                <div className="track">
                   <div className={`fill badge-${row.badge}`} style={{ width: `${row.pct}%` }} />
                 </div>
               </td>

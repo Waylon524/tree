@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ChangeEvent } from "react";
-import { dagUrl, getToken, runPipeline, stopPipeline } from "./api";
+import { dagUrl, getToken, runPipeline, setToken, stopPipeline } from "./api";
 import { useProgress } from "./useProgress";
 import { ProgressPanel } from "./components/ProgressPanel";
 import { Outputs } from "./components/Outputs";
@@ -25,7 +25,17 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
         onChange={(event: ChangeEvent<HTMLInputElement>) => setValue(event.target.value)}
         placeholder="token"
       />
-      <button onClick={() => value.trim() && onToken(value.trim())}>Connect</button>
+      <button
+        onClick={() => {
+          const trimmed = value.trim();
+          if (trimmed) {
+            setToken(trimmed);
+            onToken(trimmed);
+          }
+        }}
+      >
+        Connect
+      </button>
     </div>
   );
 }
