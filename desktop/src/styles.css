@@ -1,0 +1,270 @@
+:root {
+  --bg: #f7f7f5;
+  --card: #fff;
+  --text: #23241f;
+  --muted: #73726c;
+  --border: #e3e2dc;
+  --accent: #3f7d4e;
+  --bar-bg: #ececE6;
+  --done: #3f7d4e;
+  --running: #b8862b;
+  --failed: #b23b3b;
+  --wait: #9c9a92;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1d1a;
+    --card: #26271f;
+    --text: #e6e4da;
+    --muted: #9c9a92;
+    --border: #3a3b34;
+    --accent: #79c089;
+    --bar-bg: #34352e;
+    --done: #79c089;
+    --running: #d9b25a;
+    --failed: #e08585;
+    --wait: #6c6b64;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.conn {
+  font-size: 12px;
+  color: var(--muted);
+}
+.conn.on {
+  color: var(--accent);
+}
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+h2 {
+  font-size: 14px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+button {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.kv b {
+  color: var(--text);
+}
+.pill {
+  padding: 2px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bar-bg);
+}
+table.stages {
+  width: 100%;
+  border-collapse: collapse;
+}
+table.stages td {
+  padding: 5px 6px;
+  vertical-align: middle;
+}
+.stage-name {
+  font-weight: 600;
+  width: 72px;
+}
+.stage-bar {
+  width: 40%;
+}
+.bar {
+  background: var(--bar-bg);
+  border-radius: 99px;
+  height: 8px;
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.stage-pct,
+.stage-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  width: 56px;
+}
+.stage-current {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  color: #fff;
+  text-transform: uppercase;
+}
+.badge-done {
+  background: var(--done);
+}
+.badge-running {
+  background: var(--running);
+}
+.badge-failed {
+  background: var(--failed);
+}
+.badge-wait {
+  background: var(--wait);
+}
+.fill.badge-done {
+  background: var(--done);
+}
+.fill.badge-running {
+  background: var(--running);
+}
+.fill.badge-failed {
+  background: var(--failed);
+}
+.fill.badge-wait {
+  background: var(--wait);
+}
+.errors {
+  margin-top: 10px;
+  color: var(--failed);
+  font-size: 13px;
+}
+.dag {
+  width: 100%;
+  min-height: 120px;
+}
+.outputs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.outputs li a {
+  color: var(--accent);
+  cursor: pointer;
+  display: block;
+  padding: 4px 0;
+}
+.outputs li a.sel {
+  font-weight: 700;
+}
+.markdown {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.markdown pre {
+  background: var(--bar-bg);
+  padding: 10px;
+  border-radius: 6px;
+  overflow: auto;
+}
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.setup input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+.ok {
+  color: var(--done);
+  font-size: 13px;
+}
+.gate {
+  max-width: 420px;
+  margin: 80px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 20px;
+}
+.gate input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+}
