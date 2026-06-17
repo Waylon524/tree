@@ -132,6 +132,31 @@ def test_setup_writes_global_config(workspace):
     assert "LLM_API_KEY=sk-xyz" in written
 
 
+def test_ws_progress_streams_status(workspace):
+    client = _authed_client(workspace)
+    with client.websocket_connect(f"/ws/progress?token={TOKEN}") as ws:
+        first = ws.receive_json()
+    assert "rows" in first
+    assert [r["label"] for r in first["rows"]][0] == "OCR"
+
+
+def test_ws_progress_rejects_bad_token(workspace):
+    from starlette.websockets import WebSocketDisconnect
+
+    client = _client(workspace)
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/progress?token=wrong") as ws:
+            ws.receive_json()
+
+
+def test_cors_header_present_for_dev_origin(workspace):
+    client = _authed_client(workspace)
+    resp = client.get(
+        f"/api/status?token={TOKEN}", headers={"Origin": "http://localhost:5173"}
+    )
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
 def test_require_gui_deps_passes_when_installed():
     from tree.gui import launch
 

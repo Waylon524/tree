@@ -8,12 +8,15 @@ server.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import secrets
 from pathlib import Path
 from typing import Any
 
 import markdown as _md  # type: ignore[import-untyped]
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -54,6 +57,16 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     app.state.root = root
     app.state.token = token
     app.mount("/static", StaticFiles(directory=str(_GUI_DIR / "static")), name="static")
+    # Allow a cross-origin React/Vite dev server (and a future Tauri webview) to
+    # call the API. Requests are still gated by the per-launch token, so this does
+    # not loosen auth; it only lets the browser read responses from another origin.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins(),
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
 
     def _authed(request: Request) -> bool:
         supplied = request.cookies.get(COOKIE_NAME) or request.query_params.get("token")
@@ -95,6 +108,25 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         _require(request)
         return _status(root)
 
+    @app.websocket("/ws/progress")
+    async def ws_progress(websocket: WebSocket) -> None:
+        supplied = websocket.query_params.get("token")
+        if supplied is None or not secrets.compare_digest(supplied, token):
+            await websocket.close(code=1008)  # policy violation
+            return
+        await websocket.accept()
+        interval = _ws_interval()
+        last: dict[str, Any] | None = None
+        try:
+            while True:
+                payload = _status(root)
+                if payload != last:
+                    await websocket.send_json(payload)
+                    last = payload
+                await asyncio.sleep(interval)
+        except WebSocketDisconnect:
+            return
+
     @app.get("/dag.svg")
     def dag_svg(request: Request) -> Response:
         _require(request)
@@ -110,6 +142,11 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         _require(request)
         files = _list_outputs(root)
         return HTMLResponse(_env.get_template("_outputs.html").render(files=files))
+
+    @app.get("/api/outputs")
+    def api_outputs(request: Request) -> dict[str, list[str]]:
+        _require(request)
+        return {"files": _list_outputs(root)}
 
     @app.get("/outputs/{name}", response_class=HTMLResponse)
     def output_view(request: Request, name: str) -> HTMLResponse:
@@ -142,6 +179,26 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         return HTMLResponse('<p class="ok">Saved global configuration.</p>')
 
     return app
+
+
+# --- config ------------------------------------------------------------------
+
+def _cors_origins() -> list[str]:
+    """Allowed cross-origin callers (the React/Vite dev server by default)."""
+    override = os.environ.get("TREE_GUI_CORS_ORIGINS", "").strip()
+    if override:
+        return [origin.strip() for origin in override.split(",") if origin.strip()]
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
+def _ws_interval() -> float:
+    try:
+        return max(0.1, float(os.environ.get("TREE_GUI_WS_INTERVAL_SEC", "1.0")))
+    except ValueError:
+        return 1.0
 
 
 # --- view models (reuse build_watch_model; no duplicated pipeline logic) -----
