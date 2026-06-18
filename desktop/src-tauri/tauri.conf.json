@@ -26,6 +26,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../packaging/dist/tre-engine": "tre-engine"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

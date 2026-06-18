@@ -74,10 +74,25 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 - [x] React is Tauri-aware: `initApi()` pulls base+token from `api_config` inside the shell
       (connect screen skipped), falls back to browser resolution otherwise.
 - [ ] Verify `cargo build` / `tauri dev` compiles + opens a window (in progress).
-- [ ] Native folder picker (workspace) → relaunch sidecar with new `--root`.
-- [ ] First-run model-download UX already shows phase (Phase 2 bringup); add retry/mirror.
-- [ ] Bundle the sidecar as a single-file (onefile) binary for prod (currently onedir).
+- [x] Bundle the sidecar: PyInstaller onedir bundled as a Tauri **resource**
+      (`bundle.resources`), spawned from `resource_dir/tre-engine/` in prod (cleaner than
+      onefile for a Python app). Rust compiles clean.
+- [ ] Native folder picker (workspace) → relaunch sidecar with new `--root` (polish).
+- [ ] Verify the actual bundled window (`tauri dev` / `tauri build`) at runtime — only
+      compile-verified so far.
 - **Acceptance:** `cargo tauri dev` opens a native window that does the full flow.
+
+### Phase 4 — CI + installers + Releases — in progress
+- [x] `.github/workflows/release.yml`: matrix (macOS arm64 + Intel, Linux, Windows) builds
+      the PyInstaller sidecar, then `tauri-apps/tauri-action` runs `tauri build` and (on a
+      `v*` tag) attaches installers to a draft GitHub Release; `workflow_dispatch` builds
+      without releasing to validate the pipeline.
+- [x] macOS signing/notarization wired via optional `APPLE_*` secrets (unsigned if unset).
+- [x] Windows unsigned (release notes document the SmartScreen workaround).
+- [ ] First real run (tag or dispatch) — NOT yet run. Known risk: macOS **notarization of the
+      nested PyInstaller binaries/dylibs** inside the .app Resources needs hardened-runtime
+      signing; unsigned builds work, notarized may need extra sidecar-signing steps.
+- [ ] Add `APPLE_*` repo secrets (Apple Developer account) to enable notarization.
 
 ### Phase 4 — CI + installers + Releases
 - [ ] GitHub Actions matrix (macos / windows / ubuntu): build React → PyInstaller

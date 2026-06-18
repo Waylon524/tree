@@ -1,0 +1,69 @@
+name: release
+
+# Build the desktop installers (macOS / Windows / Linux) and attach them to a
+# GitHub Release. Triggered by a version tag; workflow_dispatch builds without
+# releasing (to validate the pipeline).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  desktop:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, label: "macOS (Apple Silicon)" }
+          - { os: macos-13, label: "macOS (Intel)" }
+          - { os: ubuntu-22.04, label: "Linux" }
+          - { os: windows-latest, label: "Windows" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux webview deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libayatana-appindicator3-dev
+
+      # Build the standalone engine on each OS (no cross-compile). Output lands in
+      # packaging/dist/tre-engine, which tauri.conf.json bundles as a resource.
+      - name: Build engine sidecar (PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[rag,gui]" pyinstaller
+          python -m PyInstaller --noconfirm --clean --distpath packaging/dist --workpath packaging/build packaging/tre-engine.spec
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing + notarization. If these secrets are unset the macOS
+          # build is produced unsigned (works locally; Gatekeeper warns).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: desktop
+          # On a tag: create a draft release with the installers. On manual
+          # dispatch: build only (empty tagName) to validate the pipeline.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: "TREE ${{ github.ref_name }}"
+          releaseDraft: true
+          releaseBody: "Desktop installers. Windows is unsigned — SmartScreen: More info → Run anyway."

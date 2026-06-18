@@ -1,22 +1,25 @@
 //! TREE desktop shell: spawns the Python engine sidecar (`tre serve`) and hands
 //! the React frontend its loopback API base + token via the `api_config` command.
 //!
-//! Sidecar resolution: `TREE_SIDECAR_BIN` (path to the bundled/standalone tre
-//! binary) if set; otherwise the dev PyInstaller build under packaging/dist.
-//! If no binary is found (dev with a manually-run `tre serve`), set
-//! `TREE_API_BASE` + `TREE_API_TOKEN` and the shell will use those instead.
+//! Sidecar resolution order:
+//!   1. `TREE_SIDECAR_BIN` (explicit path),
+//!   2. bundled resource `tre-engine/tre-engine[.exe]` (production installer),
+//!   3. the dev PyInstaller build under `packaging/dist`.
+//! For dev against a manually-run server, set `TREE_API_BASE` + `TREE_API_TOKEN`.
 
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
-use tauri::{RunEvent, State};
+use tauri::{Manager, RunEvent, State};
 
 struct ApiConfig {
     base: String,
     token: String,
 }
+
+struct Sidecar(Mutex<Option<Child>>);
 
 #[tauri::command]
 fn api_config(config: State<'_, ApiConfig>) -> serde_json::Value {
@@ -37,25 +40,35 @@ fn default_workspace() -> PathBuf {
     PathBuf::from(home).join("TREE")
 }
 
-/// Resolve the sidecar binary: explicit env, then the dev PyInstaller build.
-fn sidecar_binary() -> Option<PathBuf> {
+fn sidecar_exe_name() -> &'static str {
+    if cfg!(windows) {
+        "tre-engine.exe"
+    } else {
+        "tre-engine"
+    }
+}
+
+fn sidecar_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(explicit) = std::env::var("TREE_SIDECAR_BIN") {
         let path = PathBuf::from(explicit);
         if path.is_file() {
             return Some(path);
         }
     }
-    let exe_name = if cfg!(windows) { "tre-engine.exe" } else { "tre-engine" };
+    if let Ok(resources) = app.path().resource_dir() {
+        let bundled = resources.join("tre-engine").join(sidecar_exe_name());
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packaging/dist/tre-engine")
-        .join(exe_name);
+        .join(sidecar_exe_name());
     dev.is_file().then_some(dev)
 }
 
-/// Spawn the headless engine server. None when no sidecar binary is available
-/// (dev: run `tre serve --port <p> --token <t>` yourself and use TREE_API_*).
-fn spawn_sidecar(port: u16, token: &str) -> Option<Child> {
-    let binary = sidecar_binary()?;
+fn spawn_sidecar(app: &tauri::AppHandle, port: u16, token: &str) -> Option<Child> {
+    let binary = sidecar_binary(app)?;
     let root = default_workspace();
     let _ = std::fs::create_dir_all(&root);
     Command::new(binary)
@@ -78,21 +91,7 @@ fn spawn_sidecar(port: u16, token: &str) -> Option<Child> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Prefer an externally-managed server (dev) when TREE_API_* is set.
-    let (base, token, child) =
-        match (std::env::var("TREE_API_BASE"), std::env::var("TREE_API_TOKEN")) {
-            (Ok(base), Ok(token)) => (base, token, None),
-            _ => {
-                let port = free_port();
-                let token = uuid::Uuid::new_v4().as_simple().to_string();
-                let child = spawn_sidecar(port, &token);
-                (format!("http://127.0.0.1:{port}"), token, child)
-            }
-        };
-    let sidecar: Mutex<Option<Child>> = Mutex::new(child);
-
     tauri::Builder::default()
-        .manage(ApiConfig { base, token })
         .invoke_handler(tauri::generate_handler![api_config])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -102,15 +101,29 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            let (base, token, child) =
+                match (std::env::var("TREE_API_BASE"), std::env::var("TREE_API_TOKEN")) {
+                    (Ok(base), Ok(token)) => (base, token, None),
+                    _ => {
+                        let port = free_port();
+                        let token = uuid::Uuid::new_v4().as_simple().to_string();
+                        let child = spawn_sidecar(app.handle(), port, &token);
+                        (format!("http://127.0.0.1:{port}"), token, child)
+                    }
+                };
+            app.manage(ApiConfig { base, token });
+            app.manage(Sidecar(Mutex::new(child)));
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app_handle, event| {
+        .run(|app_handle, event| {
             if let RunEvent::Exit = event {
-                if let Ok(mut guard) = sidecar.lock() {
-                    if let Some(mut process) = guard.take() {
-                        let _ = process.kill();
+                if let Some(sidecar) = app_handle.try_state::<Sidecar>() {
+                    if let Ok(mut guard) = sidecar.0.lock() {
+                        if let Some(mut child) = guard.take() {
+                            let _ = child.kill();
+                        }
                     }
                 }
             }
