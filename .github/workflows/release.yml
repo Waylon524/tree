@@ -6,7 +6,18 @@ name: release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Installer target to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+          - linux
 
 jobs:
   desktop:
@@ -16,22 +27,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, label: "macOS (Apple Silicon)" }
-          - { os: macos-13, label: "macOS (Intel)" }
-          - { os: ubuntu-22.04, label: "Linux" }
-          - { os: windows-latest, label: "Windows" }
+          - { os: macos-latest, label: "macOS (Apple Silicon)", target: macos, artifact: macos-arm64 }
+          - { os: macos-13, label: "macOS (Intel)", target: macos, artifact: macos-x64 }
+          - { os: ubuntu-22.04, label: "Linux", target: linux, artifact: linux }
+          - { os: windows-latest, label: "Windows", target: windows, artifact: windows }
     steps:
+      - name: Skip non-selected target
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target != 'all' && inputs.target != matrix.target }}
+        run: echo "Skipping ${{ matrix.label }} because target=${{ inputs.target }}."
+
       - uses: actions/checkout@v4
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
+
       - uses: actions/setup-python@v5
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
         with:
           python-version: "3.12"
+
       - uses: actions/setup-node@v4
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
         with:
           node-version: "20"
+
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
 
       - name: Install Linux webview deps
-        if: runner.os == 'Linux'
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target) && runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libayatana-appindicator3-dev
@@ -39,26 +61,41 @@ jobs:
       # Build the standalone engine on each OS (no cross-compile). Output lands in
       # packaging/dist/tre-engine, which tauri.conf.json bundles as a resource.
       - name: Build engine sidecar (PyInstaller)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[rag,gui]" pyinstaller
           python -m PyInstaller --noconfirm --clean --distpath packaging/dist --workpath packaging/build packaging/tre-engine.spec
 
       - name: Install frontend deps
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
         working-directory: desktop
         run: npm ci
 
+      - name: Prepare App Store Connect API key
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target) && runner.os == 'macOS' }}
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            mkdir -p "$RUNNER_TEMP/appstoreconnect"
+            printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/appstoreconnect/AuthKey_${APPLE_API_KEY}.p8"
+            chmod 600 "$RUNNER_TEMP/appstoreconnect/AuthKey_${APPLE_API_KEY}.p8"
+          fi
+
       - uses: tauri-apps/tauri-action@v0
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS signing + notarization. If these secrets are unset the macOS
+          # macOS signing + notarization. If these secrets are unset, the macOS
           # build is produced unsigned (works locally; Gatekeeper warns).
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/appstoreconnect/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
         with:
           projectPath: desktop
           # On a tag: create a draft release with the installers. On manual
@@ -67,3 +104,17 @@ jobs:
           releaseName: "TREE ${{ github.ref_name }}"
           releaseDraft: true
           releaseBody: "Desktop installers. Windows is unsigned — SmartScreen: More info → Run anyway."
+
+      - name: Upload workflow-dispatch artifacts
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'all' || inputs.target == matrix.target) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tree-${{ matrix.artifact }}-installer
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.dmg
+            desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.exe
+            desktop/src-tauri/target/release/bundle/**/*.AppImage
+            desktop/src-tauri/target/release/bundle/**/*.deb
+            desktop/src-tauri/target/release/bundle/**/*.rpm
+          if-no-files-found: error
