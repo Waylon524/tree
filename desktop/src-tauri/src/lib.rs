@@ -7,10 +7,13 @@
 //!   3. the dev PyInstaller build under `packaging/dist`.
 //! For dev against a manually-run server, set `TREE_API_BASE` + `TREE_API_TOKEN`.
 
+use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{Manager, RunEvent, State};
 
@@ -89,6 +92,25 @@ fn spawn_sidecar(app: &tauri::AppHandle, port: u16, token: &str) -> Option<Child
         .ok()
 }
 
+fn notify_quit(base: &str, token: &str) {
+    let Some(rest) = base.strip_prefix("http://") else {
+        return;
+    };
+    let host_port = rest.trim_end_matches('/');
+    let Ok(mut stream) = TcpStream::connect(host_port) else {
+        return;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(750)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(750)));
+    let request = format!(
+        "POST /api/quit?token={} HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        token, host_port
+    );
+    let _ = stream.write_all(request.as_bytes());
+    let mut buf = [0_u8; 128];
+    let _ = stream.read(&mut buf);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -119,6 +141,9 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
+                if let Some(config) = app_handle.try_state::<ApiConfig>() {
+                    notify_quit(&config.base, &config.token);
+                }
                 if let Some(sidecar) = app_handle.try_state::<Sidecar>() {
                     if let Ok(mut guard) = sidecar.0.lock() {
                         if let Some(mut child) = guard.take() {

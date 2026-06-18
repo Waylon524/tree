@@ -107,10 +107,23 @@ def build_argv(binary: Path, gguf: Path, *, host: str, port: int) -> list[str]:
         "-c",
         os.environ.get("LLAMA_SERVER_CTX", "").strip() or "8192",
     ]
+    gpu_layers = _gpu_layers_override()
+    if gpu_layers:
+        argv += ["-ngl", gpu_layers]
     pooling = os.environ.get("LLAMA_SERVER_POOLING", "").strip()
     if pooling:
         argv += ["--pooling", pooling]
     return argv
+
+
+def _gpu_layers_override() -> str:
+    configured = os.environ.get("LLAMA_SERVER_N_GPU_LAYERS")
+    if configured is not None:
+        return configured.strip()
+    if sys.platform == "darwin":
+        # llama.cpp b9670's Metal embedding path can terminate on longer Chinese MTUs.
+        return "0"
+    return ""
 
 
 # --- platform / asset mapping (pure, unit-tested) ----------------------------

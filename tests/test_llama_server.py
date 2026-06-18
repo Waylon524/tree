@@ -57,7 +57,8 @@ def test_download_url_honors_override(monkeypatch):
     )
 
 
-def test_build_argv_contains_required_flags(tmp_path):
+def test_build_argv_contains_required_flags(tmp_path, monkeypatch):
+    monkeypatch.setattr(llama_server.sys, "platform", "linux")
     binary = tmp_path / "llama-server"
     gguf = tmp_path / "model.gguf"
     argv = llama_server.build_argv(binary, gguf, host="127.0.0.1", port=8788)
@@ -69,7 +70,28 @@ def test_build_argv_contains_required_flags(tmp_path):
     assert "--pooling" not in argv  # default: rely on model metadata
 
 
+def test_build_argv_defaults_to_cpu_only_on_macos(tmp_path, monkeypatch):
+    monkeypatch.setattr(llama_server.sys, "platform", "darwin")
+    argv = llama_server.build_argv(tmp_path / "b", tmp_path / "m.gguf", host="h", port=1)
+    assert argv[argv.index("-ngl") + 1] == "0"
+
+
+def test_build_argv_honors_gpu_layers_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(llama_server.sys, "platform", "darwin")
+    monkeypatch.setenv("LLAMA_SERVER_N_GPU_LAYERS", "12")
+    argv = llama_server.build_argv(tmp_path / "b", tmp_path / "m.gguf", host="h", port=1)
+    assert argv[argv.index("-ngl") + 1] == "12"
+
+
+def test_build_argv_allows_gpu_layers_override_to_disable_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(llama_server.sys, "platform", "darwin")
+    monkeypatch.setenv("LLAMA_SERVER_N_GPU_LAYERS", "")
+    argv = llama_server.build_argv(tmp_path / "b", tmp_path / "m.gguf", host="h", port=1)
+    assert "-ngl" not in argv
+
+
 def test_build_argv_adds_pooling_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(llama_server.sys, "platform", "linux")
     monkeypatch.setenv("LLAMA_SERVER_POOLING", "last")
     argv = llama_server.build_argv(tmp_path / "b", tmp_path / "m.gguf", host="h", port=1)
     assert argv[argv.index("--pooling") + 1] == "last"

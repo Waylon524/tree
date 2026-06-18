@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from urllib.parse import urlparse
 
 from tree.io import paths, process
 from tree.rag import llama_server
-from tree.rag.model_cache import ensure_embedding_model
+from tree.rag.model_cache import ensure_embedding_model, resolve_embedding_model_path
 
 DEFAULT_EMBED_API_URL = "http://localhost:8788"
 
@@ -22,6 +23,7 @@ DEFAULT_EMBED_API_URL = "http://localhost:8788"
 # The prebuilt llama-server binary backend needs none of these; the embedding
 # client and external endpoints need none either.
 _LOCAL_SERVER_MODULES = ("llama_cpp", "fastapi", "uvicorn")
+_EXTENSION_INSTALL_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,105 @@ def stop_embedding_service(*, force: bool = False) -> EmbeddingServiceResult:
     return EmbeddingServiceResult("stopped", f"embedding server stopped (pid {pid})")
 
 
+def embedding_extension_status() -> dict[str, object]:
+    """Return the local embedding extension install state without starting services."""
+    if not _is_local_embed_url(_embed_base_url()):
+        return {
+            "installed": True,
+            "status": "external",
+            "phase": "external",
+            "progress": 100,
+            "message": f"Using external embedding endpoint: {_embed_base_url()}",
+            "model": "external",
+            "runtime": "external",
+        }
+
+    model_ready = resolve_embedding_model_path() is not None
+    runtime = _local_runtime_status()
+    installed = model_ready and runtime != "missing"
+    state = _extension_bringup()
+    phase = state["phase"]
+    if installed:
+        return {
+            "installed": True,
+            "status": "installed",
+            "phase": "installed",
+            "progress": 100,
+            "message": "Embedding extension installed",
+            "model": "cached",
+            "runtime": runtime,
+        }
+    if phase in {"preparing", "downloading-runtime", "downloading-model"}:
+        return {
+            "installed": False,
+            "status": "installing",
+            "phase": phase,
+            "progress": state["progress"],
+            "message": state["message"],
+            "model": "cached" if model_ready else "missing",
+            "runtime": runtime,
+        }
+    if phase == "failed":
+        return {
+            "installed": False,
+            "status": "failed",
+            "phase": phase,
+            "progress": state["progress"],
+            "message": state["message"],
+            "model": "cached" if model_ready else "missing",
+            "runtime": runtime,
+        }
+    missing = []
+    if not model_ready:
+        missing.append("embedding model")
+    if runtime == "missing":
+        missing.append("embedding runtime")
+    return {
+        "installed": False,
+        "status": "missing",
+        "phase": "missing",
+        "progress": 0,
+        "message": f"Install required: {', '.join(missing)}",
+        "model": "cached" if model_ready else "missing",
+        "runtime": runtime,
+    }
+
+
+def start_embedding_extension_install() -> bool:
+    """Start the local embedding extension installer in the background."""
+    if embedding_extension_status()["installed"]:
+        _set_extension_bringup("installed", 100, "Embedding extension installed")
+        return False
+    if not _EXTENSION_INSTALL_LOCK.acquire(blocking=False):
+        return False
+    _set_extension_bringup("preparing", 5, "Preparing embedding extension")
+    threading.Thread(
+        target=_install_embedding_extension_locked,
+        name="tree-extension-install",
+        daemon=True,
+    ).start()
+    return True
+
+
+def install_embedding_extension() -> dict[str, object]:
+    """Download/cache the local embedding runtime and model without starting it."""
+    if not _is_local_embed_url(_embed_base_url()):
+        _set_extension_bringup("installed", 100, f"Using external embedding endpoint: {_embed_base_url()}")
+        return embedding_extension_status()
+    try:
+        _set_extension_bringup("preparing", 10, "Preparing embedding extension")
+        if not _python_server_deps_available():
+            _set_extension_bringup("downloading-runtime", 35, "Installing embedding runtime")
+            llama_server.ensure_llama_server()
+        _set_extension_bringup("downloading-model", 70, "Installing embedding model")
+        ensure_embedding_model()
+        _set_extension_bringup("installed", 100, "Embedding extension installed")
+    except Exception as exc:  # noqa: BLE001
+        _set_extension_bringup("failed", 0, f"Install failed: {exc}")
+        raise
+    return embedding_extension_status()
+
+
 def embedding_service_status() -> str:
     base_url = _embed_base_url()
     if not _env_bool("EMBED_AUTO_START", True):
@@ -101,6 +202,20 @@ def embedding_service_status() -> str:
     if pid is not None and process.pid_alive(pid):
         return "starting"
     return "not found"
+
+
+def _install_embedding_extension_locked() -> None:
+    try:
+        install_embedding_extension()
+    finally:
+        _EXTENSION_INSTALL_LOCK.release()
+
+
+def _local_runtime_status() -> str:
+    if _python_server_deps_available():
+        return "python"
+    found = llama_server.resolve_llama_server()
+    return "llama-server" if found is not None else "missing"
 
 
 def _embed_base_url() -> str:
@@ -248,6 +363,10 @@ def _bringup_path() -> Path:
     return paths.global_services_root() / "embedding-bringup.json"
 
 
+def _extension_bringup_path() -> Path:
+    return paths.global_services_root() / "embedding-extension.json"
+
+
 def _set_bringup(phase: str, message: str = "") -> None:
     """Record coarse embedding bringup phase for the GUI (best-effort, never raises)."""
     try:
@@ -268,3 +387,32 @@ def embedding_bringup() -> dict[str, str]:
         return {"phase": str(data.get("phase", "idle")), "message": str(data.get("message", ""))}
     except Exception:
         return {"phase": "idle", "message": ""}
+
+
+def _set_extension_bringup(phase: str, progress: int, message: str = "") -> None:
+    try:
+        path = _extension_bringup_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "phase": phase,
+            "progress": max(0, min(100, int(progress))),
+            "message": message,
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _extension_bringup() -> dict[str, object]:
+    path = _extension_bringup_path()
+    if not path.exists():
+        return {"phase": "idle", "progress": 0, "message": ""}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "phase": str(data.get("phase", "idle")),
+            "progress": max(0, min(100, int(data.get("progress", 0) or 0))),
+            "message": str(data.get("message", "")),
+        }
+    except Exception:
+        return {"phase": "idle", "progress": 0, "message": ""}

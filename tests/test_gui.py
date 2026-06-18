@@ -58,6 +58,41 @@ def test_status_returns_stage_model(workspace):
     ]
 
 
+def test_extension_requires_token(workspace):
+    client = _client(workspace)
+    assert client.get("/api/extension").status_code == 403
+    assert client.post("/api/extension/install").status_code == 403
+
+
+def test_extension_status_and_install(workspace, monkeypatch):
+    installed = []
+    monkeypatch.setattr(
+        "tree.gui.server.embedding_extension_status",
+        lambda: {
+            "installed": False,
+            "status": "missing",
+            "phase": "missing",
+            "progress": 0,
+            "message": "Install required: embedding model",
+            "model": "missing",
+            "runtime": "missing",
+        },
+    )
+    monkeypatch.setattr(
+        "tree.gui.server.start_embedding_extension_install",
+        lambda: installed.append(True) or True,
+    )
+    client = _authed_client(workspace)
+
+    status = client.get("/api/extension").json()
+    assert status["installed"] is False
+    assert status["message"] == "Install required: embedding model"
+
+    install = client.post("/api/extension/install").json()
+    assert install["status"] == "missing"
+    assert installed == [True]
+
+
 def test_progress_partial_renders(workspace):
     client = _authed_client(workspace)
     resp = client.get("/partials/progress")
@@ -132,6 +167,115 @@ def test_setup_writes_global_config(workspace):
     assert "LLM_API_KEY=sk-xyz" in written
 
 
+def test_settings_requires_token(workspace):
+    client = _client(workspace)
+    assert client.get("/api/settings").status_code == 403
+    assert client.post("/api/settings", json={}).status_code == 403
+
+
+def test_settings_get_returns_defaults_and_masked_key_state(workspace):
+    client = _authed_client(workspace)
+
+    data = client.get("/api/settings").json()
+
+    assert data["config_path"] == str(paths.global_config_path())
+    assert data["llm_api_key_configured"] is False
+    assert data["llm_base_url"] == "https://api.deepseek.com"
+    assert data["llm_model"] == "deepseek-v4-flash"
+    assert data["role_models"] == {
+        "examiner": "deepseek-v4-flash",
+        "student": "deepseek-v4-flash",
+        "writer": "deepseek-v4-flash",
+        "archivist": "deepseek-v4-flash",
+        "dagger": "deepseek-v4-flash",
+    }
+    assert data["paddleocr_api_token_configured"] is False
+    assert data["paddleocr_api_url"] == "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+    assert data["paddleocr_model"] == "PaddleOCR-VL-1.6"
+    assert "llm_api_key" not in data
+    assert "paddleocr_api_token" not in data
+
+
+def test_settings_post_writes_global_config_with_role_models(workspace):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/settings",
+        json={
+            "llm_api_key": "sk-new",
+            "llm_base_url": "https://llm.test",
+            "llm_model": "default-model",
+            "role_models": {
+                "examiner": "exam-model",
+                "student": "student-model",
+                "writer": "writer-model",
+                "archivist": "arch-model",
+                "dagger": "dagger-model",
+            },
+            "paddleocr_api_token": "ocr-new",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["llm_api_key_configured"] is True
+    assert data["paddleocr_api_token_configured"] is True
+    assert data["role_models"]["dagger"] == "dagger-model"
+    written = paths.global_config_path().read_text(encoding="utf-8")
+    assert "LLM_API_KEY=sk-new" in written
+    assert "LLM_BASE_URL=https://llm.test" in written
+    assert "LLM_MODEL=default-model" in written
+    assert "EXAMINER_MODEL=exam-model" in written
+    assert "STUDENT_MODEL=student-model" in written
+    assert "WRITER_MODEL=writer-model" in written
+    assert "ARCHIVIST_MODEL=arch-model" in written
+    assert "DAGGER_MODEL=dagger-model" in written
+    assert "PADDLEOCR_API_TOKEN=ocr-new" in written
+    assert "PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs" in written
+    assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in written
+
+
+def test_settings_post_ignores_paddleocr_endpoint_and_model_overrides(workspace):
+    config = paths.global_config_path()
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "\n".join(
+            [
+                "LLM_API_KEY=old-llm",
+                "PADDLEOCR_API_TOKEN=old-ocr",
+                "PADDLEOCR_API_URL=https://old-ocr.test/jobs",
+                "PADDLEOCR_MODEL=Old-OCR",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    client = _authed_client(workspace)
+
+    resp = client.post(
+        "/api/settings",
+        json={
+            "llm_api_key": "",
+            "llm_base_url": "https://new.test",
+            "llm_model": "new-default",
+            "role_models": {"dagger": "dagger-new"},
+            "paddleocr_api_token": "",
+            "paddleocr_api_url": "https://ocr-new.test/jobs",
+            "paddleocr_model": "PaddleOCR-VL-1.7",
+        },
+    )
+
+    assert resp.status_code == 200
+    written = config.read_text(encoding="utf-8")
+    assert "LLM_API_KEY=old-llm" in written
+    assert "PADDLEOCR_API_TOKEN=old-ocr" in written
+    assert "LLM_BASE_URL=https://new.test" in written
+    assert "DAGGER_MODEL=dagger-new" in written
+    assert "PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs" in written
+    assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in written
+    assert "https://ocr-new.test/jobs" not in written
+    assert "PaddleOCR-VL-1.7" not in written
+
+
 def test_status_includes_engine_state(workspace):
     client = _authed_client(workspace)
     data = client.get(f"/api/status?token={TOKEN}").json()
@@ -182,12 +326,33 @@ def test_ws_progress_rejects_bad_token(workspace):
             ws.receive_json()
 
 
-def test_cors_header_present_for_dev_origin(workspace):
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ],
+)
+def test_cors_header_present_for_spa_origins(workspace, origin):
     client = _authed_client(workspace)
-    resp = client.get(
-        f"/api/status?token={TOKEN}", headers={"Origin": "http://localhost:5173"}
+    resp = client.get(f"/api/status?token={TOKEN}", headers={"Origin": origin})
+    assert resp.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_preflight_allows_tauri_material_upload(workspace):
+    client = _authed_client(workspace)
+    resp = client.options(
+        f"/api/materials?token={TOKEN}",
+        headers={
+            "Origin": "http://tauri.localhost",
+            "Access-Control-Request-Method": "POST",
+        },
     )
-    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://tauri.localhost"
+    assert "POST" in resp.headers.get("access-control-allow-methods", "")
 
 
 def test_add_materials_uploads_supported_and_skips_unsupported(workspace):

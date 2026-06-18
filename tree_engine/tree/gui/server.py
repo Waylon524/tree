@@ -19,6 +19,7 @@ from typing import Any
 
 import markdown as _md  # type: ignore[import-untyped]
 from fastapi import (
+    Body,
     FastAPI,
     File,
     Form,
@@ -34,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from tree.cli.commands import config_cmd, inspect as inspect_cmd
-from tree.cli.commands.lifecycle import engine_status, start_engine, stop_engine
+from tree.cli.commands.lifecycle import engine_status, quit_tree, start_engine, stop_engine
 from tree.cli.dashboard.model import build_watch_model
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
@@ -43,9 +44,11 @@ from tree.planner.pipeline import load_dag
 from tree.planner.svg import write_dag_svg
 from tree.rag.service import (
     embedding_bringup,
+    embedding_extension_status,
     embedding_service_status,
     local_embed_backend_status,
     start_embedding_service,
+    start_embedding_extension_install,
     stop_embedding_service,
 )
 
@@ -123,10 +126,31 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         stop_engine(root)
         return HTMLResponse(_render_progress(root))
 
+    @app.post("/api/quit")
+    def api_quit(request: Request) -> dict[str, str]:
+        _require(request)
+        return {"message": quit_tree(root).message}
+
     @app.get("/api/status")
     def api_status(request: Request) -> dict[str, Any]:
         _require(request)
         return _status(root)
+
+    @app.get("/api/extension")
+    def api_extension(request: Request) -> dict[str, object]:
+        _require(request)
+        return embedding_extension_status()
+
+    @app.post("/api/extension/install")
+    def api_install_extension(request: Request) -> dict[str, object]:
+        _require(request)
+        start_embedding_extension_install()
+        return embedding_extension_status()
+
+    @app.get("/api/settings")
+    def api_settings(request: Request) -> dict[str, Any]:
+        _require(request)
+        return config_cmd.read_settings_config(root, env_path=paths.global_config_path())
 
     @app.websocket("/ws/progress")
     async def ws_progress(websocket: WebSocket) -> None:
@@ -144,7 +168,7 @@ def create_app(root: Path, *, token: str) -> FastAPI:
                     await websocket.send_json(payload)
                     last = payload
                 await asyncio.sleep(interval)
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
             return
 
     @app.get("/dag.svg")
@@ -209,6 +233,19 @@ def create_app(root: Path, *, token: str) -> FastAPI:
             paddleocr_api_token=paddleocr_api_token,
         )
         return HTMLResponse('<p class="ok">Saved global configuration.</p>')
+
+    @app.post("/api/settings")
+    def api_save_settings(
+        request: Request,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        _require(request)
+        config_cmd.write_settings_config(
+            root,
+            env_path=paths.global_config_path(),
+            settings=payload,
+        )
+        return config_cmd.read_settings_config(root, env_path=paths.global_config_path())
 
     @app.get("/api/materials")
     def api_materials(request: Request) -> dict[str, list[str]]:
@@ -282,13 +319,16 @@ def _safe_start_embedding() -> None:
 # --- config ------------------------------------------------------------------
 
 def _cors_origins() -> list[str]:
-    """Allowed cross-origin callers (the React/Vite dev server by default)."""
+    """Allowed cross-origin callers for the React SPA and Tauri WebView."""
     override = os.environ.get("TREE_GUI_CORS_ORIGINS", "").strip()
     if override:
         return [origin.strip() for origin in override.split(",") if origin.strip()]
     return [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
     ]
 
 

@@ -47,20 +47,78 @@ def write_quick_config(
     paddleocr_api_url: str = "",
 ) -> Path:
     """Write non-interactive setup values while preserving existing keys."""
+    return write_settings_config(
+        root,
+        env_path=env_path or paths.workspace_config_path(root),
+        allow_paddleocr_endpoint_override=True,
+        settings={
+            "llm_api_key": llm_api_key,
+            "llm_base_url": llm_base_url,
+            "llm_model": llm_model,
+            "paddleocr_api_token": paddleocr_api_token,
+            "paddleocr_api_url": paddleocr_api_url,
+        },
+    )
+
+
+def read_settings_config(root: Path, *, env_path: Path | None = None) -> dict[str, Any]:
+    """Return editable settings without exposing secret values."""
+    config_path = env_path or paths.global_config_path()
+    existing = read_env_file(config_path)
+    values = {**_DEFAULT_ENV, **existing}
+    default_model = values.get("LLM_MODEL") or _DEFAULT_ENV["LLM_MODEL"]
+    role_models = {
+        role: values.get(f"{role.upper()}_MODEL") or default_model for role in ROLES
+    }
+    return {
+        "config_path": str(config_path),
+        "llm_api_key_configured": bool(existing.get("LLM_API_KEY")),
+        "llm_base_url": values.get("LLM_BASE_URL", _DEFAULT_ENV["LLM_BASE_URL"]),
+        "llm_model": default_model,
+        "role_models": role_models,
+        "paddleocr_api_token_configured": bool(existing.get("PADDLEOCR_API_TOKEN")),
+        "paddleocr_api_url": values.get("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"]),
+        "paddleocr_model": values.get("PADDLEOCR_MODEL", _DEFAULT_ENV["PADDLEOCR_MODEL"]),
+    }
+
+
+def write_settings_config(
+    root: Path,
+    *,
+    env_path: Path | None = None,
+    settings: dict[str, Any],
+    allow_paddleocr_endpoint_override: bool = False,
+) -> Path:
+    """Write editable settings while keeping blank secret fields unchanged."""
     paths.ensure_workspace_dirs(root)
-    config_path = env_path or paths.workspace_config_path(root)
+    config_path = env_path or paths.global_config_path()
     existing = read_env_file(config_path)
     updates = {
-        "LLM_API_KEY": llm_api_key,
-        "LLM_BASE_URL": llm_base_url,
-        "LLM_MODEL": llm_model,
-        "PADDLEOCR_API_TOKEN": paddleocr_api_token,
-        "PADDLEOCR_API_URL": paddleocr_api_url,
+        "llm_api_key": "LLM_API_KEY",
+        "llm_base_url": "LLM_BASE_URL",
+        "llm_model": "LLM_MODEL",
+        "paddleocr_api_token": "PADDLEOCR_API_TOKEN",
     }
-    existing.update({key: _clean_prompt_value(value) for key, value in updates.items() if value})
+    if allow_paddleocr_endpoint_override:
+        updates["paddleocr_api_url"] = "PADDLEOCR_API_URL"
+    for field, key in updates.items():
+        value = _settings_str(settings.get(field))
+        if value:
+            existing[key] = value
+
+    role_models = settings.get("role_models")
+    if isinstance(role_models, dict):
+        for role in ROLES:
+            value = _settings_str(role_models.get(role))
+            if value:
+                existing[f"{role.upper()}_MODEL"] = value
+
     if existing.get("PADDLEOCR_API_TOKEN"):
-        existing.setdefault("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"])
-        existing.setdefault("PADDLEOCR_MODEL", _DEFAULT_ENV["PADDLEOCR_MODEL"])
+        if allow_paddleocr_endpoint_override:
+            existing.setdefault("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"])
+        else:
+            existing["PADDLEOCR_API_URL"] = _DEFAULT_ENV["PADDLEOCR_API_URL"]
+        existing["PADDLEOCR_MODEL"] = _DEFAULT_ENV["PADDLEOCR_MODEL"]
     write_env_file(config_path, existing)
     return config_path
 
@@ -180,3 +238,7 @@ def _prompt_visible(label: str, *, current: str = "", required: bool = False) ->
 
 def _clean_prompt_value(value: str) -> str:
     return re.sub(r"(?:\x1b\[[0-9;]*m|\[[0-9;]*m\])", "", str(value)).strip()
+
+
+def _settings_str(value: Any) -> str:
+    return _clean_prompt_value(value) if isinstance(value, str) else ""

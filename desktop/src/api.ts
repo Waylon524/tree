@@ -134,6 +134,64 @@ export async function stopEmbedding(): Promise<void> {
   await expectOk(await fetch(url("/api/embedding/stop"), { method: "POST" }));
 }
 
+export interface ExtensionState {
+  installed: boolean;
+  status: string;
+  phase: string;
+  progress: number;
+  message: string;
+  model: string;
+  runtime: string;
+}
+
+export async function fetchExtension(): Promise<ExtensionState> {
+  const resp = await expectOk(await fetch(url("/api/extension")));
+  return (await resp.json()) as ExtensionState;
+}
+
+export async function installExtension(): Promise<ExtensionState> {
+  const resp = await expectOk(await fetch(url("/api/extension/install"), { method: "POST" }));
+  return (await resp.json()) as ExtensionState;
+}
+
+export type RoleKey = "examiner" | "student" | "writer" | "archivist" | "dagger";
+export type RoleModels = Record<RoleKey, string>;
+
+export interface SettingsData {
+  config_path: string;
+  llm_api_key_configured: boolean;
+  llm_base_url: string;
+  llm_model: string;
+  role_models: RoleModels;
+  paddleocr_api_token_configured: boolean;
+  paddleocr_api_url: string;
+  paddleocr_model: string;
+}
+
+export interface SettingsSave {
+  llm_api_key: string;
+  llm_base_url: string;
+  llm_model: string;
+  role_models: RoleModels;
+  paddleocr_api_token: string;
+}
+
+export async function fetchSettings(): Promise<SettingsData> {
+  const resp = await expectOk(await fetch(url("/api/settings")));
+  return (await resp.json()) as SettingsData;
+}
+
+export async function saveSettings(fields: SettingsSave): Promise<SettingsData> {
+  const resp = await expectOk(
+    await fetch(url("/api/settings"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    }),
+  );
+  return (await resp.json()) as SettingsData;
+}
+
 export async function saveSetup(fields: Record<string, string>): Promise<string> {
   const resp = await expectOk(
     await fetch(url("/api/setup"), {

@@ -21,12 +21,18 @@ def start_engine(root: Path) -> LifecycleResult:
     embedding = start_embedding_service()
     pid_path = paths.service_pid_path(root, "engine")
     if pid_path.exists():
-        pid = pid_path.read_text(encoding="utf-8").strip()
-        return LifecycleResult(
-            f"{embedding.message}\n"
-            f"{theme.label('engine')} {theme.status('running')} "
-            f"({theme.label('pid')} {theme.path(pid)})"
-        )
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            pid_path.unlink(missing_ok=True)
+        else:
+            if process.pid_alive(pid):
+                return LifecycleResult(
+                    f"{embedding.message}\n"
+                    f"{theme.label('engine')} {theme.status('running')} "
+                    f"({theme.label('pid')} {theme.path(pid)})"
+                )
+            pid_path.unlink(missing_ok=True)
 
     log_path = paths.service_log_path(root, "engine")
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +40,7 @@ def start_engine(root: Path) -> LifecycleResult:
     # /watch error panel never resurfaces tracebacks from a previous run.
     log = log_path.open("wb")
     proc = process.spawn_detached(
-        [sys.executable, "-m", "tree.cli.app", "run"],
+        _engine_run_argv(),
         cwd=root,
         stdout=log,
         stderr=log,
@@ -47,23 +53,31 @@ def start_engine(root: Path) -> LifecycleResult:
     )
 
 
+def _engine_run_argv() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "run"]
+    return [sys.executable, "-m", "tree.cli.app", "run"]
+
+
 def stop_engine(root: Path) -> LifecycleResult:
     pid_path = paths.service_pid_path(root, "engine")
     if not pid_path.exists():
-        return LifecycleResult(f"{theme.label('engine')} {theme.status('not found')}")
+        embedding = stop_embedding_service(force=True)
+        return LifecycleResult(
+            f"{theme.label('engine')} {theme.status('not found')}\n{embedding.message}"
+        )
     pid = int(pid_path.read_text(encoding="utf-8").strip())
     process.terminate_pid(pid)
     pid_path.unlink(missing_ok=True)
+    embedding = stop_embedding_service(force=True)
     return LifecycleResult(
         f"{theme.label('engine')} {theme.success('stopped')} "
-        f"({theme.label('pid')} {theme.path(pid)})"
+        f"({theme.label('pid')} {theme.path(pid)})\n{embedding.message}"
     )
 
 
 def quit_tree(root: Path) -> LifecycleResult:
-    engine = stop_engine(root)
-    embedding = stop_embedding_service(force=True)
-    return LifecycleResult(f"{engine.message}\n{embedding.message}")
+    return stop_engine(root)
 
 
 def engine_status(root: Path) -> str:

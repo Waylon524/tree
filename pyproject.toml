@@ -76,6 +76,7 @@ line-length = 100
 [tool.pytest.ini_options]
 pythonpath = ["tree_engine"]
 asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"

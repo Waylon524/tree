@@ -103,7 +103,7 @@ def test_repl_start_is_hidden_alias_for_run(tmp_path, monkeypatch):
     assert result == "engine started"
 
 
-def test_repl_stop_stops_only_engine(tmp_path, monkeypatch):
+def test_repl_stop_delegates_to_lifecycle_stop(tmp_path, monkeypatch):
     calls = []
     embedding_stops = []
     monkeypatch.setattr(
@@ -164,6 +164,7 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
     started = []
     killed = []
     embedding_starts = []
+    embedding_stops = []
 
     class _Proc:
         pid = 4242
@@ -181,6 +182,11 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
         "tree.cli.commands.lifecycle.start_embedding_service",
         lambda: embedding_starts.append("embedding") or SimpleNamespace(message="embedding started"),
     )
+    monkeypatch.setattr(
+        "tree.cli.commands.lifecycle.stop_embedding_service",
+        lambda force=True: embedding_stops.append(force)
+        or SimpleNamespace(message="embedding stopped"),
+    )
     runner = CliRunner()
 
     start = runner.invoke(app, ["start"])
@@ -188,13 +194,71 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
     assert "started" in start.stdout
     assert embedding_starts == ["embedding"]
     assert paths.service_pid_path(tmp_path, "engine").read_text(encoding="utf-8") == "4242"
+    assert started[0][0][-3:] == ["-m", "tree.cli.app", "run"]
     assert started and started[0][1] == tmp_path
 
     stop = runner.invoke(app, ["stop"])
     assert stop.exit_code == 0
     assert "stopped" in stop.stdout
+    assert "embedding stopped" in stop.stdout
     assert killed == [4242]
+    assert embedding_stops == [True]
     assert not paths.service_pid_path(tmp_path, "engine").exists()
+
+
+def test_start_engine_uses_frozen_executable_command(tmp_path, monkeypatch):
+    from tree.cli.commands import lifecycle
+
+    started = []
+
+    class _Proc:
+        pid = 4242
+
+    monkeypatch.setattr(lifecycle.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(lifecycle.sys, "executable", "/Applications/TREE.app/tre-engine")
+    monkeypatch.setattr(
+        lifecycle.process,
+        "spawn_detached",
+        lambda cmd, *, cwd=None, stdout=None, stderr=None: started.append((cmd, cwd)) or _Proc(),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "start_embedding_service",
+        lambda: SimpleNamespace(message="embedding started"),
+    )
+
+    lifecycle.start_engine(tmp_path)
+
+    assert started[0][0] == ["/Applications/TREE.app/tre-engine", "run"]
+    assert started[0][1] == tmp_path
+
+
+def test_start_engine_restarts_after_stale_pid(tmp_path, monkeypatch):
+    from tree.cli.commands.lifecycle import start_engine
+
+    pid_path = paths.service_pid_path(tmp_path, "engine")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("1111", encoding="utf-8")
+    started = []
+
+    class _Proc:
+        pid = 4242
+
+    monkeypatch.setattr("tree.cli.commands.lifecycle.process.pid_alive", lambda pid: False)
+    monkeypatch.setattr(
+        "tree.cli.commands.lifecycle.process.spawn_detached",
+        lambda cmd, *, cwd=None, stdout=None, stderr=None: started.append((cmd, cwd)) or _Proc(),
+    )
+    monkeypatch.setattr(
+        "tree.cli.commands.lifecycle.start_embedding_service",
+        lambda: SimpleNamespace(message="embedding started"),
+    )
+
+    result = start_engine(tmp_path)
+
+    assert started
+    assert "started" in result.message
+    assert pid_path.read_text(encoding="utf-8") == "4242"
 
 
 def test_start_engine_truncates_stale_log(tmp_path, monkeypatch):
@@ -243,22 +307,15 @@ def test_engine_status_reflects_live_pid(tmp_path, monkeypatch):
 def test_quit_delegates_to_stop(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     calls = []
-    embedding_stops = []
     monkeypatch.setattr(
         "tree.cli.commands.lifecycle.stop_engine",
-        lambda root: calls.append(root) or SimpleNamespace(message="engine stopped"),
-    )
-    monkeypatch.setattr(
-        "tree.cli.commands.lifecycle.stop_embedding_service",
-        lambda force=True: embedding_stops.append(force)
-        or SimpleNamespace(message="embedding stopped"),
+        lambda root: calls.append(root) or SimpleNamespace(message="engine stopped\nembedding stopped"),
     )
 
     result = CliRunner().invoke(app, ["quit"])
 
     assert result.exit_code == 0
     assert calls == [tmp_path]
-    assert embedding_stops == [True]
     assert "engine stopped" in result.stdout
     assert "embedding stopped" in result.stdout
 

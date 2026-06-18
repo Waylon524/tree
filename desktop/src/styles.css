@@ -47,6 +47,31 @@ body {
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
 }
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.tab:hover,
+.tab.active {
+  background: var(--bar-bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.bar-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .conn {
   font-size: 12px;
   color: var(--muted);
@@ -97,6 +122,17 @@ button.ghost {
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
+}
+input {
+  font: inherit;
+}
+.controls input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
 }
 .muted {
   color: var(--muted);
@@ -170,10 +206,9 @@ table.stages td {
 .stage-current {
   color: var(--muted);
   font-size: 12px;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .badge {
   font-size: 11px;
@@ -210,6 +245,10 @@ table.stages td {
   margin-top: 10px;
   color: var(--failed);
   font-size: 13px;
+}
+.errors li {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .dag {
   width: 100%;
@@ -259,6 +298,85 @@ table.stages td {
   background: var(--bg);
   color: var(--text);
 }
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.section-head h2 {
+  margin: 0;
+}
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.settings-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.settings-form legend {
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.form-grid,
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.role-grid {
+  margin-top: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.settings-form label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-form label.full {
+  grid-column: 1 / -1;
+}
+.settings-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+.label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.label-row b {
+  color: var(--done);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .ok {
   color: var(--done);
   font-size: 13px;
@@ -277,4 +395,56 @@ table.stages td {
   border-radius: 6px;
   background: var(--card);
   color: var(--text);
+}
+.extension-gate {
+  max-width: 520px;
+}
+.extension-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.progress-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+.progress-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--bar-bg);
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+@media (max-width: 760px) {
+  .bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .bar-status {
+    margin-left: 0;
+  }
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .form-grid,
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
