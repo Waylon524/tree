@@ -64,12 +64,19 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 - **Acceptance (browser):** add materials → run → watch → read outputs → open DAG, no CLI.
   Folder selection via `tre serve --root` until the Phase-3 native picker lands.
 
-### Phase 3 — Tauri shell
-- [ ] Install Rust toolchain; scaffold `desktop/src-tauri/` (Tauri v2), load React dist.
-- [ ] Bundle + spawn the Phase-1 sidecar; pass host/port/token; stop on quit.
-- [ ] First-run model-download UX (progress, retry, mirror option via `EMBED_HF_ENDPOINT`).
-- [ ] Native folder picker (workspace) + native file picker / drag-drop (materials),
-      wired to Phase-2 endpoints.
+### Phase 3 — Tauri shell — in progress
+- [x] Installed Rust (cargo 1.96); scaffolded `desktop/src-tauri/` (Tauri v2) via the CLI,
+      loads the React dist / Vite dev server.
+- [x] Rust shell spawns the engine sidecar (`tre serve` with a generated port+token+root)
+      and exposes base+token to the frontend via an `api_config` command; kills it on exit.
+      Sidecar path from `TREE_SIDECAR_BIN` or the dev PyInstaller build; `TREE_API_*` env
+      overrides for dev with a manually-run server.
+- [x] React is Tauri-aware: `initApi()` pulls base+token from `api_config` inside the shell
+      (connect screen skipped), falls back to browser resolution otherwise.
+- [ ] Verify `cargo build` / `tauri dev` compiles + opens a window (in progress).
+- [ ] Native folder picker (workspace) → relaunch sidecar with new `--root`.
+- [ ] First-run model-download UX already shows phase (Phase 2 bringup); add retry/mirror.
+- [ ] Bundle the sidecar as a single-file (onefile) binary for prod (currently onedir).
 - **Acceptance:** `cargo tauri dev` opens a native window that does the full flow.
 
 ### Phase 4 — CI + installers + Releases

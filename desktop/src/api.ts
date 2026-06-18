@@ -1,16 +1,43 @@
 import type { Status } from "./types";
 
-// The `tre gui` server prints a URL like http://127.0.0.1:8799/?token=XXXX.
-// In dev, point VITE_TREE_API at that origin and open this app with ?token=XXXX.
-export const API_BASE: string =
-  (import.meta.env.VITE_TREE_API as string | undefined)?.replace(/\/$/, "") ??
-  "http://127.0.0.1:8799";
-
 const TOKEN_KEY = "tree_token";
 
-// Token resolution order: URL ?token= (the `tre gui` deep-link), then a token
-// entered via the connect screen (persisted), then a build-time env var.
+// API base + token are resolved at runtime. In the Tauri shell they come from the
+// `api_config` command (the shell spawned the sidecar and owns the token); in the
+// browser they come from VITE_TREE_API + the URL/connect-screen token.
+let resolvedBase: string | null = null;
+let resolvedToken: string | null = null;
+
+function isTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+// Call once at startup. Inside Tauri this fetches the sidecar base+token so the
+// connect screen is skipped; in the browser it's a no-op.
+export async function initApi(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const config = (await invoke("api_config")) as { base: string; token: string };
+    resolvedBase = config.base.replace(/\/$/, "");
+    resolvedToken = config.token;
+  } catch {
+    /* fall back to browser resolution */
+  }
+}
+
+export function apiBase(): string {
+  if (resolvedBase) return resolvedBase;
+  return (
+    (import.meta.env.VITE_TREE_API as string | undefined)?.replace(/\/$/, "") ??
+    "http://127.0.0.1:8799"
+  );
+}
+
+// Token resolution order: Tauri api_config, URL ?token= (the `tre gui` deep-link),
+// a token entered via the connect screen (persisted), then a build-time env var.
 export function getToken(): string {
+  if (resolvedToken) return resolvedToken;
   const fromUrl = new URL(window.location.href).searchParams.get("token");
   if (fromUrl) return fromUrl;
   try {
@@ -23,6 +50,7 @@ export function getToken(): string {
 }
 
 export function setToken(value: string): void {
+  resolvedToken = value;
   try {
     sessionStorage.setItem(TOKEN_KEY, value);
   } catch {
@@ -31,7 +59,7 @@ export function setToken(value: string): void {
 }
 
 function url(path: string): string {
-  const u = new URL(API_BASE + path);
+  const u = new URL(apiBase() + path);
   u.searchParams.set("token", getToken());
   return u.toString();
 }
@@ -118,6 +146,6 @@ export async function saveSetup(fields: Record<string, string>): Promise<string>
 }
 
 export function wsUrl(): string {
-  const base = API_BASE.replace(/^http/, "ws");
+  const base = apiBase().replace(/^http/, "ws");
   return `${base}/ws/progress?token=${encodeURIComponent(getToken())}`;
 }
