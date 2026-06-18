@@ -1,0 +1,93 @@
+# TREE Desktop — Packaging & Distribution Plan
+
+**Goal:** ship per-platform desktop installers (macOS / Windows / Linux) on GitHub
+Releases. A user downloads the installer for their OS, installs it, opens the app —
+the embedding model is fetched and started automatically on first run, and every
+function previously done via the `tre` CLI is available in-app. **No terminal, ever.**
+
+## Locked decisions
+- **Windows:** ship **unsigned** for now; document the SmartScreen "More info → Run
+  anyway" workaround. Revisit a code-signing cert later.
+- **macOS:** **sign + notarize** in CI (Apple Developer account available).
+- **Embedding model:** **download on first run** with in-app progress (not bundled
+  in the installer — it's ~600 MB). Reuses the M2 llama-server + Qwen3 GGUF
+  auto-download.
+
+## Target architecture
+- **Tauri** shell (Rust + system WebView) loads the built **React SPA** (`desktop/`).
+- The **Python engine** is bundled with **PyInstaller** and shipped as a Tauri
+  **sidecar**. The shell spawns it on launch as a headless server (`tre serve`),
+  and talks to it over loopback HTTP + WebSocket with a per-launch token.
+- On first run the sidecar downloads the llama-server binary + Qwen3 GGUF and starts
+  the embedding server (M2 path), surfaced with progress in the UI.
+- **Distribution:** GitHub Actions matrix builds the sidecar + installer per OS and
+  uploads to a GitHub Release on tag.
+
+## Current state (done)
+- React SPA over the FastAPI: run/stop, live progress (WebSocket), DAG (open in
+  system viewer), outputs reader, setup form, engine-status pill.
+- Cross-platform process mgmt (`spawn_detached` / `pid_alive` / `terminate_pid`).
+- Embedding via auto-downloaded llama-server binary (no native C-extension to bundle).
+- `[gui]` extra; loopback-only, token-gated server.
+
+## Phases
+
+### Phase 1 — Packaging spike (de-risk the Python sidecar) — HIGHEST RISK — ✅ PASSED
+- [x] Headless `tre serve --host --port --token` entry (GUI server, no browser open,
+      caller-supplied token).
+- [x] PyInstaller entry script + spec under `packaging/` (`tre_entry.py`,
+      `tre-engine.spec`, `build_sidecar.sh`). GUI templates/static declared as explicit
+      `datas` (collect_data_files missed them under editable install); `collect_all` for
+      qdrant_client + huggingface_hub; `collect_submodules('uvicorn')` + `websockets`.
+- [x] Built standalone binary on macOS (onedir, ~109 MB). Ran with `env -i PATH=/usr/bin:/bin`
+      (no Python/venv): `/api/status` 200 + valid JSON, no-token 403, `/` 200, static 200.
+      Bundle reports `embedding_backend: llama-server (auto-download on first run)` →
+      embedding uses the downloaded binary (no Python), live download not exercised.
+- **Acceptance: MET.** The bundled binary serves the API standalone; embedding path
+  resolves to the downloadable llama-server (verified by resolution, not a live 600 MB pull).
+
+### Phase 2 — In-app feature completeness (browser-testable, no new toolchain)
+- [ ] Backend: selectable workspace root (not fixed at `create_app`): list / open /
+      create a course folder.
+- [ ] Endpoint + UI: create/open workspace folder.
+- [ ] Endpoint + UI: add materials (upload / pick files into `materials/<collection>`),
+      reuse `_copy_input_to_materials`.
+- [ ] UI: embedding lifecycle controls + first-run model-download progress.
+- [ ] UI: surface `/init`, `/clean`, status equivalents.
+- **Acceptance:** a brand-new user completes the full flow (pick folder → setup → add
+  materials → run → watch → read outputs → open DAG) in the browser app, no CLI.
+
+### Phase 3 — Tauri shell
+- [ ] Install Rust toolchain; scaffold `desktop/src-tauri/` (Tauri v2), load React dist.
+- [ ] Bundle + spawn the Phase-1 sidecar; pass host/port/token; stop on quit.
+- [ ] First-run model-download UX (progress, retry, mirror option via `EMBED_HF_ENDPOINT`).
+- [ ] Native folder picker (workspace) + native file picker / drag-drop (materials),
+      wired to Phase-2 endpoints.
+- **Acceptance:** `cargo tauri dev` opens a native window that does the full flow.
+
+### Phase 4 — CI + installers + Releases
+- [ ] GitHub Actions matrix (macos / windows / ubuntu): build React → PyInstaller
+      sidecar → `tauri build` → installers (.dmg / .msi|.exe / .AppImage|.deb).
+- [ ] macOS: sign + notarize (Apple ID / Team ID / app-specific password as secrets).
+- [ ] Windows: unsigned; document SmartScreen workaround.
+- [ ] On git tag `v*`, upload installers to a GitHub Release.
+- **Acceptance:** pushing a tag produces downloadable installers for all three OSes.
+
+### Phase 5 — Distribution polish
+- [ ] README "Download & install" section (per-OS), incl. Windows unsigned note.
+- [ ] Optional: Tauri auto-updater.
+- [ ] Decide whether the desktop app supersedes the htmx `tre gui` (avoid maintaining two).
+
+## Risks / open items
+- PyInstaller hidden imports for qdrant-client/grpcio, pydantic-core, huggingface_hub —
+  Phase 1 confirms or surfaces the wall early.
+- Sidecar and Tauri bundles must be built **on each OS** (no cross-compile).
+- First-run model download size/time; offer the `hf-mirror.com` endpoint.
+- macOS notarization secrets handling in CI.
+
+## Progress log
+- 2026-06-18: Plan created. Decisions locked (Win unsigned / macOS notarize / model on
+  first run). Starting Phase 1.
+- 2026-06-18: Phase 1 PASSED. `tre serve` headless entry added; PyInstaller onedir bundle
+  (~109 MB) serves the API standalone with no Python on PATH (status 200 / auth 403 / static
+  200). Python-sidecar packaging is viable — the single-installer plan is unblocked.
