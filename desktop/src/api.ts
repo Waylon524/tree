@@ -70,6 +70,30 @@ export async function openDag(): Promise<string> {
   return resp.text();
 }
 
+export async function listMaterials(): Promise<string[]> {
+  const resp = await expectOk(await fetch(url("/api/materials")));
+  return ((await resp.json()) as { materials: string[] }).materials;
+}
+
+export async function uploadMaterials(
+  collection: string,
+  files: FileList,
+): Promise<{ saved: string[]; skipped: string[] }> {
+  const form = new FormData();
+  form.append("collection", collection || "default");
+  for (const file of Array.from(files)) form.append("files", file);
+  const resp = await expectOk(await fetch(url("/api/materials"), { method: "POST", body: form }));
+  return (await resp.json()) as { saved: string[]; skipped: string[] };
+}
+
+export async function startEmbedding(): Promise<void> {
+  await expectOk(await fetch(url("/api/embedding/start"), { method: "POST" }));
+}
+
+export async function stopEmbedding(): Promise<void> {
+  await expectOk(await fetch(url("/api/embedding/stop"), { method: "POST" }));
+}
+
 export async function saveSetup(fields: Record<string, string>): Promise<string> {
   const resp = await expectOk(
     await fetch(url("/api/setup"), {

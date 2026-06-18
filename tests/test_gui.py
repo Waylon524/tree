@@ -190,6 +190,62 @@ def test_cors_header_present_for_dev_origin(workspace):
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
+def test_add_materials_uploads_supported_and_skips_unsupported(workspace):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/materials",
+        data={"collection": "课件"},
+        files=[
+            ("files", ("ch1.pdf", b"%PDF-1.4", "application/pdf")),
+            ("files", ("notes.txt", b"hello", "text/plain")),
+            ("files", ("bad.xyz", b"nope", "application/octet-stream")),
+        ],
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body["saved"]) == {"课件/ch1.pdf", "课件/notes.txt"}
+    assert body["skipped"] == ["bad.xyz"]
+    assert (paths.materials_root(workspace) / "课件" / "ch1.pdf").read_bytes() == b"%PDF-1.4"
+
+    listed = client.get("/api/materials").json()["materials"]
+    assert listed == ["课件/ch1.pdf", "课件/notes.txt"]
+
+
+def test_add_materials_rejects_collection_path_traversal(workspace):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/materials",
+        data={"collection": "../../etc"},
+        files=[("files", ("a.txt", b"x", "text/plain"))],
+    )
+    assert resp.status_code == 200
+    # collection is reduced to its basename — nothing escapes materials/.
+    assert resp.json()["saved"] == ["etc/a.txt"]
+    assert (paths.materials_root(workspace) / "etc" / "a.txt").exists()
+
+
+def test_embedding_status_and_controls(workspace, monkeypatch):
+    started: list = []
+    stopped: list = []
+    monkeypatch.setattr("tree.gui.server.start_embedding_service", lambda **k: started.append(True))
+    monkeypatch.setattr("tree.gui.server.stop_embedding_service", lambda **k: stopped.append(True))
+    client = _authed_client(workspace)
+
+    status = client.get("/api/embedding").json()
+    assert set(status) == {"status", "backend"}
+
+    assert client.post("/api/embedding/start").json() == {"status": "starting"}
+    assert client.post("/api/embedding/stop").status_code == 200
+
+
+def test_clean_endpoint(workspace):
+    client = _authed_client(workspace)
+    assert paths.runtime_root(workspace).exists()
+    resp = client.post("/api/clean")
+    assert resp.status_code == 200
+    assert "message" in resp.json()
+
+
 def test_serve_command_runs_headless(monkeypatch):
     from typer.testing import CliRunner
 

@@ -1,8 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
-import { getToken, openDag, runPipeline, setToken, stopPipeline } from "./api";
+import {
+  getToken,
+  openDag,
+  runPipeline,
+  setToken,
+  startEmbedding,
+  stopEmbedding,
+  stopPipeline,
+} from "./api";
 import { useProgress } from "./useProgress";
 import { ProgressPanel } from "./components/ProgressPanel";
+import { Materials } from "./components/Materials";
 import { Outputs } from "./components/Outputs";
 import { SetupForm } from "./components/SetupForm";
 
@@ -45,6 +54,11 @@ function Dashboard({ token }: { token: string }) {
   const [busy, setBusy] = useState<boolean>(false);
   const [dagMsg, setDagMsg] = useState<string>("");
 
+  // Auto-start the embedding model when the app opens (first run downloads it).
+  useEffect(() => {
+    void startEmbedding().catch(() => undefined);
+  }, []);
+
   const guard = (action: () => Promise<void>) => async (): Promise<void> => {
     setBusy(true);
     try {
@@ -75,6 +89,20 @@ function Dashboard({ token }: { token: string }) {
               Stop
             </button>
             {status && <span className={`pill phase-${status.phase}`}>{status.phase}</span>}
+            {status && (
+              <span className="kv">
+                embed <b>{status.embedding_server}</b>
+              </span>
+            )}
+            <button
+              className="ghost"
+              onClick={() => void startEmbedding().catch(() => undefined)}
+            >
+              Start embedding
+            </button>
+            <button className="ghost" onClick={() => void stopEmbedding().catch(() => undefined)}>
+              Stop embedding
+            </button>
           </div>
           <ProgressPanel status={status} />
         </section>
@@ -100,9 +128,11 @@ function Dashboard({ token }: { token: string }) {
         </section>
 
         <section className="grid">
+          <Materials />
           <Outputs />
-          <SetupForm />
         </section>
+
+        <SetupForm />
       </main>
     </div>
   );

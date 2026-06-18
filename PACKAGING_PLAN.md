@@ -46,16 +46,20 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 - **Acceptance: MET.** The bundled binary serves the API standalone; embedding path
   resolves to the downloadable llama-server (verified by resolution, not a live 600 MB pull).
 
-### Phase 2 — In-app feature completeness (browser-testable, no new toolchain)
-- [ ] Backend: selectable workspace root (not fixed at `create_app`): list / open /
-      create a course folder.
-- [ ] Endpoint + UI: create/open workspace folder.
-- [ ] Endpoint + UI: add materials (upload / pick files into `materials/<collection>`),
-      reuse `_copy_input_to_materials`.
-- [ ] UI: embedding lifecycle controls + first-run model-download progress.
-- [ ] UI: surface `/init`, `/clean`, status equivalents.
-- **Acceptance:** a brand-new user completes the full flow (pick folder → setup → add
-  materials → run → watch → read outputs → open DAG) in the browser app, no CLI.
+### Phase 2 — In-app feature completeness (browser-testable, no new toolchain) — in progress
+- [~] Workspace selection — DEFERRED to Phase 3: handled by the Tauri native folder
+      picker launching the sidecar with `--root <folder>` (the picker lives at the shell
+      level). For now `tre serve --root` selects it and `create_app` runs
+      `ensure_workspace_dirs` on open (== `/init`).
+- [x] Add materials: `GET/POST /api/materials` (multipart upload into
+      `materials/<collection>`, extension-validated, collection basename-sanitized) +
+      React `Materials` card (collection field, file picker, live list).
+- [x] Embedding lifecycle: `GET /api/embedding`, `POST /api/embedding/{start,stop}`
+      (start runs off-thread; first run downloads). React auto-starts embedding on open
+      + Start/Stop controls + status.  [ ] byte-level download progress (refinement).
+- [x] `/clean` → `POST /api/clean`; `/init` covered by ensure-dirs-on-serve; status shown.
+- **Acceptance (browser):** add materials → run → watch → read outputs → open DAG, no CLI.
+  Folder selection via `tre serve --root` until the Phase-3 native picker lands.
 
 ### Phase 3 — Tauri shell
 - [ ] Install Rust toolchain; scaffold `desktop/src-tauri/` (Tauri v2), load React dist.
@@ -91,3 +95,7 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 - 2026-06-18: Phase 1 PASSED. `tre serve` headless entry added; PyInstaller onedir bundle
   (~109 MB) serves the API standalone with no Python on PATH (status 200 / auth 403 / static
   200). Python-sidecar packaging is viable — the single-installer plan is unblocked.
+- 2026-06-18: 0.3.1 released (engine-state pill, open-DAG, headless serve + earlier fixes).
+  Phase 2 in progress: materials upload (API + React Materials card), embedding controls +
+  auto-start-on-open, /clean, init-on-serve. Workspace folder picker deferred to Phase 3.
+  279 tests green, frontend builds. Remaining: embedding download progress (refinement).

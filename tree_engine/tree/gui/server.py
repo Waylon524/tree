@@ -13,24 +13,40 @@ import os
 import secrets
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 import markdown as _md  # type: ignore[import-untyped]
-from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from tree.cli.commands import config_cmd
+from tree.cli.commands import config_cmd, inspect as inspect_cmd
 from tree.cli.commands.lifecycle import engine_status, start_engine, stop_engine
 from tree.cli.dashboard.model import build_watch_model
+from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
 from tree.observability.progress import STAGES
 from tree.planner.pipeline import load_dag
 from tree.planner.svg import write_dag_svg
-from tree.rag.service import embedding_service_status, local_embed_backend_status
+from tree.rag.service import (
+    embedding_service_status,
+    local_embed_backend_status,
+    start_embedding_service,
+    stop_embedding_service,
+)
 
 COOKIE_NAME = "tree_gui_token"
 _GUI_DIR = Path(__file__).parent
@@ -55,6 +71,7 @@ _BADGES = {
 
 def create_app(root: Path, *, token: str) -> FastAPI:
     root = Path(root)
+    paths.ensure_workspace_dirs(root)  # opening a folder initializes it (== /init)
     app = FastAPI(title="TREE GUI", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.root = root
     app.state.token = token
@@ -192,7 +209,67 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         )
         return HTMLResponse('<p class="ok">Saved global configuration.</p>')
 
+    @app.get("/api/materials")
+    def api_materials(request: Request) -> dict[str, list[str]]:
+        _require(request)
+        return {"materials": _list_materials(root)}
+
+    @app.post("/api/materials")
+    async def api_add_materials(
+        request: Request,
+        collection: str = Form("default"),
+        files: list[UploadFile] = File(...),
+    ) -> dict[str, Any]:
+        _require(request)
+        coll = Path(collection).name or "default"  # no path traversal via collection
+        dest_dir = paths.materials_root(root) / coll
+        saved: list[str] = []
+        skipped: list[str] = []
+        for upload in files:
+            name = Path(upload.filename or "").name
+            if not name:
+                continue
+            if Path(name).suffix.lower() not in MATERIAL_EXTENSIONS:
+                skipped.append(name)
+                continue
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (dest_dir / name).write_bytes(await upload.read())
+            saved.append(f"{coll}/{name}")
+        return {"saved": saved, "skipped": skipped}
+
+    @app.get("/api/embedding")
+    def api_embedding(request: Request) -> dict[str, str]:
+        _require(request)
+        return {"status": embedding_service_status(), "backend": local_embed_backend_status()}
+
+    @app.post("/api/embedding/start")
+    def api_embedding_start(request: Request) -> dict[str, str]:
+        _require(request)
+        # First run downloads the model/binary, which can take minutes; run it off
+        # the request thread and let the UI poll /api/embedding for status.
+        threading.Thread(target=_safe_start_embedding, name="tree-embedding-start",
+                         daemon=True).start()
+        return {"status": "starting"}
+
+    @app.post("/api/embedding/stop")
+    def api_embedding_stop(request: Request) -> dict[str, str]:
+        _require(request)
+        stop_embedding_service(force=True)
+        return {"status": embedding_service_status()}
+
+    @app.post("/api/clean")
+    def api_clean(request: Request) -> dict[str, str]:
+        _require(request)
+        return {"message": inspect_cmd.clean_runtime(root)}
+
     return app
+
+
+def _safe_start_embedding() -> None:
+    try:
+        start_embedding_service()
+    except Exception:  # noqa: BLE001 - surfaced via /api/embedding status polling
+        return
 
 
 # --- config ------------------------------------------------------------------
@@ -297,6 +374,17 @@ def _list_outputs(root: Path) -> list[str]:
     if not out.exists():
         return []
     return sorted(p.name for p in out.glob("*.md"))
+
+
+def _list_materials(root: Path) -> list[str]:
+    materials_root = paths.materials_root(root)
+    if not materials_root.exists():
+        return []
+    return sorted(
+        str(p.relative_to(materials_root))
+        for p in materials_root.rglob("*")
+        if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in MATERIAL_EXTENSIONS
+    )
 
 
 def _safe_output_path(root: Path, name: str) -> Path:
