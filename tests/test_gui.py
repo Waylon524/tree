@@ -232,7 +232,7 @@ def test_embedding_status_and_controls(workspace, monkeypatch):
     client = _authed_client(workspace)
 
     status = client.get("/api/embedding").json()
-    assert set(status) == {"status", "backend"}
+    assert set(status) == {"status", "backend", "phase", "detail"}
 
     assert client.post("/api/embedding/start").json() == {"status": "starting"}
     assert client.post("/api/embedding/stop").status_code == 200

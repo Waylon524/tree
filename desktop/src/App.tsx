@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
 import {
+  getEmbedding,
   getToken,
   openDag,
   runPipeline,
@@ -9,6 +10,7 @@ import {
   stopEmbedding,
   stopPipeline,
 } from "./api";
+import type { EmbeddingState } from "./api";
 import { useProgress } from "./useProgress";
 import { ProgressPanel } from "./components/ProgressPanel";
 import { Materials } from "./components/Materials";
@@ -53,11 +55,27 @@ function Dashboard({ token }: { token: string }) {
   const { status, connected } = useProgress(token);
   const [busy, setBusy] = useState<boolean>(false);
   const [dagMsg, setDagMsg] = useState<string>("");
+  const [embed, setEmbed] = useState<EmbeddingState | null>(null);
 
-  // Auto-start the embedding model when the app opens (first run downloads it).
+  // Auto-start the embedding model when the app opens (first run downloads it),
+  // then poll for bringup phase so the download/startup is visible.
   useEffect(() => {
     void startEmbedding().catch(() => undefined);
+    const tick = (): void => {
+      getEmbedding()
+        .then(setEmbed)
+        .catch(() => undefined);
+    };
+    tick();
+    const timer = window.setInterval(tick, 2000);
+    return () => window.clearInterval(timer);
   }, []);
+
+  const embedLabel = embed
+    ? embed.status === "running"
+      ? "running"
+      : embed.detail || embed.phase
+    : "…";
 
   const guard = (action: () => Promise<void>) => async (): Promise<void> => {
     setBusy(true);
@@ -89,11 +107,9 @@ function Dashboard({ token }: { token: string }) {
               Stop
             </button>
             {status && <span className={`pill phase-${status.phase}`}>{status.phase}</span>}
-            {status && (
-              <span className="kv">
-                embed <b>{status.embedding_server}</b>
-              </span>
-            )}
+            <span className="kv">
+              embedding <b>{embedLabel}</b>
+            </span>
             <button
               className="ghost"
               onClick={() => void startEmbedding().catch(() => undefined)}

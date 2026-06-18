@@ -42,6 +42,7 @@ from tree.observability.progress import STAGES
 from tree.planner.pipeline import load_dag
 from tree.planner.svg import write_dag_svg
 from tree.rag.service import (
+    embedding_bringup,
     embedding_service_status,
     local_embed_backend_status,
     start_embedding_service,
@@ -240,7 +241,13 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     @app.get("/api/embedding")
     def api_embedding(request: Request) -> dict[str, str]:
         _require(request)
-        return {"status": embedding_service_status(), "backend": local_embed_backend_status()}
+        bringup = embedding_bringup()
+        return {
+            "status": embedding_service_status(),
+            "backend": local_embed_backend_status(),
+            "phase": bringup["phase"],
+            "detail": bringup["message"],
+        }
 
     @app.post("/api/embedding/start")
     def api_embedding_start(request: Request) -> dict[str, str]:

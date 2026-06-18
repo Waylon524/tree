@@ -148,6 +148,19 @@ def test_remote_embedding_url_skips_local_service(tmp_path, monkeypatch):
     assert started == []
 
 
+def test_embedding_bringup_roundtrip(tmp_path, monkeypatch):
+    from tree.rag import service
+
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    assert service.embedding_bringup() == {"phase": "idle", "message": ""}
+
+    service._set_bringup("downloading", "Downloading embedding model")
+    assert service.embedding_bringup() == {
+        "phase": "downloading",
+        "message": "Downloading embedding model",
+    }
+
+
 def test_autostart_disabled_skips_loopback_management(tmp_path, monkeypatch):
     """Windows + Ollama case: a loopback endpoint TREE does not host."""
     from tree.rag import service

@@ -56,7 +56,10 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
       React `Materials` card (collection field, file picker, live list).
 - [x] Embedding lifecycle: `GET /api/embedding`, `POST /api/embedding/{start,stop}`
       (start runs off-thread; first run downloads). React auto-starts embedding on open
-      + Start/Stop controls + status.  [ ] byte-level download progress (refinement).
+      + Start/Stop controls + status.
+- [x] Embedding bringup status (phase: preparing/downloading/starting/running/failed)
+      written by the service, surfaced in `/api/embedding` + the React control, so
+      first-run download/startup is visible.  [ ] byte-level progress bar (later refinement).
 - [x] `/clean` → `POST /api/clean`; `/init` covered by ensure-dirs-on-serve; status shown.
 - **Acceptance (browser):** add materials → run → watch → read outputs → open DAG, no CLI.
   Folder selection via `tre serve --root` until the Phase-3 native picker lands.

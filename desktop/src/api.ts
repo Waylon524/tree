@@ -86,6 +86,18 @@ export async function uploadMaterials(
   return (await resp.json()) as { saved: string[]; skipped: string[] };
 }
 
+export interface EmbeddingState {
+  status: string;
+  backend: string;
+  phase: string;
+  detail: string;
+}
+
+export async function getEmbedding(): Promise<EmbeddingState> {
+  const resp = await expectOk(await fetch(url("/api/embedding")));
+  return (await resp.json()) as EmbeddingState;
+}
+
 export async function startEmbedding(): Promise<void> {
   await expectOk(await fetch(url("/api/embedding/start"), { method: "POST" }));
 }

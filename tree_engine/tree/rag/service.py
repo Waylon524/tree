@@ -39,14 +39,17 @@ def start_embedding_service(*, timeout_sec: float | None = None) -> EmbeddingSer
         return EmbeddingServiceResult("external", f"using external embedding endpoint: {base_url}")
 
     if _embedding_health(base_url):
+        _set_bringup("running", "Embedding server running")
         return EmbeddingServiceResult("running", "embedding server running")
 
+    _set_bringup("preparing", "Preparing embedding server")
     root = Path.cwd()
     pid_path = paths.service_pid_path(root, "embedding")
     if pid_path.exists():
         pid = _read_pid(pid_path)
         if pid is not None and process.pid_alive(pid):
             if _wait_for_health(base_url, timeout_sec=timeout_sec):
+                _set_bringup("running", "Embedding server running")
                 return EmbeddingServiceResult("running", f"embedding server running (pid {pid})")
             process.terminate_pid(pid)
         pid_path.unlink(missing_ok=True)
@@ -58,11 +61,14 @@ def start_embedding_service(*, timeout_sec: float | None = None) -> EmbeddingSer
     log = log_path.open("ab")
     proc = process.spawn_detached(argv, stdout=log, stderr=log)
     pid_path.write_text(str(proc.pid), encoding="utf-8")
+    _set_bringup("starting", "Starting embedding server")
     if not _wait_for_health(base_url, timeout_sec=timeout_sec):
+        _set_bringup("failed", "Embedding server did not become healthy in time")
         raise RuntimeError(
             f"Embedding server did not become healthy within {_server_start_timeout(timeout_sec):.0f}s. "
             f"See {log_path}."
         )
+    _set_bringup("running", f"Embedding server running (backend {backend})")
     return EmbeddingServiceResult(
         "started",
         f"embedding server started (pid {proc.pid}, backend {backend}, model {model_source})",
@@ -78,6 +84,7 @@ def stop_embedding_service(*, force: bool = False) -> EmbeddingServiceResult:
     if pid is not None:
         process.terminate_pid(pid, force=force)
     pid_path.unlink(missing_ok=True)
+    _set_bringup("stopped", "Embedding server stopped")
     return EmbeddingServiceResult("stopped", f"embedding server stopped (pid {pid})")
 
 
@@ -187,13 +194,16 @@ def _resolve_server_launch(host: str, port: int) -> tuple[list[str], str, str]:
 
 
 def _python_launch(host: str, port: int) -> tuple[list[str], str, str]:
+    _set_bringup("downloading", "Downloading embedding model (first run only)…")
     model = ensure_embedding_model()
     argv = [sys.executable, "-m", "tree.rag.server", "--host", host, "--port", str(port)]
     return argv, "python (llama-cpp-python)", model.source
 
 
 def _llama_server_launch(host: str, port: int) -> tuple[list[str], str, str]:
+    _set_bringup("downloading", "Downloading llama-server (first run only)…")
     binary = llama_server.ensure_llama_server()
+    _set_bringup("downloading", "Downloading embedding model (first run only)…")
     model = ensure_embedding_model()
     argv = llama_server.build_argv(binary, model.path, host=host, port=port)
     return argv, f"llama-server ({binary.name})", model.source
@@ -230,3 +240,31 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+# --- bringup status (first-run download / startup feedback for the GUI) -------
+
+def _bringup_path() -> Path:
+    return paths.global_services_root() / "embedding-bringup.json"
+
+
+def _set_bringup(phase: str, message: str = "") -> None:
+    """Record coarse embedding bringup phase for the GUI (best-effort, never raises)."""
+    try:
+        path = _bringup_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"phase": phase, "message": message}), encoding="utf-8")
+    except Exception:
+        return
+
+
+def embedding_bringup() -> dict[str, str]:
+    """Read the last bringup phase/message: idle|preparing|downloading|starting|running|failed|stopped."""
+    path = _bringup_path()
+    if not path.exists():
+        return {"phase": "idle", "message": ""}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {"phase": str(data.get("phase", "idle")), "message": str(data.get("message", ""))}
+    except Exception:
+        return {"phase": "idle", "message": ""}
