@@ -2,27 +2,105 @@ import type { Status } from "./types";
 
 const TOKEN_KEY = "tree_token";
 
-// API base + token are resolved at runtime. In the Tauri shell they come from the
-// `api_config` command (the shell spawned the sidecar and owns the token); in the
+// API base + token are resolved at runtime. In the Tauri shell they come from
+// `app_bootstrap` / `api_config` (the shell owns the sidecar and token); in the
 // browser they come from VITE_TREE_API + the URL/connect-screen token.
 let resolvedBase: string | null = null;
 let resolvedToken: string | null = null;
 
-function isTauri(): boolean {
+export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-// Call once at startup. Inside Tauri this fetches the sidecar base+token so the
-// connect screen is skipped; in the browser it's a no-op.
-export async function initApi(): Promise<void> {
-  if (!isTauri()) return;
+export interface DesktopApiConfig {
+  base: string;
+  token: string;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  created_at: number;
+  updated_at: number;
+  last_opened_at: number;
+  source_count: number;
+  output_count: number;
+  storage_bytes: number;
+}
+
+export interface AppBootstrap {
+  tauri: boolean;
+  projects: ProjectSummary[];
+  current_project: ProjectSummary | null;
+  api: DesktopApiConfig | null;
+  error: string | null;
+}
+
+export interface ProjectSelection {
+  projects: ProjectSummary[];
+  current_project: ProjectSummary;
+  api: DesktopApiConfig;
+}
+
+async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return (await invoke(command, args)) as T;
+}
+
+export function setApiConfig(config: DesktopApiConfig): void {
+  resolvedBase = config.base.replace(/\/$/, "");
+  setToken(config.token);
+}
+
+function clearApiConfig(): void {
+  resolvedBase = null;
+  resolvedToken = null;
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const config = (await invoke("api_config")) as { base: string; token: string };
-    resolvedBase = config.base.replace(/\/$/, "");
-    resolvedToken = config.token;
+    sessionStorage.removeItem(TOKEN_KEY);
   } catch {
-    /* fall back to browser resolution */
+    /* sessionStorage unavailable */
+  }
+}
+
+function applyBootstrapApi(bootstrap: AppBootstrap): void {
+  if (bootstrap.api) {
+    setApiConfig(bootstrap.api);
+  } else if (bootstrap.tauri) {
+    clearApiConfig();
+  }
+}
+
+// Call once at startup. Inside Tauri this returns project bootstrap state and,
+// when a current project exists, resolves the sidecar API. In the browser it's
+// a no-op so the existing token flow remains unchanged.
+export async function initApi(): Promise<AppBootstrap | null> {
+  if (!isTauri()) return null;
+  try {
+    const bootstrap = await invokeTauri<AppBootstrap>("app_bootstrap");
+    if (bootstrap.api) setApiConfig(bootstrap.api);
+    return bootstrap;
+  } catch (err) {
+    try {
+      const config = await invokeTauri<DesktopApiConfig>("api_config");
+      setApiConfig(config);
+      return {
+        tauri: true,
+        projects: [],
+        current_project: null,
+        api: config,
+        error: null,
+      };
+    } catch {
+      return {
+        tauri: true,
+        projects: [],
+        current_project: null,
+        api: null,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 }
 
@@ -56,6 +134,61 @@ export function setToken(value: string): void {
   } catch {
     /* sessionStorage unavailable */
   }
+}
+
+export async function listProjects(): Promise<ProjectSummary[]> {
+  return invokeTauri<ProjectSummary[]>("list_projects");
+}
+
+export async function createProject(name: string): Promise<ProjectSelection> {
+  const selection = await invokeTauri<ProjectSelection>("create_project", { name });
+  setApiConfig(selection.api);
+  return selection;
+}
+
+export async function selectProject(id: string): Promise<ProjectSelection> {
+  const selection = await invokeTauri<ProjectSelection>("select_project", { id });
+  setApiConfig(selection.api);
+  return selection;
+}
+
+export async function renameProject(
+  id: string,
+  name: string,
+  description: string,
+): Promise<AppBootstrap> {
+  const bootstrap = await invokeTauri<AppBootstrap>("rename_project", { id, name, description });
+  applyBootstrapApi(bootstrap);
+  return bootstrap;
+}
+
+export async function deleteProject(id: string, confirmation: string): Promise<AppBootstrap> {
+  const bootstrap = await invokeTauri<AppBootstrap>("delete_project", { id, confirmation });
+  applyBootstrapApi(bootstrap);
+  return bootstrap;
+}
+
+export async function chooseWorkspaceDirectory(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose existing TREE workspace",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function importExistingProject(
+  sourcePath: string,
+  name?: string,
+): Promise<ProjectSelection> {
+  const selection = await invokeTauri<ProjectSelection>("import_existing_project", {
+    sourcePath,
+    name,
+  });
+  setApiConfig(selection.api);
+  return selection;
 }
 
 function url(path: string): string {
@@ -93,14 +226,121 @@ export async function fetchOutputHtml(name: string): Promise<string> {
   return resp.text();
 }
 
+export interface RawOutput {
+  name: string;
+  markdown: string;
+  size_bytes: number;
+  updated_at: string;
+}
+
+export async function fetchOutputRaw(name: string): Promise<RawOutput> {
+  const resp = await expectOk(await fetch(url(`/api/outputs/${encodeURIComponent(name)}/raw`)));
+  return (await resp.json()) as RawOutput;
+}
+
+export interface ExportItem {
+  name: string;
+  destination?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface ExportResult {
+  exported: ExportItem[];
+  skipped: ExportItem[];
+  failed: ExportItem[];
+}
+
+export async function chooseExportDirectory(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose export folder",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function exportOutputs(destination: string, files: string[]): Promise<ExportResult> {
+  const resp = await expectOk(
+    await fetch(url("/api/exports"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destination, files, mode: "copy" }),
+    }),
+  );
+  return (await resp.json()) as ExportResult;
+}
+
 export async function openDag(): Promise<string> {
   const resp = await expectOk(await fetch(url("/api/open-dag"), { method: "POST" }));
   return resp.text();
 }
 
+export type DagNodeStatus = "locked" | "ready" | "running" | "complete" | "failed";
+
+export interface DagNode {
+  id: string;
+  title: string;
+  label: string;
+  status: DagNodeStatus;
+  defines: string[];
+  collections: string[];
+  summary: string;
+  prerequisites: string[];
+  dependents: string[];
+  source_order_index: number;
+  output_paths: string[];
+}
+
+export interface DagEdge {
+  from: string;
+  to: string;
+  relation: string;
+  confidence: number;
+  required_defines: string[];
+}
+
+export interface DagPayload {
+  nodes: DagNode[];
+  edges: DagEdge[];
+  roots: string[];
+  stats: {
+    nodes: number;
+    edges: number;
+    statuses: Record<DagNodeStatus, number>;
+  };
+  updated_at: string;
+}
+
+export async function fetchDag(): Promise<DagPayload> {
+  const resp = await expectOk(await fetch(url("/api/dag")));
+  return (await resp.json()) as DagPayload;
+}
+
 export async function listMaterials(): Promise<string[]> {
   const resp = await expectOk(await fetch(url("/api/materials")));
   return ((await resp.json()) as { materials: string[] }).materials;
+}
+
+export type ImportedFileStatus = "active" | "missing";
+
+export interface ImportedFile {
+  id: string;
+  original_name: string;
+  stored_name: string;
+  relative_path: string;
+  collection: string;
+  size_bytes: number;
+  sha256: string;
+  imported_at: string;
+  status: ImportedFileStatus;
+}
+
+export async function fetchImportedFiles(): Promise<ImportedFile[]> {
+  const resp = await expectOk(await fetch(url("/api/imported-files")));
+  return ((await resp.json()) as { files: ImportedFile[] }).files;
 }
 
 export async function uploadMaterials(

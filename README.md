@@ -359,7 +359,28 @@ tre
 
 ## 图形界面 (GUI)
 
-如果不想用终端，可以用浏览器图形界面。先安装 `gui` extra：
+### 桌面 app：项目库工作流
+
+打包后的 TREE 桌面 app 以 **Projects** 为入口。首次启动时创建项目，或用
+**Import Existing** 选择已有 TREE workspace；应用会把该 workspace 的
+`materials/`、`outputs/` 和 `.tree/runtime/` 复制到受管理的项目库中，并生成新的
+`project.json`。后续重命名项目只修改显示名，不移动项目 ID 或内部路径。
+
+桌面 app 的常规流程是：
+
+1. 创建或打开项目。
+2. 导入资料到 Imported Files。
+3. Run 生成知识 DAG 和 Generated Files。
+4. 在 DAG 完成节点或 Generated Files 中打开 Reader，阅读 Markdown / LaTeX。
+5. 用 Export 把生成文件复制到用户选择的目录。
+
+项目数据默认保存在 `~/.tree/projects/`。这是 TREE 的内部项目库；正常使用时不需要直接管理
+`materials/`、`outputs/` 或 `.tree/runtime/` 这些目录。项目库中可以编辑项目名称/描述、
+查看创建/更新时间、导入/生成数量和存储大小，也可以通过输入项目名确认删除受管理项目。
+
+### 浏览器 GUI：root-scoped 调试入口
+
+如果不想用终端，也可以用浏览器图形界面。先安装 `gui` extra：
 
 ```bash
 pipx install "tree-engine[rag,gui]"   # 或在已装环境中 pip install "tree-engine[gui]"
@@ -373,8 +394,8 @@ tre gui --no-browser    # 不自动打开浏览器
 tre gui --port 9000     # 指定端口（默认 8799，被占用则自动换一个空闲端口）
 ```
 
-也可以在 `TREE>` 里执行 `/gui`。界面提供：运行 / 停止 pipeline、每秒刷新的七阶段进度面板、
-Knowledge DAG 预览、`outputs/` 教材的 Markdown 阅读、以及 setup 配置表单。
+也可以在 `TREE>` 里执行 `/gui`。浏览器 GUI 仍然以当前 workspace root 为边界，适合开发和
+调试；桌面 app 则额外提供项目库、项目切换、迁移、Reader 和导出工作流。
 
 GUI 只监听本机回环地址（`127.0.0.1`），并用每次启动随机生成的 token 鉴权（启动时打印在
 URL 里）。它是现有引擎的“presentation 层”，复用与 CLI 相同的 `/run`、进度、DAG、配置逻辑，
@@ -711,6 +732,20 @@ outputs/knowledge-dag.svg
 </details>
 
 ## 工作区结构
+
+桌面 app 管理的项目默认位于：
+
+```text
+~/.tree/projects/
+├── index.json
+└── proj_<id>/
+    ├── project.json
+    ├── materials/
+    ├── outputs/
+    └── .tree/runtime/
+```
+
+CLI / 浏览器 GUI 仍然可以直接以某个 workspace root 运行：
 
 ```text
 my-course/

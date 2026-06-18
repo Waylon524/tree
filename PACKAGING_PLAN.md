@@ -77,7 +77,11 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 - [x] Bundle the sidecar: PyInstaller onedir bundled as a Tauri **resource**
       (`bundle.resources`), spawned from `resource_dir/tre-engine/` in prod (cleaner than
       onefile for a Python app). Rust compiles clean.
-- [ ] Native folder picker (workspace) → relaunch sidecar with new `--root` (polish).
+- [x] Project Library replaces raw workspace picking in the desktop UX: managed project
+      roots live under `~/.tree/projects/`; create/open switches sidecar root; existing
+      TREE workspaces can be imported by copying `materials/`, `outputs/`, and `.tree/`.
+- [x] Project lifecycle polish: rename updates metadata without moving the stable project
+      path, and delete uses typed confirmation before removing managed project files.
 - [ ] Verify the actual bundled window (`tauri dev` / `tauri build`) at runtime — only
       compile-verified so far.
 - **Acceptance:** `cargo tauri dev` opens a native window that does the full flow.
@@ -123,4 +127,6 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 - 2026-06-18: 0.3.1 released (engine-state pill, open-DAG, headless serve + earlier fixes).
   Phase 2 in progress: materials upload (API + React Materials card), embedding controls +
   auto-start-on-open, /clean, init-on-serve. Workspace folder picker deferred to Phase 3.
+- 2026-06-18: 0.3.2 prepared with project library/lifecycle controls, imported-file
+  manifest UI, export flow, DAG 3D tab, Reader, and simplified Imported Files import UX.
   279 tests green, frontend builds. Remaining: embedding download progress (refinement).

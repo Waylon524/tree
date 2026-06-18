@@ -9,11 +9,15 @@ server.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +45,7 @@ from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
 from tree.observability.progress import STAGES
 from tree.planner.pipeline import load_dag
+from tree.planner.store import read_json, write_json_atomic
 from tree.planner.svg import write_dag_svg
 from tree.rag.service import (
     embedding_bringup,
@@ -136,6 +141,11 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         _require(request)
         return _status(root)
 
+    @app.get("/api/dag")
+    def api_dag(request: Request) -> dict[str, Any]:
+        _require(request)
+        return _dag_model(root)
+
     @app.get("/api/extension")
     def api_extension(request: Request) -> dict[str, object]:
         _require(request)
@@ -204,6 +214,64 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         _require(request)
         return {"files": _list_outputs(root)}
 
+    @app.get("/api/outputs/{name}/raw")
+    def api_output_raw(request: Request, name: str) -> dict[str, Any]:
+        _require(request)
+        target = _safe_output_path(root, name)
+        stat = target.stat()
+        return {
+            "name": name,
+            "markdown": target.read_text(encoding="utf-8"),
+            "size_bytes": stat.st_size,
+            "updated_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+        }
+
+    @app.post("/api/exports")
+    def api_exports(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        _require(request)
+        destination_raw = str(payload.get("destination") or "").strip()
+        if not destination_raw:
+            raise HTTPException(status_code=400, detail="Export destination is required")
+        mode = str(payload.get("mode") or "copy")
+        if mode != "copy":
+            raise HTTPException(status_code=400, detail="Only copy export mode is supported")
+        files = payload.get("files")
+        if not isinstance(files, list) or not files:
+            raise HTTPException(status_code=400, detail="At least one output file is required")
+
+        selected: list[tuple[str, Path]] = []
+        for item in files:
+            name = str(item or "")
+            try:
+                selected.append((name, _safe_output_path(root, name)))
+            except HTTPException as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid output file: {name}",
+                ) from exc
+
+        destination = Path(destination_raw).expanduser()
+        if destination.exists() and not destination.is_dir():
+            raise HTTPException(status_code=400, detail="Export destination must be a folder")
+        destination.mkdir(parents=True, exist_ok=True)
+
+        exported: list[dict[str, str]] = []
+        skipped: list[dict[str, str]] = []
+        failed: list[dict[str, str]] = []
+        for name, source in selected:
+            target = destination / name
+            try:
+                if source.resolve() == target.resolve():
+                    skipped.append({"name": name, "reason": "source and destination are the same"})
+                    continue
+                shutil.copy2(source, target)
+                exported.append({"name": name, "destination": str(target)})
+            except Exception as exc:  # pragma: no cover - OS copy failures vary
+                failed.append({"name": name, "error": str(exc)})
+        return {"exported": exported, "skipped": skipped, "failed": failed}
+
     @app.get("/outputs/{name}", response_class=HTMLResponse)
     def output_view(request: Request, name: str) -> HTMLResponse:
         _require(request)
@@ -252,6 +320,11 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         _require(request)
         return {"materials": _list_materials(root)}
 
+    @app.get("/api/imported-files")
+    def api_imported_files(request: Request) -> dict[str, list[dict[str, Any]]]:
+        _require(request)
+        return {"files": _imported_files(root)}
+
     @app.post("/api/materials")
     async def api_add_materials(
         request: Request,
@@ -263,6 +336,7 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         dest_dir = paths.materials_root(root) / coll
         saved: list[str] = []
         skipped: list[str] = []
+        manifest = _load_import_manifest(root)
         for upload in files:
             name = Path(upload.filename or "").name
             if not name:
@@ -270,9 +344,27 @@ def create_app(root: Path, *, token: str) -> FastAPI:
             if Path(name).suffix.lower() not in MATERIAL_EXTENSIONS:
                 skipped.append(name)
                 continue
+            content = await upload.read()
             dest_dir.mkdir(parents=True, exist_ok=True)
-            (dest_dir / name).write_bytes(await upload.read())
-            saved.append(f"{coll}/{name}")
+            target = _unique_material_path(dest_dir, name)
+            target.write_bytes(content)
+            relative_path = target.relative_to(paths.materials_root(root)).as_posix()
+            manifest["files"].append(
+                {
+                    "id": f"src_{uuid.uuid4().hex}",
+                    "original_name": name,
+                    "stored_name": target.name,
+                    "relative_path": relative_path,
+                    "collection": coll,
+                    "size_bytes": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "imported_at": _utc_now(),
+                    "status": "active",
+                }
+            )
+            saved.append(relative_path)
+        if saved:
+            _save_import_manifest(root, manifest)
         return {"saved": saved, "skipped": skipped}
 
     @app.get("/api/embedding")
@@ -383,6 +475,144 @@ def _status(root: Path) -> dict[str, Any]:
     }
 
 
+def _dag_model(root: Path) -> dict[str, Any]:
+    model = build_watch_model(root)
+    dag = model.get("dag") or {}
+    nodes = list(dag.get("nodes") or model.get("nodes") or [])
+    edges = [edge for edge in (dag.get("edges") or []) if edge.get("relation") == "prerequisite"]
+    labels = model.get("node_display_labels") or {}
+    covered = set(model.get("covered_node_ids") or [])
+    active = set((model.get("active_node_runs") or []) + (model.get("running_node_ids") or []))
+    failed = _failed_node_ids(model)
+    parents, children = _dag_adjacency(edges)
+    outputs = _dag_output_paths(root)
+
+    payload_nodes = []
+    for node in sorted(nodes, key=lambda n: (n.get("source_order_index", 0), n.get("node_id", ""))):
+        node_id = str(node.get("node_id") or "")
+        if not node_id:
+            continue
+        status = _dag_node_status(node_id, parents, covered, active, failed)
+        payload_nodes.append(
+            {
+                "id": node_id,
+                "title": str(node.get("title") or node_id),
+                "label": labels.get(node_id, node_id),
+                "status": status,
+                "defines": [str(item) for item in (node.get("defines") or [])],
+                "collections": [str(item) for item in (node.get("collections") or [])],
+                "summary": str(node.get("summary") or ""),
+                "prerequisites": sorted(parents.get(node_id, set())),
+                "dependents": sorted(children.get(node_id, set())),
+                "source_order_index": int(node.get("source_order_index") or 0),
+                "output_paths": outputs.get(node_id, []),
+            }
+        )
+
+    payload_edges = [
+        {
+            "from": str(edge.get("from_node_id") or ""),
+            "to": str(edge.get("to_node_id") or ""),
+            "relation": str(edge.get("relation") or "prerequisite"),
+            "confidence": float(edge.get("confidence") or 1.0),
+            "required_defines": [str(item) for item in (edge.get("required_defines") or [])],
+        }
+        for edge in edges
+        if edge.get("from_node_id") and edge.get("to_node_id")
+    ]
+    status_counts = {status: 0 for status in ("locked", "ready", "running", "complete", "failed")}
+    for node in payload_nodes:
+        status_counts[str(node["status"])] += 1
+    roots = dag.get("roots") or sorted(
+        node["id"] for node in payload_nodes if not parents.get(str(node["id"]))
+    )
+    return {
+        "nodes": payload_nodes,
+        "edges": payload_edges,
+        "roots": [str(item) for item in roots],
+        "stats": {
+            "nodes": len(payload_nodes),
+            "edges": len(payload_edges),
+            "statuses": status_counts,
+        },
+        "updated_at": str(model.get("updated_at") or ""),
+    }
+
+
+def _dag_adjacency(
+    edges: list[dict[str, Any]]
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    parents: dict[str, set[str]] = {}
+    children: dict[str, set[str]] = {}
+    for edge in edges:
+        parent = str(edge.get("from_node_id") or "")
+        child = str(edge.get("to_node_id") or "")
+        if not parent or not child:
+            continue
+        parents.setdefault(child, set()).add(parent)
+        children.setdefault(parent, set()).add(child)
+    return parents, children
+
+
+def _dag_node_status(
+    node_id: str,
+    parents: dict[str, set[str]],
+    covered: set[str],
+    active: set[str],
+    failed: set[str],
+) -> str:
+    if node_id in failed:
+        return "failed"
+    if node_id in active:
+        return "running"
+    if node_id in covered:
+        return "complete"
+    if parents.get(node_id, set()) <= covered:
+        return "ready"
+    return "locked"
+
+
+def _failed_node_ids(model: dict[str, Any]) -> set[str]:
+    failed: set[str] = set()
+    state = (model.get("progress") or {}).get("stages", {}).get("noderun") or {}
+    if str(state.get("status") or "").lower() in {"failed", "blocked", "error"}:
+        failed.update(str(item) for item in (state.get("active") or []) if str(item))
+    for key in (
+        "failed_node_ids",
+        "failed_running_node_ids",
+        "blocked_node_ids",
+        "error_node_ids",
+    ):
+        failed.update(str(item) for item in (model.get(key) or []) if str(item))
+    return failed
+
+
+def _dag_output_paths(root: Path) -> dict[str, list[str]]:
+    path = paths.knowledge_ledger_path(root)
+    if not path.exists():
+        return {}
+    try:
+        ledger = read_json(path)
+    except Exception:
+        return {}
+    outputs: dict[str, list[str]] = {}
+    records = ledger.get("records") if isinstance(ledger, dict) else []
+    if not isinstance(records, list):
+        return {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        output_path = str(record.get("output_path") or "")
+        node_ids = record.get("node_ids") or ([record.get("node_id")] if record.get("node_id") else [])
+        if not output_path or not isinstance(node_ids, list):
+            continue
+        for node_id in node_ids:
+            key = str(node_id or "")
+            if key:
+                outputs.setdefault(key, []).append(output_path)
+    return outputs
+
+
 def _stage_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
     stages = model.get("stages") or {}
     labels = model.get("node_display_labels") or {}
@@ -432,6 +662,129 @@ def _list_materials(root: Path) -> list[str]:
         for p in materials_root.rglob("*")
         if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in MATERIAL_EXTENSIONS
     )
+
+
+def _empty_import_manifest() -> dict[str, Any]:
+    return {"schema": "tree.import-manifest.ui", "version": 1, "files": []}
+
+
+def _load_import_manifest(root: Path) -> dict[str, Any]:
+    path = paths.import_manifest_path(root)
+    if not path.exists():
+        return _empty_import_manifest()
+    loaded = read_json(path)
+    files = loaded.get("files") if isinstance(loaded, dict) else []
+    return {
+        "schema": "tree.import-manifest.ui",
+        "version": 1,
+        "files": files if isinstance(files, list) else [],
+    }
+
+
+def _save_import_manifest(root: Path, manifest: dict[str, Any]) -> None:
+    manifest["schema"] = "tree.import-manifest.ui"
+    manifest["version"] = 1
+    if not isinstance(manifest.get("files"), list):
+        manifest["files"] = []
+    write_json_atomic(paths.import_manifest_path(root), manifest)
+
+
+def _imported_files(root: Path) -> list[dict[str, Any]]:
+    manifest = _load_import_manifest(root)
+    materials_root = paths.materials_root(root)
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in manifest["files"]:
+        if not isinstance(raw, dict):
+            continue
+        record = _normalize_import_record(raw)
+        rel = record["relative_path"]
+        target = _material_target(root, rel)
+        record["status"] = "active" if target and target.is_file() else "missing"
+        records.append(record)
+        seen.add(rel)
+
+    for rel in _list_materials(root):
+        if rel in seen:
+            continue
+        target = materials_root / rel
+        records.append(_legacy_import_record(root, rel, target))
+    return records
+
+
+def _normalize_import_record(raw: dict[str, Any]) -> dict[str, Any]:
+    rel = str(raw.get("relative_path") or "")
+    stored_name = str(raw.get("stored_name") or Path(rel).name)
+    collection = str(raw.get("collection") or _collection_for_material(rel))
+    return {
+        "id": str(raw.get("id") or f"legacy:{rel}"),
+        "original_name": str(raw.get("original_name") or stored_name),
+        "stored_name": stored_name,
+        "relative_path": rel,
+        "collection": collection,
+        "size_bytes": int(raw.get("size_bytes") or 0),
+        "sha256": str(raw.get("sha256") or ""),
+        "imported_at": str(raw.get("imported_at") or ""),
+        "status": str(raw.get("status") or "active"),
+    }
+
+
+def _legacy_import_record(root: Path, rel: str, target: Path) -> dict[str, Any]:
+    return {
+        "id": f"legacy:{rel}",
+        "original_name": target.name,
+        "stored_name": target.name,
+        "relative_path": rel,
+        "collection": _collection_for_material(rel),
+        "size_bytes": target.stat().st_size if target.exists() else 0,
+        "sha256": _sha256_file(target) if target.exists() else "",
+        "imported_at": "",
+        "status": "active" if _material_target(root, rel) else "missing",
+    }
+
+
+def _collection_for_material(rel: str) -> str:
+    parts = Path(rel).parts
+    return parts[0] if len(parts) > 1 else "default"
+
+
+def _material_target(root: Path, rel: str) -> Path | None:
+    if not rel or "\\" in rel:
+        return None
+    materials_root = paths.materials_root(root).resolve()
+    target = (materials_root / rel).resolve()
+    try:
+        target.relative_to(materials_root)
+    except ValueError:
+        return None
+    return target
+
+
+def _unique_material_path(dest_dir: Path, name: str) -> Path:
+    candidate = dest_dir / name
+    if not candidate.exists():
+        return candidate
+    path = Path(name)
+    stem = path.stem or path.name
+    suffix = path.suffix
+    index = 2
+    while True:
+        candidate = dest_dir / f"{stem} {index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _safe_output_path(root: Path, name: str) -> Path:

@@ -100,6 +100,11 @@ def knowledge_ledger_path(root: Path) -> Path:
     return runtime_root(root) / "knowledge-ledger.json"
 
 
+def import_manifest_path(root: Path) -> Path:
+    """UI/product import history for files copied into materials/."""
+    return runtime_root(root) / "import-manifest.json"
+
+
 # --- planner artifacts (all under runtime/planner/) --------------------------
 
 def planner_root(root: Path) -> Path:

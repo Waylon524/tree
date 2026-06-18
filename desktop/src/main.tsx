@@ -9,10 +9,10 @@ if (!rootEl) throw new Error("root element missing");
 
 // Resolve the API base + token (from the Tauri shell when present) before the
 // app renders, so inside the desktop shell the connect screen is skipped.
-void initApi().finally(() => {
+void initApi().then((initialBootstrap) => {
   createRoot(rootEl).render(
     <StrictMode>
-      <App />
+      <App initialBootstrap={initialBootstrap} />
     </StrictMode>,
   );
 });

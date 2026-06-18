@@ -23,6 +23,11 @@ def build_watch_model(root: Path) -> dict[str, Any]:
     covered = ledger_covered_node_ids(root)
     active = [be.node_id for be in state.node_executions if be.status == "in_progress"]
     completed = [be.node_id for be in state.node_executions if be.status == "completed"]
+    failed = [
+        be.node_id
+        for be in state.node_executions
+        if str(be.status).lower() in {"failed", "blocked", "error"}
+    ]
     labels = _node_display_labels(nodes)
 
     node_count = _watch_node_count(progress, nodes)
@@ -40,7 +45,15 @@ def build_watch_model(root: Path) -> dict[str, Any]:
         "covered_node_ids": sorted(covered),
         "active_node_runs": active,
         "completed_node_runs": completed,
+        "failed_node_ids": sorted(failed),
         "running_node_ids": sorted({run.node_id for run in state.node_runs if run.status == "running"}),
+        "failed_running_node_ids": sorted(
+            {
+                run.node_id
+                for run in state.node_runs
+                if str(run.status).lower() in {"failed", "blocked", "error"}
+            }
+        ),
         "node_display_labels": labels,
         "errors": _collect_errors(root, progress),
     }

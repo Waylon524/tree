@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from fastapi.testclient import TestClient
 
 from tree.io import paths
+from tree.planner.store import envelope, write_json_atomic
+from tree.state.manager import StateManager
+from tree.state.models import NodeExecutionRecord, NodeRunRecord, PipelineState
 
 TOKEN = "test-token"
 
@@ -56,6 +61,143 @@ def test_status_returns_stage_model(workspace):
         "Link",
         "NodeRun",
     ]
+
+
+def test_dag_requires_token(workspace):
+    client = _client(workspace)
+    assert client.get("/api/dag").status_code == 403
+
+
+def test_dag_empty_payload(workspace):
+    client = _authed_client(workspace)
+
+    data = client.get("/api/dag").json()
+
+    assert data["nodes"] == []
+    assert data["edges"] == []
+    assert data["roots"] == []
+    assert data["stats"]["nodes"] == 0
+
+
+def test_dag_payload_labels_edges_and_statuses(workspace):
+    write_json_atomic(
+        paths.knowledge_dag_path(workspace),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [
+                    {
+                        "node_id": "n1",
+                        "title": "Root",
+                        "defines": ["A"],
+                        "collections": ["course"],
+                        "source_order_index": 0,
+                    },
+                    {
+                        "node_id": "n2",
+                        "title": "Ready",
+                        "defines": ["B"],
+                        "collections": ["course"],
+                        "source_order_index": 1,
+                    },
+                    {
+                        "node_id": "n3",
+                        "title": "Locked",
+                        "defines": ["C"],
+                        "collections": ["course"],
+                        "source_order_index": 2,
+                    },
+                    {
+                        "node_id": "n4",
+                        "title": "Running",
+                        "defines": ["D"],
+                        "collections": ["lab"],
+                        "source_order_index": 3,
+                    },
+                    {
+                        "node_id": "n5",
+                        "title": "Failed",
+                        "defines": ["E"],
+                        "collections": ["lab"],
+                        "source_order_index": 4,
+                    },
+                ],
+                "edges": [
+                    {"from_node_id": "n1", "to_node_id": "n2", "relation": "prerequisite"},
+                    {"from_node_id": "n2", "to_node_id": "n3", "relation": "prerequisite"},
+                ],
+                "roots": ["n1", "n4", "n5"],
+            },
+        ),
+    )
+    write_json_atomic(
+        paths.knowledge_nodes_path(workspace),
+        envelope(
+            schema="tree.knowledge-nodes",
+            data={
+                "knowledge_nodes": [
+                    {"node_id": "n1", "title": "Root", "source_order_index": 0},
+                    {"node_id": "n2", "title": "Ready", "source_order_index": 1},
+                    {"node_id": "n3", "title": "Locked", "source_order_index": 2},
+                    {"node_id": "n4", "title": "Running", "source_order_index": 3},
+                    {"node_id": "n5", "title": "Failed", "source_order_index": 4},
+                ]
+            },
+        ),
+    )
+    write_json_atomic(
+        paths.knowledge_ledger_path(workspace),
+        {"records": [{"node_id": "n1", "node_ids": ["n1"], "output_path": "outputs/001.Root.md"}]},
+    )
+    StateManager(paths.pipeline_state_path(workspace)).save(
+        PipelineState(
+            node_executions=[
+                NodeExecutionRecord(node_id="n4", status="in_progress"),
+                NodeExecutionRecord(node_id="n5", status="failed"),
+            ],
+            node_runs=[
+                NodeRunRecord(node_id="n4", run_id="n4::run", status="running"),
+                NodeRunRecord(node_id="n5", run_id="n5::run", status="failed"),
+            ],
+        )
+    )
+    client = _authed_client(workspace)
+
+    data = client.get("/api/dag").json()
+    statuses = {node["id"]: node["status"] for node in data["nodes"]}
+
+    assert statuses == {
+        "n1": "complete",
+        "n2": "ready",
+        "n3": "locked",
+        "n4": "running",
+        "n5": "failed",
+    }
+    assert data["nodes"][0]["label"] == "001. Root"
+    assert data["nodes"][0]["output_paths"] == ["outputs/001.Root.md"]
+    assert data["nodes"][1]["prerequisites"] == ["n1"]
+    assert data["nodes"][1]["dependents"] == ["n3"]
+    assert data["edges"] == [
+        {
+            "from": "n1",
+            "to": "n2",
+            "relation": "prerequisite",
+            "confidence": 1.0,
+            "required_defines": [],
+        },
+        {
+            "from": "n2",
+            "to": "n3",
+            "relation": "prerequisite",
+            "confidence": 1.0,
+            "required_defines": [],
+        },
+    ]
+    assert data["stats"]["statuses"]["complete"] == 1
+    assert data["stats"]["statuses"]["ready"] == 1
+    assert data["stats"]["statuses"]["locked"] == 1
+    assert data["stats"]["statuses"]["running"] == 1
+    assert data["stats"]["statuses"]["failed"] == 1
 
 
 def test_extension_requires_token(workspace):
@@ -153,6 +295,89 @@ def test_output_path_traversal_rejected(workspace):
 def test_output_missing_returns_404(workspace):
     client = _authed_client(workspace)
     assert client.get("/outputs/nope.md").status_code == 404
+
+
+def test_output_raw_requires_token(workspace):
+    out = paths.outputs_root(workspace)
+    (out / "001.intro.md").write_text("# Intro\n", encoding="utf-8")
+    client = _client(workspace)
+
+    assert client.get("/api/outputs/001.intro.md/raw").status_code == 403
+
+
+def test_output_raw_returns_markdown_metadata(workspace):
+    out = paths.outputs_root(workspace)
+    body = "# Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n$x + y$"
+    (out / "001.intro.md").write_text(body, encoding="utf-8")
+    client = _authed_client(workspace)
+
+    resp = client.get("/api/outputs/001.intro.md/raw")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "001.intro.md"
+    assert data["markdown"] == body
+    assert data["size_bytes"] == len(body.encode("utf-8"))
+    assert data["updated_at"].endswith("Z")
+
+
+def test_output_raw_rejects_path_traversal(workspace):
+    client = _authed_client(workspace)
+    resp = client.get("/api/outputs/../secret.md/raw")
+
+    assert resp.status_code in {404, 400}
+
+
+def test_output_raw_missing_returns_404(workspace):
+    client = _authed_client(workspace)
+
+    assert client.get("/api/outputs/nope.md/raw").status_code == 404
+
+
+def test_exports_copy_selected_outputs(workspace, tmp_path):
+    out = paths.outputs_root(workspace)
+    (out / "001.intro.md").write_text("# Intro\n", encoding="utf-8")
+    (out / "002.more.md").write_text("# More\n", encoding="utf-8")
+    client = _authed_client(workspace)
+
+    resp = client.post(
+        "/api/exports",
+        json={
+            "destination": str(tmp_path),
+            "files": ["001.intro.md", "002.more.md"],
+            "mode": "copy",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {item["name"] for item in body["exported"]} == {"001.intro.md", "002.more.md"}
+    assert body["skipped"] == []
+    assert body["failed"] == []
+    assert (tmp_path / "001.intro.md").read_bytes() == (out / "001.intro.md").read_bytes()
+    assert (tmp_path / "002.more.md").read_bytes() == (out / "002.more.md").read_bytes()
+
+
+def test_exports_rejects_path_traversal(workspace, tmp_path):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/exports",
+        json={"destination": str(tmp_path), "files": ["../secret.md"], "mode": "copy"},
+    )
+
+    assert resp.status_code == 400
+    assert "Invalid output file" in resp.text
+
+
+def test_exports_rejects_missing_output(workspace, tmp_path):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/exports",
+        json={"destination": str(tmp_path), "files": ["nope.md"], "mode": "copy"},
+    )
+
+    assert resp.status_code == 400
+    assert "Invalid output file" in resp.text
 
 
 def test_setup_writes_global_config(workspace):
@@ -374,6 +599,116 @@ def test_add_materials_uploads_supported_and_skips_unsupported(workspace):
 
     listed = client.get("/api/materials").json()["materials"]
     assert listed == ["课件/ch1.pdf", "课件/notes.txt"]
+
+
+def test_imported_files_requires_token(workspace):
+    client = _client(workspace)
+    assert client.get("/api/imported-files").status_code == 403
+
+
+def test_add_materials_writes_import_manifest_metadata(workspace):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/materials",
+        data={"collection": "课件"},
+        files=[
+            ("files", ("ch1.pdf", b"%PDF-1.4", "application/pdf")),
+            ("files", ("bad.xyz", b"nope", "application/octet-stream")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"saved": ["课件/ch1.pdf"], "skipped": ["bad.xyz"]}
+    manifest_path = paths.import_manifest_path(workspace)
+    assert manifest_path.exists()
+
+    files = client.get("/api/imported-files").json()["files"]
+    assert len(files) == 1
+    record = files[0]
+    assert record["id"].startswith("src_")
+    assert record["original_name"] == "ch1.pdf"
+    assert record["stored_name"] == "ch1.pdf"
+    assert record["relative_path"] == "课件/ch1.pdf"
+    assert record["collection"] == "课件"
+    assert record["size_bytes"] == len(b"%PDF-1.4")
+    assert record["sha256"] == hashlib.sha256(b"%PDF-1.4").hexdigest()
+    assert record["imported_at"].endswith("Z")
+    assert record["status"] == "active"
+
+
+def test_add_materials_renames_colliding_files_without_overwrite(workspace):
+    client = _authed_client(workspace)
+    first = client.post(
+        "/api/materials",
+        data={"collection": "default"},
+        files=[("files", ("lecture.pdf", b"first", "application/pdf"))],
+    )
+    second = client.post(
+        "/api/materials",
+        data={"collection": "default"},
+        files=[("files", ("lecture.pdf", b"second", "application/pdf"))],
+    )
+
+    assert first.json()["saved"] == ["default/lecture.pdf"]
+    assert second.json()["saved"] == ["default/lecture 2.pdf"]
+    material_root = paths.materials_root(workspace) / "default"
+    assert (material_root / "lecture.pdf").read_bytes() == b"first"
+    assert (material_root / "lecture 2.pdf").read_bytes() == b"second"
+    files = client.get("/api/imported-files").json()["files"]
+    assert [item["stored_name"] for item in files] == ["lecture.pdf", "lecture 2.pdf"]
+    assert [item["original_name"] for item in files] == ["lecture.pdf", "lecture.pdf"]
+
+
+def test_imported_files_synthesizes_legacy_disk_files(workspace):
+    legacy = paths.materials_root(workspace) / "default" / "legacy.pdf"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"legacy")
+    client = _authed_client(workspace)
+
+    files = client.get("/api/imported-files").json()["files"]
+
+    assert files == [
+        {
+            "id": "legacy:default/legacy.pdf",
+            "original_name": "legacy.pdf",
+            "stored_name": "legacy.pdf",
+            "relative_path": "default/legacy.pdf",
+            "collection": "default",
+            "size_bytes": len(b"legacy"),
+            "sha256": hashlib.sha256(b"legacy").hexdigest(),
+            "imported_at": "",
+            "status": "active",
+        }
+    ]
+
+
+def test_imported_files_marks_manifest_records_missing(workspace):
+    write_json_atomic(
+        paths.import_manifest_path(workspace),
+        {
+            "schema": "tree.import-manifest.ui",
+            "version": 1,
+            "files": [
+                {
+                    "id": "src_missing",
+                    "original_name": "missing.pdf",
+                    "stored_name": "missing.pdf",
+                    "relative_path": "default/missing.pdf",
+                    "collection": "default",
+                    "size_bytes": 10,
+                    "sha256": "abc",
+                    "imported_at": "2026-06-18T12:00:00Z",
+                    "status": "active",
+                }
+            ],
+        },
+    )
+    client = _authed_client(workspace)
+
+    files = client.get("/api/imported-files").json()["files"]
+
+    assert files[0]["id"] == "src_missing"
+    assert files[0]["status"] == "missing"
 
 
 def test_add_materials_rejects_collection_path_traversal(workspace):
