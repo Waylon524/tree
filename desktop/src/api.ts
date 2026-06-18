@@ -65,8 +65,9 @@ export async function fetchOutputHtml(name: string): Promise<string> {
   return resp.text();
 }
 
-export function dagUrl(): string {
-  return url("/dag.svg");
+export async function openDag(): Promise<string> {
+  const resp = await expectOk(await fetch(url("/api/open-dag"), { method: "POST" }));
+  return resp.text();
 }
 
 export async function saveSetup(fields: Record<string, string>): Promise<string> {

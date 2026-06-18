@@ -31,6 +31,7 @@ def run_gui(
     *,
     host: str = "127.0.0.1",
     port: int | None = None,
+    token: str | None = None,
     open_browser: bool = True,
 ) -> None:
     require_gui_deps()
@@ -38,14 +39,18 @@ def run_gui(
 
     from tree.gui.server import create_app
 
-    token = secrets.token_urlsafe(16)
+    token = token or secrets.token_urlsafe(16)
     chosen = _resolve_port(host, port)
     app = create_app(root, token=token)
     url = f"http://{host}:{chosen}/?token={token}"
+    # Stable, machine-readable line so a launching shell (e.g. the Tauri sidecar)
+    # can parse the URL/token; the human-friendly hint follows.
+    print(f"TREE_GUI_URL {url}", flush=True)
     print(f"TREE GUI ready: {url}", flush=True)
-    print("Press Ctrl+C to stop.", flush=True)
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    else:
+        print("Headless server; press Ctrl+C to stop.", flush=True)
     uvicorn.run(app, host=host, port=chosen, log_level="warning")
 
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ChangeEvent } from "react";
-import { dagUrl, getToken, runPipeline, setToken, stopPipeline } from "./api";
+import { getToken, openDag, runPipeline, setToken, stopPipeline } from "./api";
 import { useProgress } from "./useProgress";
 import { ProgressPanel } from "./components/ProgressPanel";
 import { Outputs } from "./components/Outputs";
@@ -43,6 +43,7 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
 function Dashboard({ token }: { token: string }) {
   const { status, connected } = useProgress(token);
   const [busy, setBusy] = useState<boolean>(false);
+  const [dagMsg, setDagMsg] = useState<string>("");
 
   const guard = (action: () => Promise<void>) => async (): Promise<void> => {
     setBusy(true);
@@ -57,6 +58,9 @@ function Dashboard({ token }: { token: string }) {
     <div className="app">
       <header className="bar">
         <span className="brand">T.R.E.E.</span>
+        {status && (
+          <span className={`pill engine-${status.engine}`}>engine: {status.engine}</span>
+        )}
         <span className={`conn ${connected ? "on" : "off"}`}>
           {connected ? "live" : "connecting…"}
         </span>
@@ -77,9 +81,22 @@ function Dashboard({ token }: { token: string }) {
 
         <section className="card">
           <h2>Knowledge DAG</h2>
-          <object data={dagUrl()} type="image/svg+xml" className="dag">
-            <p className="muted">DAG not generated yet.</p>
-          </object>
+          <div className="controls">
+            <button
+              onClick={() =>
+                void openDag()
+                  .then(setDagMsg)
+                  .catch((err: unknown) => setDagMsg(String(err)))
+              }
+            >
+              Open DAG in viewer
+            </button>
+            {dagMsg ? (
+              <span className="hint" dangerouslySetInnerHTML={{ __html: dagMsg }} />
+            ) : (
+              <span className="hint">Opens knowledge-dag.svg in your system's default app.</span>
+            )}
+          </div>
         </section>
 
         <section className="grid">

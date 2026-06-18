@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from tree.cli.commands import config_cmd
-from tree.cli.commands.lifecycle import start_engine, stop_engine
+from tree.cli.commands.lifecycle import engine_status, start_engine, stop_engine
 from tree.cli.dashboard.model import build_watch_model
 from tree.io import paths
 from tree.observability.progress import STAGES
@@ -130,12 +132,24 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     @app.get("/dag.svg")
     def dag_svg(request: Request) -> Response:
         _require(request)
-        svg_path = paths.outputs_dag_svg_path(root)
-        if not svg_path.exists() and paths.knowledge_dag_path(root).exists():
-            write_dag_svg(root, load_dag(root))
-        if not svg_path.exists():
+        svg_path = _ensure_dag_svg(root)
+        if svg_path is None:
             raise HTTPException(status_code=404, detail="DAG not generated yet.")
         return Response(svg_path.read_text(encoding="utf-8"), media_type="image/svg+xml")
+
+    @app.post("/api/open-dag", response_class=HTMLResponse)
+    def api_open_dag(request: Request) -> HTMLResponse:
+        _require(request)
+        svg_path = _ensure_dag_svg(root)
+        if svg_path is None:
+            return HTMLResponse(
+                '<span class="muted">DAG not generated yet — run the pipeline first.</span>'
+            )
+        try:
+            _open_in_default_app(svg_path)
+        except Exception as exc:  # noqa: BLE001
+            return HTMLResponse(f'<span class="muted">Could not open: {exc}</span>')
+        return HTMLResponse(f'<span class="ok">Opened {svg_path.name} in your default viewer.</span>')
 
     @app.get("/partials/outputs", response_class=HTMLResponse)
     def outputs_partial(request: Request) -> HTMLResponse:
@@ -201,6 +215,30 @@ def _ws_interval() -> float:
         return 1.0
 
 
+# --- DAG ----------------------------------------------------------------------
+
+def _ensure_dag_svg(root: Path) -> Path | None:
+    """Return the DAG SVG path, generating it from the planner DAG if needed."""
+    svg_path = paths.outputs_dag_svg_path(root)
+    if not svg_path.exists() and paths.knowledge_dag_path(root).exists():
+        write_dag_svg(root, load_dag(root))
+    return svg_path if svg_path.exists() else None
+
+
+def _open_in_default_app(path: Path) -> None:
+    """Open a local file with the OS default application.
+
+    The GUI server runs on the user's own machine (loopback only), so this opens
+    the file in their desktop session — e.g. the DAG SVG in their default viewer.
+    """
+    if sys.platform == "win32":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
 # --- view models (reuse build_watch_model; no duplicated pipeline logic) -----
 
 def _status(root: Path) -> dict[str, Any]:
@@ -213,6 +251,7 @@ def _status(root: Path) -> dict[str, Any]:
         "nodes": model.get("node_count", 0),
         "edges": model.get("edge_count", 0),
         "active": len(active),
+        "engine": engine_status(root),
         "embedding_server": embedding_service_status(),
         "embedding_backend": local_embed_backend_status(),
         "errors": model.get("errors") or [],

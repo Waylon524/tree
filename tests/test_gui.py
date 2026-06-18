@@ -132,6 +132,39 @@ def test_setup_writes_global_config(workspace):
     assert "LLM_API_KEY=sk-xyz" in written
 
 
+def test_status_includes_engine_state(workspace):
+    client = _authed_client(workspace)
+    data = client.get(f"/api/status?token={TOKEN}").json()
+    assert data["engine"] in {"running", "stopped"}
+
+
+def test_open_dag_opens_existing_svg(workspace, monkeypatch):
+    opened: list = []
+    monkeypatch.setattr("tree.gui.server._open_in_default_app", lambda path: opened.append(path))
+    svg = paths.outputs_dag_svg_path(workspace)
+    svg.parent.mkdir(parents=True, exist_ok=True)
+    svg.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+
+    client = _authed_client(workspace)
+    resp = client.post("/api/open-dag")
+
+    assert resp.status_code == 200
+    assert "Opened" in resp.text
+    assert opened == [svg]
+
+
+def test_open_dag_when_not_generated(workspace, monkeypatch):
+    opened: list = []
+    monkeypatch.setattr("tree.gui.server._open_in_default_app", lambda path: opened.append(path))
+
+    client = _authed_client(workspace)
+    resp = client.post("/api/open-dag")
+
+    assert resp.status_code == 200
+    assert "not generated" in resp.text
+    assert opened == []
+
+
 def test_ws_progress_streams_status(workspace):
     client = _authed_client(workspace)
     with client.websocket_connect(f"/ws/progress?token={TOKEN}") as ws:
@@ -155,6 +188,23 @@ def test_cors_header_present_for_dev_origin(workspace):
         f"/api/status?token={TOKEN}", headers={"Origin": "http://localhost:5173"}
     )
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_serve_command_runs_headless(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tree.cli.app import app as cli_app
+
+    calls: dict = {}
+
+    def fake_run_gui(root, *, host, port, token, open_browser):
+        calls.update(host=host, port=port, token=token, open_browser=open_browser)
+
+    monkeypatch.setattr("tree.gui.launch.run_gui", fake_run_gui)
+    result = CliRunner().invoke(cli_app, ["serve", "--port", "8790", "--token", "abc"])
+
+    assert result.exit_code == 0
+    assert calls == {"host": "127.0.0.1", "port": 8790, "token": "abc", "open_browser": False}
 
 
 def test_require_gui_deps_passes_when_installed():

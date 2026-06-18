@@ -27,9 +27,10 @@
 
     <section class="card">
       <h2>Knowledge DAG</h2>
-      <object id="dag" type="image/svg+xml" data="/dag.svg">
-        <p class="muted">DAG not generated yet — run the pipeline first.</p>
-      </object>
+      <div class="controls">
+        <button hx-post="/api/open-dag" hx-target="#dag-result" hx-swap="innerHTML">Open DAG in viewer</button>
+        <span id="dag-result" class="hint">Opens knowledge-dag.svg in your system's default app.</span>
+      </div>
     </section>
 
     <section class="grid">

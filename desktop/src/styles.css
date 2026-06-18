@@ -124,6 +124,14 @@ button.ghost {
   font-weight: 600;
   background: var(--bar-bg);
 }
+.pill.engine-running {
+  background: var(--done);
+  color: #fff;
+}
+.pill.engine-stopped {
+  background: var(--bar-bg);
+  color: var(--muted);
+}
 table.stages {
   width: 100%;
   border-collapse: collapse;

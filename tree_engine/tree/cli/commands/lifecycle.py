@@ -64,3 +64,22 @@ def quit_tree(root: Path) -> LifecycleResult:
     engine = stop_engine(root)
     embedding = stop_embedding_service(force=True)
     return LifecycleResult(f"{engine.message}\n{embedding.message}")
+
+
+def engine_status(root: Path) -> str:
+    """Return "running" if the background engine process is alive, else "stopped".
+
+    Cleans up a stale pid file left by an engine that finished or crashed, so the
+    status reflects the live process — not just whether a pid file exists.
+    """
+    pid_path = paths.service_pid_path(root, "engine")
+    if not pid_path.exists():
+        return "stopped"
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return "stopped"
+    if process.pid_alive(pid):
+        return "running"
+    pid_path.unlink(missing_ok=True)
+    return "stopped"

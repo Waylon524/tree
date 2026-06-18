@@ -222,6 +222,24 @@ def test_start_engine_truncates_stale_log(tmp_path, monkeypatch):
     assert log_path.read_text(encoding="utf-8") == ""
 
 
+def test_engine_status_reflects_live_pid(tmp_path, monkeypatch):
+    from tree.cli.commands.lifecycle import engine_status
+
+    assert engine_status(tmp_path) == "stopped"  # no pid file
+
+    pid_path = paths.service_pid_path(tmp_path, "engine")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("4242", encoding="utf-8")
+
+    monkeypatch.setattr("tree.cli.commands.lifecycle.process.pid_alive", lambda pid: True)
+    assert engine_status(tmp_path) == "running"
+
+    # A stale pid (engine finished/crashed) reports stopped and is cleaned up.
+    monkeypatch.setattr("tree.cli.commands.lifecycle.process.pid_alive", lambda pid: False)
+    assert engine_status(tmp_path) == "stopped"
+    assert not pid_path.exists()
+
+
 def test_quit_delegates_to_stop(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     calls = []

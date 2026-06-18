@@ -30,6 +30,8 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .kv b { color: var(--text); }
 .pill { padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600;
   background: var(--bar-bg); color: var(--text); }
+.pill.engine-running { background: var(--done); color: #fff; }
+.pill.engine-stopped { background: var(--bar-bg); color: var(--muted); }
 .msg { margin: 4px 0 10px; }
 table.stages { width: 100%; border-collapse: collapse; }
 table.stages td { padding: 5px 6px; vertical-align: middle; }

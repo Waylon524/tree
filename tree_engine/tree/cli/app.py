@@ -193,6 +193,29 @@ def gui(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8799, "--port"),
+    token: str = typer.Option("", "--token", help="Auth token; generated if empty."),
+    root: str = typer.Option("", "--root", help="Workspace dir; defaults to cwd."),
+) -> None:
+    """Run the GUI server headless (no browser). Entry point for the desktop sidecar."""
+    from tree.gui.launch import GuiDependencyError, run_gui
+
+    try:
+        run_gui(
+            Path(root).expanduser() if root else Path.cwd(),
+            host=host,
+            port=port,
+            token=token or None,
+            open_browser=False,
+        )
+    except GuiDependencyError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@app.command()
 def run() -> None:
     """Run the pipeline in the foreground (implemented in step 8)."""
     ensure_embedding_ready()

@@ -14,6 +14,7 @@ export interface Status {
   nodes: number;
   edges: number;
   active: number;
+  engine: string;
   embedding_server: string;
   embedding_backend: string;
   errors: string[];
