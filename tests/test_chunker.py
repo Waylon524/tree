@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from tree.rag.chunker import chunk_markdown, chunk_mtu
+from tree.rag.indexer import RAGIndexer
 
 
 def test_chunk_markdown_splits_by_heading():
@@ -75,3 +76,26 @@ def test_chunk_mtu_handles_plain_text_without_heading():
     chunks = chunk_mtu(mtu, "求解平衡常数 K 的表达式。")
     assert len(chunks) == 1
     assert chunks[0]["mtu_id"] == "mtu:x"
+
+
+def test_rag_indexer_passes_source_mtu_chunk_token_limit(monkeypatch):
+    calls = []
+
+    def fake_chunk_mtu(mtu, text, *, max_source_tokens):
+        calls.append(max_source_tokens)
+        return [{"chunk_id": "c1", "text": text}]
+
+    class FakeRag:
+        def index_file(self, **kwargs):
+            return len(kwargs["chunks"])
+
+    monkeypatch.setattr("tree.rag.indexer.chunk_mtu", fake_chunk_mtu)
+    indexer = RAGIndexer(FakeRag(), source_mtu_chunk_tokens=1234)
+    mtu = SimpleNamespace(
+        mtu_id="mtu:abc",
+        collection="课件",
+        source_file="ch1.md",
+    )
+
+    assert indexer.index_mtu(mtu, "text") == 1
+    assert calls == [1234]

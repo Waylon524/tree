@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from tree.rag.embed import EmbeddingClient
 from tree.rag.client import RAGClient
 
 
@@ -59,3 +60,78 @@ def test_source_mtu_vectors_average_chunks_and_node_id_backfill(tmp_path):
         assert {hit["metadata"].get("node_id") for hit in hits} == {"kn:1"}
     finally:
         rag.close()
+
+
+def test_index_file_adds_document_context_to_embedding_errors(tmp_path):
+    class FailingEmbedder:
+        base_url = "http://localhost:8788"
+        model = "test-model"
+
+        def embed(self, texts):
+            raise RuntimeError("HTTP 400: too long")
+
+    rag = RAGClient(store_path=tmp_path / "rag", dimensions=2, embedder=FailingEmbedder())
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            rag.index_file(
+                "mtu:1",
+                "source.md",
+                "ignored",
+                content_kind="source",
+                source_collection="课件",
+                path="课件/source.md",
+                doc_id="mtu:1",
+                chunks=[
+                    {
+                        "chunk_id": "mtu:1-0",
+                        "chunk_index": 0,
+                        "text": "x" * 12,
+                        "mtu_id": "mtu:1",
+                        "is_draft": False,
+                    }
+                ],
+            )
+        message = str(exc.value)
+        assert "mtu:1" in message
+        assert "chunks=1" in message
+        assert "max_chars=12" in message
+        assert "test-model" in message
+        assert "HTTP 400" in message
+    finally:
+        rag.close()
+
+
+def test_embedding_client_includes_http_error_body(monkeypatch):
+    import urllib.error
+
+    def fake_urlopen(req):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=_Body(b'{"error":"context length exceeded"}'),
+        )
+
+    monkeypatch.setattr("tree.rag.embed.urllib.request.urlopen", fake_urlopen)
+    client = EmbeddingClient(base_url="http://localhost:8788", model="m")
+
+    with pytest.raises(RuntimeError) as exc:
+        client.embed(["x" * 10])
+
+    message = str(exc.value)
+    assert "HTTP 400" in message
+    assert "context length exceeded" in message
+    assert "inputs=1" in message
+    assert "max_chars=10" in message
+
+
+class _Body:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self, size: int = -1) -> bytes:
+        return self._data[:size]
+
+    def close(self) -> None:
+        return None

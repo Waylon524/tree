@@ -213,3 +213,71 @@ async def test_node_run_skips_when_already_covered(tmp_path):
     assert result == "node_complete"
     state = StateManager(paths.pipeline_state_path(tmp_path)).load()
     assert state.node_executions[0].status == "completed"
+
+
+async def test_node_run_pass_without_draft_writes_draft_before_accepting(tmp_path):
+    _seed(tmp_path)
+    examiner = _FakeExaminer(fail_then_pass=0)
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=StateManager(paths.pipeline_state_path(tmp_path)),
+    )
+
+    result = await runner.run_one("n1")
+
+    assert result == "node_complete"
+    assert examiner.audit_calls == 2
+    assert writer.calls == 1
+    assert (paths.outputs_root(tmp_path) / "002.化学平衡.md").exists()
+
+
+async def test_node_run_resumes_saved_exam_and_draft_without_recompose(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text(
+        "# 002. 化学平衡\n\n## 学习目标\n\n**学习目标：** 学会平衡常数。\n",
+        encoding="utf-8",
+    )
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state = state_mgr.update_node_run(
+        state,
+        "n1::run",
+        exam_sections=ExamSections(
+            knowledge_point="化学平衡",
+            covered_node_ids=["n1"],
+            blind_exam="Q",
+            answer_key="A",
+            writer_instructions="Scope: x",
+        ),
+        draft_path=draft,
+        current_iteration=1,
+        previous_bottleneck="# Bottleneck Report\nold",
+    )
+    state_mgr.save(state)
+    examiner = _FakeExaminer(fail_then_pass=0)
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    result = await runner.run_one("n1")
+
+    assert result == "node_complete"
+    assert examiner.compose_kwargs == []
+    assert examiner.audit_calls == 1
+    assert writer.calls == 0
+    assert (paths.outputs_root(tmp_path) / "002.化学平衡.md").exists()

@@ -12,7 +12,7 @@ from tree.agents.dagger import DaggerAgent
 from tree.agents.examiner import ExaminerAgent
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
-from tree.config import Settings
+from tree.config import DEFAULT_SOURCE_MTU_CHUNK_TOKENS, Settings
 from tree.engine.node_run import NodeRunner, ledger_covered_node_ids, ledger_output_ids
 from tree.engine.ingest_driver import prepare_sources
 from tree.io import paths
@@ -68,7 +68,12 @@ class TreeEngine:
         node_runner = node_runner or branch_runner
         if node_runner is None:
             self.rag_client = self.rag_client or _make_rag_client(self.root)
-            self.rag_indexer = self.rag_indexer or _make_rag_indexer(self.rag_client)
+            self.rag_indexer = self.rag_indexer or _make_rag_indexer(
+                self.rag_client,
+                source_mtu_chunk_tokens=getattr(
+                    settings, "source_mtu_chunk_tokens", DEFAULT_SOURCE_MTU_CHUNK_TOKENS
+                ),
+            )
             self.retriever = self.retriever or Retriever(self.rag_client, self.rag_indexer, self.root)
         self.node_runner = node_runner or NodeRunner(
             root=self.root,
@@ -85,8 +90,12 @@ class TreeEngine:
         self.progress.reset()
         _clear_stale_run_logs(self.root)
         await self.prepare_sources()
+        self._prune_state_to_current_dag()
+        state = self.state_mgr.retry_failed_node_executions(self.state_mgr.load())
+        self.state_mgr.save(state)
         self._refresh_noderun_progress(status="running")
         running: dict[str, asyncio.Task[str]] = {}
+        had_failure = False
 
         while True:
             state = self.state_mgr.load()
@@ -100,6 +109,10 @@ class TreeEngine:
                     running[item.node_id] = asyncio.create_task(self.node_runner.run_one(item.node_id))
 
             if not running:
+                if had_failure:
+                    self._refresh_noderun_progress(status="failed", message="NodeRun failed")
+                    self.progress.update({"phase": "failed", "message": "TREE_FAILED — NodeRun failed."})
+                    return
                 if _all_nodes_covered(self.root):
                     self._refresh_noderun_progress(status="complete", message="All nodes complete")
                     self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
@@ -119,8 +132,18 @@ class TreeEngine:
             )
             for task in completed:
                 node_id = next(key for key, value in running.items() if value is task)
-                await task
                 running.pop(node_id, None)
+                try:
+                    await task
+                except Exception as exc:  # noqa: BLE001
+                    had_failure = True
+                    self._mark_node_failed(node_id, exc)
+                    self._refresh_noderun_progress(
+                        status="failed",
+                        active=[node_id],
+                        message=f"NodeRun failed: {node_id}",
+                    )
+                    continue
                 self._refresh_noderun_progress(
                     status="running",
                     active=list(running),
@@ -141,6 +164,34 @@ class TreeEngine:
         )
         self.state_mgr.save(updated)
         return updated
+
+    def _mark_node_failed(self, node_id: str, exc: Exception) -> None:
+        message = f"{type(exc).__name__}: {exc}"
+        state = self.state_mgr.load()
+        state = self.state_mgr.mark_node_execution_failed(state, node_id, message)
+        self.state_mgr.save(state)
+        self._append_progress_error(message)
+
+    def _prune_state_to_current_dag(self) -> None:
+        valid_node_ids = {str(node.get("node_id")) for node in load_dag(self.root).get("nodes", []) if node.get("node_id")}
+        if not valid_node_ids:
+            return
+        state = self.state_mgr.load()
+        state.node_executions = [
+            item for item in state.node_executions if item.node_id in valid_node_ids
+        ]
+        state.node_runs = [item for item in state.node_runs if item.node_id in valid_node_ids]
+        self.state_mgr.save(state)
+
+    def _append_progress_error(self, message: str) -> None:
+        try:
+            state = self.progress.load()
+            errors = list(state.get("errors") or [])
+            if message not in errors:
+                errors.append(message)
+            self.progress.update({"errors": errors[-8:]})
+        except Exception:
+            return
 
     def _refresh_noderun_progress(
         self,
@@ -209,10 +260,14 @@ def _make_rag_client(root: Path) -> Any:
     return RAGClient(store_path=paths.rag_store_path(root))
 
 
-def _make_rag_indexer(rag_client: Any) -> Any:
+def _make_rag_indexer(
+    rag_client: Any,
+    *,
+    source_mtu_chunk_tokens: int = DEFAULT_SOURCE_MTU_CHUNK_TOKENS,
+) -> Any:
     from tree.rag.indexer import RAGIndexer
 
-    return RAGIndexer(rag_client)
+    return RAGIndexer(rag_client, source_mtu_chunk_tokens=source_mtu_chunk_tokens)
 
 
 def _clear_stale_run_logs(root: Path) -> None:

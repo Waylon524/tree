@@ -59,6 +59,7 @@ def test_download_url_honors_override(monkeypatch):
 
 def test_build_argv_contains_required_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(llama_server.sys, "platform", "linux")
+    monkeypatch.delenv("LLAMA_SERVER_CTX", raising=False)
     binary = tmp_path / "llama-server"
     gguf = tmp_path / "model.gguf"
     argv = llama_server.build_argv(binary, gguf, host="127.0.0.1", port=8788)
@@ -67,7 +68,15 @@ def test_build_argv_contains_required_flags(tmp_path, monkeypatch):
     assert "--embeddings" in argv
     assert argv[argv.index("--host") + 1] == "127.0.0.1"
     assert argv[argv.index("--port") + 1] == "8788"
+    assert argv[argv.index("-c") + 1] == "22000"
     assert "--pooling" not in argv  # default: rely on model metadata
+
+
+def test_build_argv_honors_ctx_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(llama_server.sys, "platform", "linux")
+    monkeypatch.setenv("LLAMA_SERVER_CTX", "32768")
+    argv = llama_server.build_argv(tmp_path / "b", tmp_path / "m.gguf", host="h", port=1)
+    assert argv[argv.index("-c") + 1] == "32768"
 
 
 def test_build_argv_defaults_to_cpu_only_on_macos(tmp_path, monkeypatch):

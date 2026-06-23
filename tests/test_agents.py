@@ -131,6 +131,24 @@ async def test_archivist_clean_repairs_only_invalid_deleted_ranges():
     assert len(client.calls) == 2
 
 
+async def test_archivist_clean_retries_malformed_json():
+    raw = "教学一\n页脚\n教学二"
+    responses = iter(
+        [
+            '{"deleted_ranges": [{"start_line": 2 "end_line": 2}]}',
+            '{"deleted_ranges": [{"start_line": 2, "end_line": 2, "reason": "footer"}]}',
+        ]
+    )
+    client = _FakeClient({"archivist": lambda user: next(responses)})
+    agent = ArchivistAgent(client)
+
+    cleaned = await agent.clean(raw, repair_attempts=1)
+
+    assert cleaned == "教学一\n教学二"
+    assert len(client.calls) == 2
+    assert "PREVIOUS RESPONSE WAS NOT VALID JSON" in client.calls[1][1]
+
+
 async def test_archivist_clean_trims_repair_deleted_ranges_to_unlocked_segments():
     initial = """{
       "deleted_ranges": [

@@ -41,6 +41,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from tree.cli.commands import config_cmd, inspect as inspect_cmd
 from tree.cli.commands.lifecycle import engine_status, quit_tree, start_engine, stop_engine
 from tree.cli.dashboard.model import build_watch_model
+from tree.config import load_runtime_env
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
 from tree.observability.progress import STAGES
@@ -308,11 +309,14 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         payload: dict[str, Any] = Body(...),
     ) -> dict[str, Any]:
         _require(request)
-        config_cmd.write_settings_config(
-            root,
-            env_path=paths.global_config_path(),
-            settings=payload,
-        )
+        try:
+            config_cmd.write_settings_config(
+                root,
+                env_path=paths.global_config_path(),
+                settings=payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return config_cmd.read_settings_config(root, env_path=paths.global_config_path())
 
     @app.get("/api/materials")
@@ -383,7 +387,7 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         _require(request)
         # First run downloads the model/binary, which can take minutes; run it off
         # the request thread and let the UI poll /api/embedding for status.
-        threading.Thread(target=_safe_start_embedding, name="tree-embedding-start",
+        threading.Thread(target=_safe_start_embedding, args=(root,), name="tree-embedding-start",
                          daemon=True).start()
         return {"status": "starting"}
 
@@ -401,8 +405,9 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     return app
 
 
-def _safe_start_embedding() -> None:
+def _safe_start_embedding(root: Path) -> None:
     try:
+        load_runtime_env(root)
         start_embedding_service()
     except Exception:  # noqa: BLE001 - surfaced via /api/embedding status polling
         return

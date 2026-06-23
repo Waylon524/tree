@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tree.planner.store import write_json_atomic
-from tree.state.models import NodeExecutionRecord, PipelineState
+from tree.state.models import NodeExecutionRecord, NodeRunRecord, PipelineState
 
 
 class StateManager:
@@ -29,6 +29,11 @@ class StateManager:
     def find_execution(self, state: PipelineState, node_id: str) -> NodeExecutionRecord | None:
         return next((c for c in state.node_executions if c.node_id == node_id), None)
 
+    def find_run(self, state: PipelineState, run_id: str | None) -> NodeRunRecord | None:
+        if not run_id:
+            return None
+        return next((run for run in state.node_runs if run.run_id == run_id), None)
+
     # --- mutators (in place, return state for chaining) ----------------------
 
     def add_output_completed(
@@ -43,6 +48,28 @@ class StateManager:
         be = self.find_execution(state, node_id)
         if be:
             be.status = "completed"
+        return state
+
+    def mark_node_execution_failed(
+        self, state: PipelineState, node_id: str, error: str
+    ) -> PipelineState:
+        be = self.find_execution(state, node_id)
+        if be:
+            be.status = "failed"
+            run = self.find_run(state, be.node_run_id)
+            if run:
+                run.status = "failed"
+                run.last_error = error
+        return state
+
+    def retry_failed_node_executions(self, state: PipelineState) -> PipelineState:
+        for execution in state.node_executions:
+            if str(execution.status).lower() not in {"failed", "blocked", "error"}:
+                continue
+            execution.status = "in_progress"
+            run = self.find_run(state, execution.node_run_id)
+            if run and str(run.status).lower() in {"failed", "blocked", "error"}:
+                run.status = "running"
         return state
 
     def update_node_run(self, state: PipelineState, run_id: str, **fields: Any) -> PipelineState:

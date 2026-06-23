@@ -14,9 +14,11 @@ from typing import Any
 
 from tree.ingest.pipeline import extract_text
 from tree.io import file_ops, paths
+from tree.planner.manifest import scan_materials
 from tree.planner.mtu import mtu_text
 from tree.planner.models import MTU
 from tree.planner.pipeline import load_nodes, rebuild_planner
+from tree.planner.store import read_envelope_data, read_json, write_json_atomic
 
 LONG_DOCUMENT_CHAR_THRESHOLD = 100_000
 CLEAN_CHUNK_MIN_CHARS = 70_000
@@ -35,6 +37,14 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
         await _ensure_mtus_embedded(engine, mtus, backfill_node_ids=False)
 
     try:
+        if _can_resume_existing_planner(root):
+            _set_stage(engine, "ocr", total=0, done=0, status="complete", message="No changed materials")
+            _set_stage(engine, "clean", total=0, done=0, status="complete", message="Cleaning complete")
+            _set_stage(engine, "cut", total=0, done=0, status="complete", message="Cutting complete")
+            summary = _existing_planner_summary(root)
+            await ensure_all_embedded(engine)
+            return summary
+
         summary = await rebuild_planner(
             root,
             settings=engine.settings,
@@ -48,6 +58,46 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
         return summary
     finally:
         _install_ocr_progress_callback(None)
+
+
+def _can_resume_existing_planner(root: Path) -> bool:
+    manifest_path = paths.material_manifest_path(root)
+    previous = read_json(manifest_path) if manifest_path.exists() else None
+    manifest = scan_materials(root, previous=previous)
+    if manifest.get("inactive_materials"):
+        return False
+    if any(material.get("status") != "unchanged" for material in manifest.get("materials", [])):
+        return False
+    if not _planner_artifacts_ready(root):
+        return False
+    write_json_atomic(manifest_path, manifest)
+    return True
+
+
+def _planner_artifacts_ready(root: Path) -> bool:
+    try:
+        mtus = read_envelope_data(paths.mtus_path(root)).get("mtus")
+        nodes = read_envelope_data(paths.knowledge_nodes_path(root)).get("knowledge_nodes")
+        dag = read_envelope_data(paths.knowledge_dag_path(root))
+    except Exception:
+        return False
+    return isinstance(mtus, list) and isinstance(nodes, list) and isinstance(dag.get("nodes"), list)
+
+
+def _existing_planner_summary(root: Path) -> dict[str, Any]:
+    manifest = read_json(paths.material_manifest_path(root))
+    mtus = read_envelope_data(paths.mtus_path(root)).get("mtus", [])
+    dag = read_envelope_data(paths.knowledge_dag_path(root))
+    edges = dag.get("edges", [])
+    return {
+        "materials": manifest,
+        "mtu_count": len(mtus),
+        "node_count": len(dag.get("nodes", [])),
+        "hard_edge_count": sum(1 for e in edges if e.get("relation") == "prerequisite"),
+        "soft_order_edge_count": sum(1 for e in edges if e.get("relation") == "order"),
+        "dag_svg_path": str(paths.outputs_dag_svg_path(root)),
+        "resumed": True,
+    }
 
 
 async def ensure_all_embedded(engine: object) -> int:
@@ -120,6 +170,8 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
     source_file = material["source_file"]
     fingerprint = str(material.get("fingerprint") or "")
     ocr_path = paths.ocr_markdown_path(root, collection, source_file)
+    ocr_done = False
+    clean_cut_started = False
     try:
         cached = _reuse_ocr_checkpoint(ocr_path, fingerprint)
         if cached is not None:
@@ -133,21 +185,31 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
             persist_ocr_markdown(root, collection, source_file, raw)
             _write_ocr_fingerprint(ocr_path, fingerprint)
         _advance_stage(engine, "ocr", message=f"Extracted {material_label}", active=[])
+        ocr_done = True
         _record_ocr_checkpoint(engine, root, ocr_path, raw)
 
         checkpoint_raw = ocr_path.read_text(encoding="utf-8")
         if not checkpoint_raw.strip():
+            _advance_stage(engine, "clean", message=f"Skipped empty OCR output {material_label}", active=[])
+            _advance_stage(engine, "cut", message=f"Skipped empty OCR output {material_label}", active=[])
             return []
         raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
         _set_stage(engine, "clean", status="running", active=material_label,
                    message=f"Cleaning {material_label}")
         _set_stage(engine, "cut", status="running", active=material_label,
                    message=f"Cutting {material_label}")
-        return await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
-    finally:
-        # One advance per material (covers the empty-checkpoint early return too).
+        clean_cut_started = True
+        mtus = await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
         _advance_stage(engine, "clean", active=[])
         _advance_stage(engine, "cut", active=[])
+        return mtus
+    except Exception as exc:
+        if not ocr_done:
+            _fail_stage(engine, "ocr", f"{type(exc).__name__}: {exc}", active=material_label)
+        elif clean_cut_started:
+            _fail_stage(engine, "clean", f"{type(exc).__name__}: {exc}", active=material_label)
+            _fail_stage(engine, "cut", f"{type(exc).__name__}: {exc}", active=material_label)
+        raise
 
 
 def source_markdown_path(root: Path, collection: str, source_file: str) -> Path:
@@ -171,6 +233,7 @@ async def _clean_and_cut_chunk(
     cleaned = await archivist.clean(
         raw_chunk,
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
+        repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
     )
     _set_stage(engine, "clean", message=f"Cleaned {source_file}")
     if not cleaned.strip():
@@ -498,3 +561,18 @@ def _complete_stage(engine: object, stage: str, message: str) -> None:
             progress.complete_stage(stage, message)
         except Exception:
             return
+
+
+def _fail_stage(engine: object, stage: str, message: str, *, active: str = "") -> None:
+    _set_stage(engine, stage, status="failed", message=message, active=active)
+    progress = _progress(engine)
+    if progress is None or not hasattr(progress, "update"):
+        return
+    try:
+        state = progress.load() if hasattr(progress, "load") else {}
+        errors = list(state.get("errors") or [])
+        if message not in errors:
+            errors.append(message)
+        progress.update({"phase": "failed", "message": message, "errors": errors[-8:]})
+    except Exception:
+        return

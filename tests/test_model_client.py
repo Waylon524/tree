@@ -56,6 +56,18 @@ def test_settings_default_llm_timeout_is_480_seconds(monkeypatch, tmp_path):
     assert Settings.from_env(project_root=tmp_path, require_llm=False).llm_timeout_sec == 480.0
 
 
+def test_settings_default_source_mtu_chunk_tokens_is_20000(monkeypatch, tmp_path):
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("SOURCE_MTU_CHUNK_TOKENS", raising=False)
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).source_mtu_chunk_tokens == 20_000
+
+
+def test_settings_reads_source_mtu_chunk_tokens(monkeypatch, tmp_path):
+    monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SOURCE_MTU_CHUNK_TOKENS", "12345")
+    assert Settings.from_env(project_root=tmp_path, require_llm=False).source_mtu_chunk_tokens == 12_345
+
+
 def test_settings_default_model_is_deepseek_v4_flash(monkeypatch, tmp_path):
     monkeypatch.setenv("TREE_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("LLM_MODEL", raising=False)

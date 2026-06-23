@@ -937,11 +937,11 @@ table.stages td {
 }
 
 .dag-dot-running {
-  background: #d79b39;
+  background: #2f6f44;
 }
 
 .dag-dot-complete {
-  background: var(--done);
+  background: #8a5a32;
 }
 
 .dag-dot-failed {
@@ -1044,15 +1044,16 @@ table.stages td {
 }
 
 .state-ready {
-  background: #7fae68;
+  background: #b7dca5;
+  color: #1f3f29;
 }
 
 .state-running {
-  background: #b8862b;
+  background: #2f6f44;
 }
 
 .state-complete {
-  background: var(--done);
+  background: #8a5a32;
 }
 
 .state-failed {

@@ -233,6 +233,48 @@ async def test_tree_engine_starts_child_only_after_parent_is_covered(tmp_path, m
     assert calls == ["parent", "child"]
 
 
+async def test_tree_engine_marks_failed_node_and_retries_on_next_run(tmp_path, monkeypatch):
+    paths.ensure_workspace_dirs(tmp_path)
+    _seed_dag(tmp_path, [{"node_id": "n1", "title": "A", "collections": ["课件"]}])
+
+    async def _noop_prepare(engine):
+        return {"mtu_count": 0}
+
+    monkeypatch.setattr("tree.engine.orchestrator.prepare_sources", _noop_prepare)
+
+    class FailingRunner:
+        async def run_one(self, node_id: str) -> str:
+            raise RuntimeError("node boom")
+
+    engine = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1),
+        node_runner=FailingRunner(),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+
+    await engine.run()
+
+    state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+    assert state.node_executions[0].status == "failed"
+    assert state.node_runs[0].status == "failed"
+    assert "node boom" in (state.node_runs[0].last_error or "")
+    assert engine.progress.load()["phase"] == "failed"
+
+    runner = _FakeRunner(tmp_path)
+    retry_engine = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1),
+        node_runner=runner,
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+
+    await retry_engine.run()
+
+    assert runner.calls == ["n1"]
+    state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+    assert state.node_executions[0].status == "completed"
+    assert state.node_runs[0].status == "complete"
+
+
 async def _wait_until(predicate):
     while not predicate():
         await asyncio.sleep(0.01)

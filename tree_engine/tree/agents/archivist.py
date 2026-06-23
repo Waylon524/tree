@@ -45,12 +45,29 @@ class ArchivistAgent(Agent):
         line_count = len(lines)
         if line_count == 0:
             return ""
-        raw_plan = await self.complete(
-            _clean_prompt_body(raw_markdown, line_count),
-            system_prompt=ARCHIVIST_CLEAN_PROMPT,
-            timeout_sec=timeout_sec,
-        )
-        plan = extract_json_object(raw_plan)
+        prompt_body = _clean_prompt_body(raw_markdown, line_count)
+        malformed_feedback = ""
+        last_error: ValueError | None = None
+        plan: dict[str, Any] | None = None
+
+        for attempt in range(repair_attempts + 1):
+            try:
+                raw_plan = await self.complete(
+                    prompt_body + malformed_feedback,
+                    system_prompt=ARCHIVIST_CLEAN_PROMPT,
+                    timeout_sec=timeout_sec,
+                )
+                plan = extract_json_object(raw_plan)
+                break
+            except ValueError as exc:
+                last_error = exc
+                logger.warning("Clean delete plan malformed (attempt %d): %s", attempt + 1, exc)
+                malformed_feedback = (
+                    f"\n\nPREVIOUS RESPONSE WAS NOT VALID JSON: {exc}. "
+                    "Regenerate one strict JSON object only with valid delete ranges."
+                )
+        if plan is None:
+            raise last_error or ValueError("Clean delete plan malformed.")
         deleted_ranges, invalid_ranges = _partition_deleted_ranges(plan, line_count=line_count)
 
         for _attempt in range(repair_attempts):

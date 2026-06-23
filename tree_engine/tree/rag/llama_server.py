@@ -25,6 +25,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from tree.config import DEFAULT_LLAMA_SERVER_CTX
 from tree.io import paths
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def build_argv(binary: Path, gguf: Path, *, host: str, port: int) -> list[str]:
         "--port",
         str(port),
         "-c",
-        os.environ.get("LLAMA_SERVER_CTX", "").strip() or "8192",
+        os.environ.get("LLAMA_SERVER_CTX", "").strip() or str(DEFAULT_LLAMA_SERVER_CTX),
     ]
     gpu_layers = _gpu_layers_override()
     if gpu_layers:

@@ -139,7 +139,7 @@ def _recent_log_errors(root: Path) -> list[str]:
             continue
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]:
             stripped = line.strip()
-            if stripped and _looks_like_error(stripped):
+            if stripped and _looks_like_error(stripped) and not _is_shutdown_noise(stripped):
                 lines.append(stripped)
     return lines[-5:]
 
@@ -158,6 +158,15 @@ def _looks_like_error(line: str) -> bool:
             "error:",
             "blocked",
         )
+    )
+
+
+def _is_shutdown_noise(line: str) -> bool:
+    lowered = line.lower()
+    return (
+        "qdrantclient.__del__" in lowered
+        or ("qdrantclient" in lowered and "sys.meta_path is none" in lowered)
+        or "python is likely shutting down" in lowered
     )
 
 

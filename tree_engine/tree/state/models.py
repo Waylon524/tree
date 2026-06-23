@@ -29,6 +29,19 @@ class CoverageSnapshot(BaseModel):
     forbidden_future_node_ids: list[str] = Field(default_factory=list)
 
 
+class Route(str, Enum):
+    PASS = "PASS"
+    FAIL_KNOWLEDGE_GAP = "FAIL_KNOWLEDGE_GAP"
+
+
+class ExamSections(BaseModel):
+    knowledge_point: str
+    covered_node_ids: list[str] = Field(default_factory=list)
+    blind_exam: str
+    answer_key: str
+    writer_instructions: str
+
+
 class NodeRunRecord(BaseModel):
     node_id: str
     run_id: str
@@ -36,6 +49,10 @@ class NodeRunRecord(BaseModel):
     coverage_snapshot: CoverageSnapshot = Field(default_factory=CoverageSnapshot)
     outputs_completed: list[str] = Field(default_factory=list)
     current_iteration: int = 0
+    exam_sections: ExamSections | None = None
+    draft_path: Path | None = None
+    previous_bottleneck: str | None = None
+    last_error: str | None = None
 
 
 class PipelineState(BaseModel):
@@ -51,19 +68,6 @@ class PipelineState(BaseModel):
         values.pop("branch_executions", None)
         values.pop("branch_runs", None)
         return values
-
-
-class Route(str, Enum):
-    PASS = "PASS"
-    FAIL_KNOWLEDGE_GAP = "FAIL_KNOWLEDGE_GAP"
-
-
-class ExamSections(BaseModel):
-    knowledge_point: str
-    covered_node_ids: list[str] = Field(default_factory=list)
-    blind_exam: str
-    answer_key: str
-    writer_instructions: str
 
 
 class AuditResult(BaseModel):

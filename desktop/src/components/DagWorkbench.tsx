@@ -27,14 +27,14 @@ const STATUS_META: Record<
   },
   running: {
     label: "Running",
-    color: "#d79b39",
-    glow: "#f0b64d",
+    color: "#2f6f44",
+    glow: "#5fa774",
     description: "Active NodeRun",
   },
   complete: {
     label: "Complete",
-    color: "#3f7d4e",
-    glow: "#79c089",
+    color: "#8a5a32",
+    glow: "#c08a52",
     description: "Covered by output",
   },
   failed: {
@@ -59,6 +59,10 @@ type DagGraphLink = LinkObject<DagGraphNode, DagEdge> & {
 };
 
 type GraphRef = ForceGraphMethods<DagGraphNode, DagGraphLink> | undefined;
+type PositionKey = "x" | "y" | "z" | "vx" | "vy" | "vz";
+type DagNodePosition = Partial<Record<PositionKey, number>>;
+
+const POSITION_KEYS: PositionKey[] = ["x", "y", "z", "vx", "vy", "vz"];
 
 interface DagWorkbenchProps {
   selectedNodeId?: string;
@@ -76,6 +80,9 @@ export function DagWorkbench({
   const [error, setError] = useState<string>("");
   const [svgMessage, setSvgMessage] = useState<string>("");
   const graphRef = useRef<GraphRef>(undefined);
+  const graphSignatureRef = useRef<string>("");
+  const initialFitDoneRef = useRef<boolean>(false);
+  const positionsRef = useRef<Map<string, DagNodePosition>>(new Map());
   const stageRef = useRef<HTMLDivElement | null>(null);
   const size = useElementSize(stageRef);
   const reducedMotion = usePrefersReducedMotion();
@@ -87,7 +94,11 @@ export function DagWorkbench({
       fetchDag()
         .then((data) => {
           if (!active) return;
-          setDag(data);
+          const signature = dagSignature(data);
+          if (signature !== graphSignatureRef.current) {
+            graphSignatureRef.current = signature;
+            setDag(data);
+          }
           setError("");
         })
         .catch((err: unknown) => {
@@ -102,7 +113,7 @@ export function DagWorkbench({
     };
   }, []);
 
-  const graph = useMemo(() => buildGraph(dag), [dag]);
+  const graph = useMemo(() => buildGraph(dag, positionsRef.current), [dag]);
   const visibleIds = useMemo(() => {
     if (filter === "all") return new Set(graph.nodes.map((node) => String(node.id)));
     return new Set(
@@ -114,6 +125,13 @@ export function DagWorkbench({
   useEffect(() => {
     if (selectedId && !graph.byId.has(selectedId)) onSelectedNodeChange("");
   }, [graph.byId, onSelectedNodeChange, selectedId]);
+
+  useEffect(() => {
+    if (graph.nodes.length === 0) {
+      initialFitDoneRef.current = false;
+      positionsRef.current.clear();
+    }
+  }, [graph.nodes.length]);
 
   const focusNode = (node: DagGraphNode): void => {
     onSelectedNodeChange(String(node.id));
@@ -147,12 +165,29 @@ export function DagWorkbench({
 
   const resetView = (): void => {
     onSelectedNodeChange("");
-    graphRef.current?.cameraPosition({ x: 0, y: 0, z: 420 }, { x: 0, y: 0, z: 0 }, reducedMotion ? 0 : 700);
+    graphRef.current?.cameraPosition(
+      { x: 0, y: 0, z: 420 },
+      { x: 0, y: 0, z: 0 },
+      reducedMotion ? 0 : 700,
+    );
   };
 
   const fitView = (): void => {
     onSelectedNodeChange("");
     graphRef.current?.zoomToFit(reducedMotion ? 0 : 650, 48, (node) =>
+      visibleIds.has(String(node.id)),
+    );
+  };
+
+  const handleEngineTick = (): void => {
+    cacheNodePositions(graph.nodes, positionsRef.current);
+  };
+
+  const handleEngineStop = (): void => {
+    cacheNodePositions(graph.nodes, positionsRef.current);
+    if (initialFitDoneRef.current || graph.nodes.length === 0) return;
+    initialFitDoneRef.current = true;
+    graphRef.current?.zoomToFit(reducedMotion ? 0 : 650, 56, (node) =>
       visibleIds.has(String(node.id)),
     );
   };
@@ -209,7 +244,7 @@ export function DagWorkbench({
             nodeId="id"
             linkSource="source"
             linkTarget="target"
-            dagMode="td"
+            dagMode="bu"
             dagLevelDistance={82}
             dagNodeFilter={(node) => visibleIds.has(String(node.id))}
             onDagError={() => undefined}
@@ -242,7 +277,8 @@ export function DagWorkbench({
             linkDirectionalArrowRelPos={0.96}
             linkDirectionalArrowColor={(link) => STATUS_META[link.status].glow}
             cooldownTicks={80}
-            onEngineStop={() => graphRef.current?.zoomToFit(500, 56)}
+            onEngineTick={handleEngineTick}
+            onEngineStop={handleEngineStop}
             onNodeClick={(node) => focusNode(node)}
             onBackgroundClick={() => onSelectedNodeChange("")}
           />
@@ -424,7 +460,10 @@ interface DagGraph {
   counts: Record<DagNodeStatus, number>;
 }
 
-function buildGraph(dag: DagPayload | null): DagGraph {
+function buildGraph(
+  dag: DagPayload | null,
+  positions: Map<string, DagNodePosition>,
+): DagGraph {
   const counts: Record<DagNodeStatus, number> = {
     locked: 0,
     ready: 0,
@@ -434,13 +473,15 @@ function buildGraph(dag: DagPayload | null): DagGraph {
   };
   const nodes = (dag?.nodes ?? []).map((node) => {
     counts[node.status] += 1;
-    return {
+    const graphNode: DagGraphNode = {
       ...node,
       id: node.id,
       name: node.title,
       val: node.status === "running" ? 7 : node.status === "complete" ? 5 : 4,
       color: STATUS_META[node.status].color,
     };
+    restoreNodePosition(graphNode, positions);
+    return graphNode;
   });
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const links = (dag?.edges ?? [])
@@ -453,6 +494,71 @@ function buildGraph(dag: DagPayload | null): DagGraph {
       required_defines: edge.required_defines,
     }));
   return { nodes, links, byId, counts };
+}
+
+function cacheNodePositions(
+  nodes: DagGraphNode[],
+  positions: Map<string, DagNodePosition>,
+): void {
+  for (const node of nodes) {
+    const position: DagNodePosition = {};
+    for (const key of POSITION_KEYS) {
+      const value = node[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        position[key] = value;
+      }
+    }
+    if (Object.keys(position).length > 0) {
+      positions.set(String(node.id), position);
+    }
+  }
+}
+
+function restoreNodePosition(
+  node: DagGraphNode,
+  positions: Map<string, DagNodePosition>,
+): void {
+  const position = positions.get(String(node.id));
+  if (!position) return;
+  for (const key of POSITION_KEYS) {
+    const value = position[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      node[key] = value;
+    }
+  }
+}
+
+function dagSignature(dag: DagPayload): string {
+  const nodes = dag.nodes
+    .map((node) => ({
+      id: node.id,
+      title: node.title,
+      label: node.label,
+      status: node.status,
+      summary: node.summary,
+      source_order_index: node.source_order_index,
+      defines: sortedStrings(node.defines),
+      collections: sortedStrings(node.collections),
+      prerequisites: sortedStrings(node.prerequisites),
+      dependents: sortedStrings(node.dependents),
+      output_paths: sortedStrings(node.output_paths),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const edges = dag.edges
+    .filter((edge) => edge.relation === "prerequisite")
+    .map((edge) => ({
+      from: edge.from,
+      to: edge.to,
+      relation: edge.relation,
+      confidence: edge.confidence,
+      required_defines: sortedStrings(edge.required_defines),
+    }))
+    .sort((left, right) => `${left.from}:${left.to}`.localeCompare(`${right.from}:${right.to}`));
+  return JSON.stringify({ nodes, edges, roots: sortedStrings(dag.roots) });
+}
+
+function sortedStrings(items: string[]): string[] {
+  return [...items].sort((left, right) => left.localeCompare(right));
 }
 
 function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
@@ -476,7 +582,7 @@ function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
     const leaf = new THREE.Mesh(
       new THREE.SphereGeometry(2.7, 16, 8),
       new THREE.MeshStandardMaterial({
-        color: node.status === "failed" ? "#c96c6c" : "#7faa69",
+        color: node.status === "failed" ? "#c96c6c" : meta.glow,
         roughness: 0.52,
         transparent: true,
         opacity: 0.88,

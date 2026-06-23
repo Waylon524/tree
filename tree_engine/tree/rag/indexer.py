@@ -10,17 +10,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from tree.rag.chunker import chunk_mtu
+from tree.rag.chunker import DEFAULT_SOURCE_MTU_CHUNK_TOKENS, chunk_mtu
 from tree.rag.client import RAGClient
 
 
 class RAGIndexer:
-    def __init__(self, rag: RAGClient):
+    def __init__(
+        self,
+        rag: RAGClient,
+        *,
+        source_mtu_chunk_tokens: int = DEFAULT_SOURCE_MTU_CHUNK_TOKENS,
+    ):
         self.rag = rag
+        self.source_mtu_chunk_tokens = source_mtu_chunk_tokens
 
     def index_mtu(self, mtu: Any, text: str, *, node_id: str = "") -> int:
         """Index one Minimal Teachable Unit (its text read by line_range)."""
-        chunks = chunk_mtu(mtu, text)
+        chunks = chunk_mtu(mtu, text, max_source_tokens=self.source_mtu_chunk_tokens)
         return self.rag.index_file(
             file_seq=mtu.mtu_id,
             filename=mtu.source_file,

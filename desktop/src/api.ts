@@ -406,6 +406,8 @@ export interface SettingsData {
   paddleocr_api_token_configured: boolean;
   paddleocr_api_url: string;
   paddleocr_model: string;
+  llama_server_ctx: number;
+  source_mtu_chunk_tokens: number;
 }
 
 export interface SettingsSave {
@@ -414,6 +416,8 @@ export interface SettingsSave {
   llm_model: string;
   role_models: RoleModels;
   paddleocr_api_token: string;
+  llama_server_ctx: string;
+  source_mtu_chunk_tokens: string;
 }
 
 export async function fetchSettings(): Promise<SettingsData> {

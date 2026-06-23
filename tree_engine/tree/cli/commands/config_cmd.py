@@ -11,7 +11,15 @@ from dotenv import dotenv_values
 from rich import print as rprint
 
 from tree.cli import theme
-from tree.config import ROLES
+from tree.config import (
+    DEFAULT_LLAMA_SERVER_CTX,
+    DEFAULT_SOURCE_MTU_CHUNK_TOKENS,
+    LLAMA_SERVER_CTX_MAX,
+    LLAMA_SERVER_CTX_MIN,
+    ROLES,
+    SOURCE_MTU_CHUNK_TOKENS_MAX,
+    SOURCE_MTU_CHUNK_TOKENS_MIN,
+)
 from tree.io import paths
 
 _DEFAULT_ENV = {
@@ -19,6 +27,8 @@ _DEFAULT_ENV = {
     "LLM_MODEL": "deepseek-v4-flash",
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
+    "LLAMA_SERVER_CTX": str(DEFAULT_LLAMA_SERVER_CTX),
+    "SOURCE_MTU_CHUNK_TOKENS": str(DEFAULT_SOURCE_MTU_CHUNK_TOKENS),
 }
 
 _WRITE_ORDER = (
@@ -33,6 +43,8 @@ _WRITE_ORDER = (
     "PADDLEOCR_API_URL",
     "PADDLEOCR_API_TOKEN",
     "PADDLEOCR_MODEL",
+    "LLAMA_SERVER_CTX",
+    "SOURCE_MTU_CHUNK_TOKENS",
 )
 
 
@@ -79,6 +91,12 @@ def read_settings_config(root: Path, *, env_path: Path | None = None) -> dict[st
         "paddleocr_api_token_configured": bool(existing.get("PADDLEOCR_API_TOKEN")),
         "paddleocr_api_url": values.get("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"]),
         "paddleocr_model": values.get("PADDLEOCR_MODEL", _DEFAULT_ENV["PADDLEOCR_MODEL"]),
+        "llama_server_ctx": _config_int(
+            values, "LLAMA_SERVER_CTX", DEFAULT_LLAMA_SERVER_CTX
+        ),
+        "source_mtu_chunk_tokens": _config_int(
+            values, "SOURCE_MTU_CHUNK_TOKENS", DEFAULT_SOURCE_MTU_CHUNK_TOKENS
+        ),
     }
 
 
@@ -112,6 +130,28 @@ def write_settings_config(
             value = _settings_str(role_models.get(role))
             if value:
                 existing[f"{role.upper()}_MODEL"] = value
+
+    numeric_updates = {
+        "llama_server_ctx": (
+            "LLAMA_SERVER_CTX",
+            LLAMA_SERVER_CTX_MIN,
+            LLAMA_SERVER_CTX_MAX,
+        ),
+        "source_mtu_chunk_tokens": (
+            "SOURCE_MTU_CHUNK_TOKENS",
+            SOURCE_MTU_CHUNK_TOKENS_MIN,
+            SOURCE_MTU_CHUNK_TOKENS_MAX,
+        ),
+    }
+    for field, (key, minimum, maximum) in numeric_updates.items():
+        value = _settings_int(
+            settings.get(field),
+            field=field,
+            minimum=minimum,
+            maximum=maximum,
+        )
+        if value is not None:
+            existing[key] = str(value)
 
     if existing.get("PADDLEOCR_API_TOKEN"):
         if allow_paddleocr_endpoint_override:
@@ -242,3 +282,40 @@ def _clean_prompt_value(value: str) -> str:
 
 def _settings_str(value: Any) -> str:
     return _clean_prompt_value(value) if isinstance(value, str) else ""
+
+
+def _settings_int(
+    value: Any,
+    *,
+    field: str,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be an integer between {minimum} and {maximum}.")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        text = _clean_prompt_value(value)
+        if not text:
+            return None
+        try:
+            parsed = int(text)
+        except ValueError as exc:
+            raise ValueError(
+                f"{field} must be an integer between {minimum} and {maximum}."
+            ) from exc
+    else:
+        raise ValueError(f"{field} must be an integer between {minimum} and {maximum}.")
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{field} must be an integer between {minimum} and {maximum}.")
+    return parsed
+
+
+def _config_int(values: dict[str, str], key: str, default: int) -> int:
+    try:
+        return int(str(values.get(key, default)).strip())
+    except ValueError:
+        return default

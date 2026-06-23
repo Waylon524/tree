@@ -53,7 +53,7 @@ class NodeRunner:
         execution = self.state_mgr.find_execution(state, node_id)
         if execution is None:
             raise RuntimeError(f"No node execution for {node_id}")
-        run = next((r for r in state.node_runs if r.run_id == execution.node_run_id), None)
+        run = self.state_mgr.find_run(state, execution.node_run_id)
         snapshot = run.coverage_snapshot if run else None
 
         dag = self._load_dag()
@@ -72,16 +72,26 @@ class NodeRunner:
         prior_paths, allowed_paths = self._prior_scope(snapshot, ledger)
         collections = list(execution.source_collections or node.get("collections") or [])
 
-        compose_query = f"{node_id}\n{node.get('title', '')}\n下一知识点命题"
-        exam = await self.examiner.compose(
-            next_seq=file_seq,
-            prior_paths=prior_paths,
-            prior_contents=[],
-            retrieved=self.retriever.source_hits(compose_query, collections=collections, node_ids=[node_id], top_k=5)
-            + self.retriever.finished_hits(compose_query, allowed_paths=allowed_paths, top_k=8),
-            node_context=node_context,
-        )
-        exam.covered_node_ids = [node_id]
+        if run and run.exam_sections is not None:
+            exam = run.exam_sections
+            exam.covered_node_ids = [node_id]
+        else:
+            compose_query = f"{node_id}\n{node.get('title', '')}\n下一知识点命题"
+            exam = await self.examiner.compose(
+                next_seq=file_seq,
+                prior_paths=prior_paths,
+                prior_contents=[],
+                retrieved=self.retriever.source_hits(compose_query, collections=collections, node_ids=[node_id], top_k=5)
+                + self.retriever.finished_hits(compose_query, allowed_paths=allowed_paths, top_k=8),
+                node_context=node_context,
+            )
+            exam.covered_node_ids = [node_id]
+            self._persist_run_state(
+                execution.node_run_id,
+                exam_sections=exam,
+                status="running",
+                last_error=None,
+            )
 
         iter_state = IterationState(
             execution_path=node_id,
@@ -89,6 +99,9 @@ class NodeRunner:
             knowledge_point=_clean_title(exam.knowledge_point) or str(node.get("title") or node_id),
             covered_node_ids=[node_id],
             exam_sections=exam,
+            iteration=run.current_iteration if run else 0,
+            previous_bottleneck=run.previous_bottleneck if run else None,
+            draft_path=_existing_draft_path(run.draft_path) if run else None,
         )
         await self._iteration_loop(iter_state, execution, collections, prior_paths, allowed_paths, node_context)
         self._complete_node_if_covered(node_id, execution.node_run_id)
@@ -105,14 +118,20 @@ class NodeRunner:
     ) -> None:
         exam = iter_state.exam_sections
         assert exam is not None
-        previous_bottleneck: str | None = None
-        iteration = 0
+        previous_bottleneck = iter_state.previous_bottleneck
+        iteration = iter_state.iteration
         node_id = iter_state.covered_node_ids[0]
 
         while True:
             iteration += 1
             self.limiter.check(iter_state.execution_path, iter_state.file_seq, iteration)
             iter_state.iteration = iteration
+            self._persist_run_state(
+                execution.node_run_id,
+                current_iteration=iteration,
+                status="running",
+                last_error=None,
+            )
             draft_text = (
                 iter_state.draft_path.read_text(encoding="utf-8")
                 if iter_state.draft_path and iter_state.draft_path.exists()
@@ -142,16 +161,21 @@ class NodeRunner:
             )
 
             if audit.route == Route.PASS:
-                if not iter_state.draft_path or not iter_state.draft_path.exists():
-                    raise RuntimeError("Cannot PASS without a persisted draft.")
-                self._handle_pass(iter_state, execution, exam)
-                return
+                if iter_state.draft_path and iter_state.draft_path.exists():
+                    self._handle_pass(iter_state, execution, exam)
+                    return
+                bottleneck_report = (
+                    "Examiner returned PASS, but this NodeRun has no persisted draft yet. "
+                    "Write a complete draft for the target KnowledgeNode before PASS can be accepted."
+                )
+            else:
+                bottleneck_report = audit.bottleneck_report
 
-            wq = f"{exam.knowledge_point}\n{audit.bottleneck_report}"
+            wq = f"{exam.knowledge_point}\n{bottleneck_report}"
             result = await self.writer.draft(
                 span_title=exam.knowledge_point,
                 file_seq=iter_state.file_seq,
-                bottleneck_report=audit.bottleneck_report,
+                bottleneck_report=bottleneck_report,
                 prior_paths=prior_paths,
                 prior_contents=[],
                 draft_text=draft_text,
@@ -164,7 +188,16 @@ class NodeRunner:
             iter_state.draft_path = self._persist_draft(
                 node_id, iter_state.file_seq, exam.knowledge_point, result.draft_content
             )
-            previous_bottleneck = audit.bottleneck_report
+            previous_bottleneck = bottleneck_report
+            iter_state.previous_bottleneck = previous_bottleneck
+            self._persist_run_state(
+                execution.node_run_id,
+                current_iteration=iteration,
+                draft_path=iter_state.draft_path,
+                previous_bottleneck=previous_bottleneck,
+                status="running",
+                last_error=None,
+            )
 
     def _handle_pass(self, iter_state: IterationState, execution: Any, exam: ExamSections) -> None:
         node_id = iter_state.covered_node_ids[0]
@@ -218,6 +251,13 @@ class NodeRunner:
         file_ops.write_text(path, self._format_node_draft(node_id, file_seq, title, content))
         return path
 
+    def _persist_run_state(self, run_id: str | None, **fields: Any) -> None:
+        if not run_id:
+            return
+        state = self.state_mgr.load()
+        state = self.state_mgr.update_node_run(state, run_id, **fields)
+        self.state_mgr.save(state)
+
     def _format_node_draft(self, node_id: str, file_seq: str, title: str, content: str) -> str:
         dag = self._load_dag()
         nodes_by_id = {n["node_id"]: n for n in dag.get("nodes", [])}
@@ -256,6 +296,13 @@ def _load_ledger(root: Path) -> dict[str, Any]:
         return {"records": []}
     loaded = read_json(path)
     return loaded if isinstance(loaded, dict) else {"records": []}
+
+
+def _existing_draft_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    candidate = Path(path)
+    return candidate if candidate.exists() else None
 
 
 def ledger_covered_node_ids(root: Path) -> set[str]:

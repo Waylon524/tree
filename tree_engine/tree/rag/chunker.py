@@ -16,7 +16,7 @@ from typing import Any
 MAX_TOKENS = {"def": 2000, "proof": 3000, "example": 2400, "narrative": 1500}
 TOKEN_SAFETY_MARGIN = 8
 MAX_TOKENS_PER_CHUNK = 3000
-MAX_SOURCE_MTU_TOKENS = 20_000
+DEFAULT_SOURCE_MTU_CHUNK_TOKENS = 20_000
 
 
 # Rough token estimate: 1 token ≈ 1.5 Chinese chars or 4 English chars
@@ -157,7 +157,12 @@ def chunk_markdown(
     return chunks
 
 
-def chunk_mtu(mtu: Any, text: str) -> list[dict]:
+def chunk_mtu(
+    mtu: Any,
+    text: str,
+    *,
+    max_source_tokens: int = DEFAULT_SOURCE_MTU_CHUNK_TOKENS,
+) -> list[dict]:
     """Chunk one Minimal Teachable Unit. Normally one chunk; split if oversized.
 
     `mtu` is duck-typed: needs .mtu_id, .collection, .title, .keywords,
@@ -166,7 +171,7 @@ def chunk_mtu(mtu: Any, text: str) -> list[dict]:
     """
     prepared = _prepare_markdown_text(text)
     token_estimate = _estimate_tokens(prepared)
-    if token_estimate <= MAX_SOURCE_MTU_TOKENS:
+    if token_estimate <= max_source_tokens:
         chunks = [
             _make_chunk(
                 mtu.mtu_id,

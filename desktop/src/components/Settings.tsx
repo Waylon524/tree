@@ -25,6 +25,8 @@ const EMPTY_FIELDS: SettingsSave = {
   llm_model: "",
   role_models: EMPTY_ROLE_MODELS,
   paddleocr_api_token: "",
+  llama_server_ctx: "22000",
+  source_mtu_chunk_tokens: "20000",
 };
 
 const MASKED_SECRET = "***";
@@ -36,6 +38,8 @@ function fieldsFromSettings(settings: SettingsData): SettingsSave {
     llm_model: settings.llm_model,
     role_models: settings.role_models,
     paddleocr_api_token: settings.paddleocr_api_token_configured ? MASKED_SECRET : "",
+    llama_server_ctx: String(settings.llama_server_ctx),
+    source_mtu_chunk_tokens: String(settings.source_mtu_chunk_tokens),
   };
 }
 
@@ -145,6 +149,34 @@ export function Settings() {
                 value={fields.paddleocr_api_token}
                 onChange={set("paddleocr_api_token")}
                 placeholder="API key"
+              />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Runtime</legend>
+          <div className="form-grid">
+            <label>
+              llama-server context
+              <input
+                type="number"
+                min="1024"
+                max="32768"
+                step="1"
+                value={fields.llama_server_ctx}
+                onChange={set("llama_server_ctx")}
+              />
+            </label>
+            <label>
+              Source MTU chunk tokens
+              <input
+                type="number"
+                min="500"
+                max="32768"
+                step="1"
+                value={fields.source_mtu_chunk_tokens}
+                onChange={set("source_mtu_chunk_tokens")}
               />
             </label>
           </div>

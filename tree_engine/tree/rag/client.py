@@ -101,7 +101,18 @@ class RAGClient:
         if not chunks:
             return 0
 
-        vectors = self.embedder.embed([c["text"] for c in chunks])
+        chunk_texts = [c["text"] for c in chunks]
+        try:
+            vectors = self.embedder.embed(chunk_texts)
+        except Exception as exc:  # noqa: BLE001
+            endpoint = getattr(self.embedder, "base_url", "")
+            model = getattr(self.embedder, "model", "")
+            max_chars = max((len(text) for text in chunk_texts), default=0)
+            raise RuntimeError(
+                "Failed to embed document "
+                f"{doc_id} (kind={content_kind}, chunks={len(chunks)}, max_chars={max_chars}, "
+                f"model={model}, endpoint={endpoint}): {exc}"
+            ) from exc
         points = []
         for chunk, vector in zip(chunks, vectors):
             payload = {

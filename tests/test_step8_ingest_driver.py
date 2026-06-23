@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from tree.engine.ingest_driver import (
     prepare_sources,
     remove_ocr_image_html,
@@ -24,7 +26,7 @@ class _FakeArchivist:
     def __init__(self):
         self.clean_inputs = []
 
-    async def clean(self, raw_markdown: str, *, timeout_sec=None) -> str:
+    async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
         self.clean_inputs.append(raw_markdown)
         return raw_markdown.replace("raw", "clean")
 
@@ -367,7 +369,7 @@ class _BlockingArchivist:
         self.started_five = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def clean(self, raw_markdown: str, *, timeout_sec=None) -> str:
+    async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         if self.active == 5:
@@ -449,7 +451,7 @@ class _RetryingArchivist:
         self.slow_started = asyncio.Event()
         self.overload_failed = asyncio.Event()
 
-    async def clean(self, raw_markdown: str, *, timeout_sec=None) -> str:
+    async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
         if raw_markdown.startswith("slow"):
             self.events.append("slow-start")
             self.slow_started.set()
@@ -594,6 +596,51 @@ async def test_unchanged_material_resumes_from_cache_without_reocr(tmp_path, mon
     # Second run, material unchanged: per-material cache hit, producer not invoked.
     await prepare_sources(_ingest_engine(tmp_path, indexer=indexer))
     assert calls["n"] == 1
+
+
+async def test_unchanged_material_skips_planner_rebuild_when_artifacts_ready(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.parent.mkdir(parents=True)
+    raw = _raw_lines(62)
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    indexer = _FakeIndexer()
+    await prepare_sources(_ingest_engine(tmp_path, indexer=indexer))
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("unchanged materials should resume from existing planner artifacts")
+
+    monkeypatch.setattr("tree.engine.ingest_driver.rebuild_planner", boom)
+    summary = await prepare_sources(_ingest_engine(tmp_path, indexer=indexer))
+
+    assert summary["resumed"] is True
+    assert summary["mtu_count"] == 2
+
+
+async def test_clean_failure_marks_stage_failed_without_advancing_done(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.parent.mkdir(parents=True)
+    raw = _raw_lines(62)
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    class FailingArchivist(_FakeArchivist):
+        async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
+            raise ValueError("bad clean json")
+
+    engine = _ingest_engine(tmp_path)
+    engine.archivist = FailingArchivist()
+
+    with pytest.raises(ValueError, match="bad clean json"):
+        await prepare_sources(engine)
+
+    progress = engine.progress.load()
+    assert progress["stages"]["clean"]["status"] == "failed"
+    assert progress["stages"]["clean"]["done"] == 0
+    assert progress["stages"]["cut"]["status"] == "failed"
+    assert progress["stages"]["cut"]["done"] == 0
+    assert "bad clean json" in progress["errors"][0]
 
 
 async def test_resumes_via_ocr_checkpoint_when_mtu_cache_missing(tmp_path, monkeypatch):

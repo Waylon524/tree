@@ -518,7 +518,7 @@ LLAMA_SERVER_VERSION=b9670             # 下载的 llama.cpp release tag
 LLAMA_SERVER_DOWNLOAD_URL=             # 完全覆盖下载地址（内网镜像）
 LLAMA_SERVER_AUTO_DOWNLOAD=true        # 设 false 则缺二进制时报错而不下载
 LLAMA_SERVER_CACHE_DIR=                # 二进制缓存目录，默认 ~/.tree/bin/
-LLAMA_SERVER_CTX=8192                  # 上下文长度 -c
+LLAMA_SERVER_CTX=22000                 # 上下文长度 -c
 LLAMA_SERVER_POOLING=                  # 覆盖 pooling，默认读模型 metadata
 ```
 
@@ -698,6 +698,7 @@ EMBED_HF_ENDPOINT=
 EMBED_AUTO_DOWNLOAD=true
 EMBED_AUTO_START=true
 EMBED_SERVER_START_TIMEOUT_SEC=300
+SOURCE_MTU_CHUNK_TOKENS=20000          # Source MTU 超过该估算 token 数时拆分 embedding chunk
 ```
 
 健康检查：

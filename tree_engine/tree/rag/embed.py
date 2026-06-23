@@ -7,6 +7,7 @@ OpenAI-compatible embedding endpoint.
 import json
 import logging
 import os
+import urllib.error
 import urllib.request
 
 logger = logging.getLogger(__name__)
@@ -31,8 +32,17 @@ class EmbeddingClient:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read())
+        try:
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            body = exc.read(2048).decode("utf-8", errors="replace")
+            max_chars = max((len(text) for text in texts), default=0)
+            raise RuntimeError(
+                "Embedding request failed "
+                f"(HTTP {exc.code}, model={self.model}, endpoint={self.base_url}/v1/embeddings, "
+                f"inputs={len(texts)}, max_chars={max_chars}): {body or exc.reason}"
+            ) from exc
 
         embeddings = sorted(data["data"], key=lambda x: x["index"])
         return [e["embedding"] for e in embeddings]

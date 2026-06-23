@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 ROLES = ("examiner", "student", "writer", "archivist", "dagger")
 
+DEFAULT_LLAMA_SERVER_CTX = 22_000
+DEFAULT_SOURCE_MTU_CHUNK_TOKENS = 20_000
+LLAMA_SERVER_CTX_MIN = 1_024
+LLAMA_SERVER_CTX_MAX = 32_768
+SOURCE_MTU_CHUNK_TOKENS_MIN = 500
+SOURCE_MTU_CHUNK_TOKENS_MAX = 32_768
+
 # Endpoint keys a workspace-level (untrusted, cwd-controlled) env file may only set
 # when the same file also provides the credential that would be sent to that endpoint.
 # Otherwise a malicious workspace could redirect globally-configured API keys.
@@ -71,6 +78,7 @@ class Settings:
     source_ocr_pdf_max_pages_per_job: int = 99
     source_ocr_upload_interval_sec: float = 5.0
     source_embedding_concurrency: int = 1
+    source_mtu_chunk_tokens: int = DEFAULT_SOURCE_MTU_CHUNK_TOKENS
 
     # Archivist (MTU cutting)
     archivist_mtu_cut_timeout_sec: float = 480.0
@@ -97,9 +105,7 @@ class Settings:
     @classmethod
     def from_env(cls, project_root: Path | None = None, require_llm: bool = True) -> "Settings":
         root = project_root or Path.cwd()
-        _load_env_file(paths.global_config_path())
-        _load_env_file(paths.legacy_workspace_env_path(root), trusted=False)
-        _load_env_file(paths.workspace_config_path(root), trusted=False)
+        load_runtime_env(root)
 
         default_key = os.environ.get("LLM_API_KEY", "")
         default_url = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
@@ -138,6 +144,9 @@ class Settings:
             source_ocr_pdf_max_pages_per_job=_env_int("SOURCE_OCR_PDF_MAX_PAGES_PER_JOB", 99),
             source_ocr_upload_interval_sec=_env_float("SOURCE_OCR_UPLOAD_INTERVAL_SEC", 5.0),
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
+            source_mtu_chunk_tokens=_env_int(
+                "SOURCE_MTU_CHUNK_TOKENS", DEFAULT_SOURCE_MTU_CHUNK_TOKENS
+            ),
             archivist_mtu_cut_timeout_sec=_env_float("ARCHIVIST_MTU_CUT_TIMEOUT_SEC", 480.0),
             archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 8),
             dagger_build_timeout_sec=_env_float("DAGGER_BUILD_TIMEOUT_SEC", 480.0),
@@ -157,6 +166,14 @@ class Settings:
 
     def role(self, name: str) -> RoleConfig:
         return getattr(self, name)
+
+
+def load_runtime_env(project_root: Path | None = None) -> None:
+    """Load TREE runtime env files into ``os.environ`` before starting services."""
+    root = project_root or Path.cwd()
+    _load_env_file(paths.global_config_path())
+    _load_env_file(paths.legacy_workspace_env_path(root), trusted=False)
+    _load_env_file(paths.workspace_config_path(root), trusted=False)
 
 
 def _role_config(role: str, default_key: str, default_url: str, default_model: str) -> RoleConfig:

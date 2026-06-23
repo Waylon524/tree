@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tree.cli import theme
+from tree.config import load_runtime_env
 from tree.io import paths, process
 from tree.rag.service import start_embedding_service, stop_embedding_service
 
@@ -18,6 +19,7 @@ class LifecycleResult:
 
 def start_engine(root: Path) -> LifecycleResult:
     paths.ensure_workspace_dirs(root)
+    load_runtime_env(root)
     embedding = start_embedding_service()
     pid_path = paths.service_pid_path(root, "engine")
     if pid_path.exists():

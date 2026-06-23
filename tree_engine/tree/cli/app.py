@@ -21,7 +21,7 @@ from tree.cli.commands import inspect as inspect_cmd
 from tree.cli.dashboard.live import run_watch as run_watch_panel
 from tree.cli.commands import lifecycle as lifecycle_cmd
 from tree.cli.commands import rag as rag_cmd
-from tree.config import Settings
+from tree.config import Settings, load_runtime_env
 from tree.engine.orchestrator import TreeEngine
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
@@ -350,6 +350,7 @@ def embedding_status() -> None:
 @embedding_app.command("start")
 def embedding_start() -> None:
     """Start the shared local embedding server."""
+    load_runtime_env(Path.cwd())
     rprint(start_embedding_service().message)
 
 
@@ -362,6 +363,7 @@ def embedding_stop() -> None:
 def ensure_embedding_ready() -> None:
     """Ensure the local embedding model/server is available for RAG-backed commands."""
     try:
+        load_runtime_env(Path.cwd())
         start_embedding_service()
     except Exception as exc:  # noqa: BLE001
         typer.echo(f"Embedding unavailable: {exc}", err=True)

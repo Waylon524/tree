@@ -159,7 +159,10 @@ def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     log_path = paths.service_log_path(tmp_path, "engine")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(
-        "2026-06-02 ok\nRuntimeError: planner failed while linking nodes\n",
+        "2026-06-02 ok\n"
+        "Exception ignored in: <function QdrantClient.__del__ at 0x123>\n"
+        "ImportError: sys.meta_path is None, Python is likely shutting down\n"
+        "RuntimeError: planner failed while linking nodes\n",
         encoding="utf-8",
     )
     progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
@@ -202,6 +205,8 @@ def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     assert "TREE_BLOCKED - no ready node runs" in output
     assert "Link: failed - invalid prerequisite edge" in output
     assert "RuntimeError: planner failed while linking nodes" in output
+    assert "QdrantClient.__del__" not in output
+    assert "Python is likely shutting down" not in output
     assert "当前: ch1.pdf" in output
     assert "当前: 001. A" in output
     assert "当前: n1" not in output

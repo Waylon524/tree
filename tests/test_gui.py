@@ -417,6 +417,8 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["paddleocr_api_token_configured"] is False
     assert data["paddleocr_api_url"] == "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
     assert data["paddleocr_model"] == "PaddleOCR-VL-1.6"
+    assert data["llama_server_ctx"] == 22_000
+    assert data["source_mtu_chunk_tokens"] == 20_000
     assert "llm_api_key" not in data
     assert "paddleocr_api_token" not in data
 
@@ -437,6 +439,8 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
                 "dagger": "dagger-model",
             },
             "paddleocr_api_token": "ocr-new",
+            "llama_server_ctx": "22000",
+            "source_mtu_chunk_tokens": "20000",
         },
     )
 
@@ -445,6 +449,8 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert data["llm_api_key_configured"] is True
     assert data["paddleocr_api_token_configured"] is True
     assert data["role_models"]["dagger"] == "dagger-model"
+    assert data["llama_server_ctx"] == 22_000
+    assert data["source_mtu_chunk_tokens"] == 20_000
     written = paths.global_config_path().read_text(encoding="utf-8")
     assert "LLM_API_KEY=sk-new" in written
     assert "LLM_BASE_URL=https://llm.test" in written
@@ -457,6 +463,24 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert "PADDLEOCR_API_TOKEN=ocr-new" in written
     assert "PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs" in written
     assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in written
+    assert "LLAMA_SERVER_CTX=22000" in written
+    assert "SOURCE_MTU_CHUNK_TOKENS=20000" in written
+
+
+def test_settings_post_rejects_invalid_runtime_numbers_without_writing(workspace):
+    client = _authed_client(workspace)
+    resp = client.post(
+        "/api/settings",
+        json={
+            "llm_base_url": "https://llm.test",
+            "llama_server_ctx": "40000",
+            "source_mtu_chunk_tokens": "20000",
+        },
+    )
+
+    assert resp.status_code == 400
+    config = paths.global_config_path()
+    assert not config.exists()
 
 
 def test_settings_post_ignores_paddleocr_endpoint_and_model_overrides(workspace):
