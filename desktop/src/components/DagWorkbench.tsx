@@ -11,63 +11,68 @@ const READING_STATUS_ORDER: DagNodeReadingStatus[] = ["unread", "recommended", "
 type VisualStatus = DagNodeStatus | DagNodeReadingStatus;
 type DagFilter = VisualStatus | "all";
 
+// Reading-first tree palette. Kept in sync with the CSS tokens in styles.css
+// (the WebGL scene needs literal colors; CSS variables are not readable here).
+const TRUNK_COLOR = "#7a5733"; // branches / prerequisite spine
+const TRUNK_GLOW = "#a07d4f";
+
 const VISUAL_META: Record<
   VisualStatus,
   { label: string; color: string; glow: string; description: string }
 > = {
   locked: {
     label: "Locked",
-    color: "#8b8b83",
-    glow: "#4a4a44",
+    color: "#9c8f76",
+    glow: "#6f6450",
     description: "Waiting for prerequisites",
   },
   ready: {
     label: "Ready",
-    color: "#b7dca5",
-    glow: "#8fbd78",
-    description: "Ready to grow",
+    color: "#8fbf5c",
+    glow: "#b6d98a",
+    description: "Ready to sprout",
   },
   running: {
     label: "Running",
-    color: "#2f6f44",
-    glow: "#5fa774",
-    description: "Active NodeRun",
+    color: "#5a9e3f",
+    glow: "#9ed06a",
+    description: "Growing now",
   },
   complete: {
     label: "Complete",
-    color: "#8a5a32",
-    glow: "#c08a52",
-    description: "Covered by output",
+    color: "#2f6f44",
+    glow: "#5fa774",
+    description: "Grown — output ready",
   },
   failed: {
     label: "Failed",
-    color: "#b23b3b",
-    glow: "#e08585",
-    description: "Needs attention",
+    color: "#a85a3c",
+    glow: "#cf8a6a",
+    description: "Blighted — needs attention",
   },
   unread: {
     label: "Unread",
-    color: "#b7dca5",
-    glow: "#8fbd78",
-    description: "Generated and ready to read",
+    color: "#8fbf5c",
+    glow: "#b6d98a",
+    description: "Fresh leaf — not yet read",
   },
   recommended: {
     label: "Recommended",
-    color: "#2f6f44",
-    glow: "#5fa774",
-    description: "Suggested by prerequisite order",
+    color: "#d8453d",
+    glow: "#ef8378",
+    description: "Ripe fruit — read this next",
   },
   reading: {
     label: "Reading",
-    color: "#2f6f44",
-    glow: "#5fa774",
-    description: "Opened for study",
+    color: "#4f9a52",
+    glow: "#86c47f",
+    description: "Ripening — open for study",
   },
   read: {
     label: "Read",
-    color: "#8a5a32",
-    glow: "#c08a52",
-    description: "Marked complete by learner",
+    color: "#2f6f44",
+    glow: "#5fa774",
+    description: "Mature leaf — mastered",
   },
 };
 
@@ -298,9 +303,9 @@ export function DagWorkbench({
             nodeThreeObject={(node: DagGraphNode) => makeNodeObject(node, node.id === selectedId)}
             nodeThreeObjectExtend
             linkVisibility={(link) => visibleIds.has(endpointId(link.source)) && visibleIds.has(endpointId(link.target))}
-            linkColor={(link) => VISUAL_META[link.visualStatus].glow}
+            linkColor={() => TRUNK_COLOR}
             linkWidth={(link) => (isActiveVisual(link.visualStatus) ? 3.3 : 1.6)}
-            linkOpacity={0.42}
+            linkOpacity={0.52}
             linkDirectionalParticles={(link) => {
               if (reducedMotion) return 0;
               if (isActiveVisual(link.visualStatus)) return 5;
@@ -312,7 +317,7 @@ export function DagWorkbench({
             linkDirectionalParticleColor={(link) => VISUAL_META[link.visualStatus].glow}
             linkDirectionalArrowLength={4.5}
             linkDirectionalArrowRelPos={0.96}
-            linkDirectionalArrowColor={(link) => VISUAL_META[link.visualStatus].glow}
+            linkDirectionalArrowColor={() => TRUNK_GLOW}
             cooldownTicks={80}
             onEngineTick={handleEngineTick}
             onEngineStop={handleEngineStop}
@@ -657,10 +662,16 @@ function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
   group.add(core);
 
   if (node.visualStatus !== "locked") {
+    const leafColor =
+      node.visualStatus === "recommended"
+        ? "#8fbf5c" // fresh green leaf beside the ripe red fruit
+        : node.visualStatus === "failed"
+          ? "#b9714f"
+          : meta.glow;
     const leaf = new THREE.Mesh(
       new THREE.SphereGeometry(2.7, 16, 8),
       new THREE.MeshStandardMaterial({
-        color: node.visualStatus === "failed" ? "#c96c6c" : meta.glow,
+        color: leafColor,
         roughness: 0.52,
         transparent: true,
         opacity: 0.88,
@@ -670,6 +681,17 @@ function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
     leaf.position.set(5.2, 3.8, 0);
     leaf.rotation.set(0.28, 0.3, -0.62);
     group.add(leaf);
+  }
+
+  if (node.visualStatus === "recommended") {
+    // A short brown stalk turns the red core into a fruit hanging from a branch.
+    const stem = new THREE.Mesh(
+      new THREE.SphereGeometry(0.7, 8, 6),
+      new THREE.MeshStandardMaterial({ color: TRUNK_COLOR, roughness: 0.7 }),
+    );
+    stem.scale.set(0.7, 3, 0.7);
+    stem.position.set(0, (selected ? 8 : 6) + 2.2, 0);
+    group.add(stem);
   }
 
   if (selected || isActiveVisual(node.visualStatus)) {
