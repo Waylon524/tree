@@ -10,10 +10,11 @@ from tree.agents.parsers import (
     extract_json_object,
     extract_section,
     parse_exam_id,
+    parse_exam_reconciliation,
     parse_exam_sections,
     parse_route,
 )
-from tree.state.models import Route
+from tree.state.models import ExamReconciliationAction, Route
 
 _EXAM = """## [Next_Knowledge_Point]
 01. 化学平衡
@@ -67,3 +68,38 @@ def test_extract_section_missing_raises():
 
 def test_extract_json_object_handles_code_fence():
     assert extract_json_object('```json\n{"a": 1}\n```') == {"a": 1}
+
+
+def test_parse_exam_reconciliation_revise_exam():
+    raw = """ACTION: REVISE_EXAM
+REASON: answer key contradicted the draft formula
+
+## [Next_Knowledge_Point]
+01. 化学平衡
+
+## [Covered_Node_IDs]
+n1
+
+## [Blind_Exam]
+Q
+
+## [Answer_Key]
+A
+
+## [Writer_Instructions]
+Scope: x
+"""
+
+    result = parse_exam_reconciliation(raw)
+
+    assert result.action is ExamReconciliationAction.REVISE_EXAM
+    assert result.exam_sections is not None
+    assert result.exam_sections.covered_node_ids == ["n1"]
+
+
+def test_parse_exam_reconciliation_keep_fail():
+    result = parse_exam_reconciliation("ACTION: KEEP_FAIL\nREASON: draft is still missing a method\n")
+
+    assert result.action is ExamReconciliationAction.KEEP_FAIL
+    assert result.reason == "draft is still missing a method"
+    assert result.exam_sections is None

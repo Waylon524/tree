@@ -10,10 +10,10 @@ from tree.agents.examiner import ExaminerAgent
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
 from tree.io import file_ops, paths
-from tree.observability.limiter import IterationLimiter
+from tree.observability.limiter import IterationLimitExceeded, IterationLimiter
 from tree.planner.store import read_json, write_json_atomic
 from tree.state.manager import StateManager
-from tree.state.models import ExamSections, IterationState, Route
+from tree.state.models import ExamReconciliationAction, ExamSections, IterationState, Route
 
 
 class Retriever(Protocol):
@@ -124,7 +124,22 @@ class NodeRunner:
 
         while True:
             iteration += 1
-            self.limiter.check(iter_state.execution_path, iter_state.file_seq, iteration)
+            if iteration > self.limiter.max_iterations:
+                repaired = await self._try_reconcile_exam_at_limit(
+                    iter_state,
+                    execution,
+                    collections,
+                    prior_paths,
+                    allowed_paths,
+                    node_context,
+                )
+                if repaired:
+                    exam = iter_state.exam_sections
+                    assert exam is not None
+                    previous_bottleneck = iter_state.previous_bottleneck
+                    iteration = iter_state.iteration
+                    continue
+                raise IterationLimitExceeded(self._iteration_limit_message(iter_state, execution))
             iter_state.iteration = iteration
             self._persist_run_state(
                 execution.node_run_id,
@@ -198,6 +213,94 @@ class NodeRunner:
                 status="running",
                 last_error=None,
             )
+
+    async def _try_reconcile_exam_at_limit(
+        self,
+        iter_state: IterationState,
+        execution: Any,
+        collections: list[str],
+        prior_paths: list[str],
+        allowed_paths: set[str],
+        node_context: str,
+    ) -> bool:
+        exam = iter_state.exam_sections
+        node_id = iter_state.covered_node_ids[0] if iter_state.covered_node_ids else execution.node_id
+        if (
+            exam is None
+            or iter_state.draft_path is None
+            or not iter_state.draft_path.exists()
+            or not iter_state.previous_bottleneck
+            or not hasattr(self.examiner, "reconcile_exam")
+        ):
+            return False
+
+        state = self.state_mgr.load()
+        run = self.state_mgr.find_run(state, execution.node_run_id)
+        repair_count = int(getattr(run, "exam_repair_count", 0) or 0)
+        if repair_count > 0:
+            return False
+
+        draft_text = iter_state.draft_path.read_text(encoding="utf-8")
+        query = f"{exam.knowledge_point}\n{iter_state.previous_bottleneck}\nexam answer key reconciliation"
+        result = await self.examiner.reconcile_exam(
+            exam_paper=exam.blind_exam,
+            answer_key=exam.answer_key,
+            draft_text=draft_text,
+            bottleneck_report=iter_state.previous_bottleneck,
+            prior_paths=prior_paths,
+            prior_contents=[],
+            retrieved=self.retriever.finished_hits(query, allowed_paths=allowed_paths, top_k=6)
+            + self.retriever.source_hits(query, collections=collections, node_ids=[node_id], top_k=5),
+            node_context=node_context,
+        )
+        repair_count += 1
+        revised = result.exam_sections
+        if result.action is not ExamReconciliationAction.REVISE_EXAM or revised is None:
+            self._persist_run_state(
+                execution.node_run_id,
+                exam_repair_count=repair_count,
+                status="running",
+                last_error=f"Exam reconciliation kept failure: {result.reason}",
+            )
+            return False
+        if revised.covered_node_ids != [node_id]:
+            self._persist_run_state(
+                execution.node_run_id,
+                exam_repair_count=repair_count,
+                status="running",
+                last_error=(
+                    "Exam reconciliation returned invalid Covered_Node_IDs: "
+                    + ", ".join(revised.covered_node_ids)
+                ),
+            )
+            return False
+
+        iter_state.exam_sections = revised
+        iter_state.knowledge_point = _clean_title(revised.knowledge_point) or iter_state.knowledge_point
+        iter_state.covered_node_ids = [node_id]
+        iter_state.iteration = 0
+        iter_state.previous_bottleneck = None
+        self._persist_run_state(
+            execution.node_run_id,
+            exam_sections=revised,
+            current_iteration=0,
+            previous_bottleneck=None,
+            exam_repair_count=repair_count,
+            status="running",
+            last_error=None,
+        )
+        return True
+
+    def _iteration_limit_message(self, iter_state: IterationState, execution: Any) -> str:
+        state = self.state_mgr.load()
+        run = self.state_mgr.find_run(state, execution.node_run_id)
+        repair_count = int(getattr(run, "exam_repair_count", 0) or 0)
+        title = _clean_title(iter_state.knowledge_point) or execution.node_id
+        return (
+            f"{iter_state.execution_path}/{iter_state.file_seq} exceeded "
+            f"{self.limiter.max_iterations} iterations for {title} "
+            f"(node_id={execution.node_id}, exam_repair_count={repair_count})"
+        )
 
     def _handle_pass(self, iter_state: IterationState, execution: Any, exam: ExamSections) -> None:
         node_id = iter_state.covered_node_ids[0]

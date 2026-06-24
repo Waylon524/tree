@@ -198,7 +198,21 @@ function url(path: string): string {
 }
 
 async function expectOk(resp: Response): Promise<Response> {
-  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      const data = (await resp.clone().json()) as { detail?: unknown };
+      if (typeof data.detail === "string") detail = data.detail;
+      else if (data.detail) detail = JSON.stringify(data.detail);
+    } catch {
+      try {
+        detail = (await resp.clone().text()).slice(0, 500);
+      } catch {
+        detail = "";
+      }
+    }
+    throw new Error(`${resp.status} ${resp.statusText}${detail ? `: ${detail}` : ""}`);
+  }
   return resp;
 }
 
@@ -279,12 +293,24 @@ export async function openDag(): Promise<string> {
 }
 
 export type DagNodeStatus = "locked" | "ready" | "running" | "complete" | "failed";
+export type DagNodeReadingStatus = "unread" | "recommended" | "reading" | "read";
 
 export interface DagNode {
   id: string;
   title: string;
   label: string;
   status: DagNodeStatus;
+  generation_status: DagNodeStatus;
+  reading_status: DagNodeReadingStatus;
+  recommended: boolean;
+  affected_by_feedback: boolean;
+  learning_ready: boolean;
+  recommendation_reason: string;
+  last_opened_at?: string | null;
+  read_at?: string | null;
+  last_revised_at?: string | null;
+  last_feedback_error?: string | null;
+  feedback_count: number;
   defines: string[];
   collections: string[];
   summary: string;
@@ -306,10 +332,12 @@ export interface DagPayload {
   nodes: DagNode[];
   edges: DagEdge[];
   roots: string[];
+  learning_ready: boolean;
   stats: {
     nodes: number;
     edges: number;
     statuses: Record<DagNodeStatus, number>;
+    reading_statuses: Record<DagNodeReadingStatus, number>;
   };
   updated_at: string;
 }
@@ -317,6 +345,56 @@ export interface DagPayload {
 export async function fetchDag(): Promise<DagPayload> {
   const resp = await expectOk(await fetch(url("/api/dag")));
   return (await resp.json()) as DagPayload;
+}
+
+export interface LearningNodeState {
+  reading_status: DagNodeReadingStatus | "unread";
+  last_opened_at?: string | null;
+  read_at?: string | null;
+  affected_by_feedback: boolean;
+  last_revised_at?: string | null;
+  last_feedback_error?: string | null;
+  feedback_history: Array<Record<string, unknown>>;
+}
+
+export async function openLearningNode(nodeId: string): Promise<LearningNodeState> {
+  const resp = await expectOk(
+    await fetch(url(`/api/learning/nodes/${encodeURIComponent(nodeId)}/open`), { method: "POST" }),
+  );
+  return ((await resp.json()) as { state: LearningNodeState }).state;
+}
+
+export async function markLearningNodeRead(nodeId: string, read = true): Promise<LearningNodeState> {
+  const resp = await expectOk(
+    await fetch(url(`/api/learning/nodes/${encodeURIComponent(nodeId)}/read`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ read }),
+    }),
+  );
+  return ((await resp.json()) as { state: LearningNodeState }).state;
+}
+
+export interface FeedbackRevisionResult {
+  node_id: string;
+  output: string;
+  status: string;
+  backup_path: string;
+  revised_at: string;
+}
+
+export async function submitLearningFeedback(
+  nodeId: string,
+  feedback: string,
+): Promise<FeedbackRevisionResult> {
+  const resp = await expectOk(
+    await fetch(url(`/api/learning/nodes/${encodeURIComponent(nodeId)}/feedback`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedback }),
+    }),
+  );
+  return (await resp.json()) as FeedbackRevisionResult;
 }
 
 export async function listMaterials(): Promise<string[]> {

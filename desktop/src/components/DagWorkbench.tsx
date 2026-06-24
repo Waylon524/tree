@@ -4,13 +4,15 @@ import ForceGraph3D from "react-force-graph-3d";
 import type { ForceGraphMethods, LinkObject, NodeObject } from "react-force-graph-3d";
 import * as THREE from "three";
 import { fetchDag, openDag } from "../api";
-import type { DagEdge, DagNode, DagNodeStatus, DagPayload } from "../api";
+import type { DagEdge, DagNode, DagNodeReadingStatus, DagNodeStatus, DagPayload } from "../api";
 
-const STATUS_ORDER: DagNodeStatus[] = ["locked", "ready", "running", "complete", "failed"];
-const FILTERS: Array<DagNodeStatus | "all"> = ["all", ...STATUS_ORDER];
+const GENERATION_STATUS_ORDER: DagNodeStatus[] = ["locked", "ready", "running", "complete", "failed"];
+const READING_STATUS_ORDER: DagNodeReadingStatus[] = ["unread", "recommended", "reading", "read"];
+type VisualStatus = DagNodeStatus | DagNodeReadingStatus;
+type DagFilter = VisualStatus | "all";
 
-const STATUS_META: Record<
-  DagNodeStatus,
+const VISUAL_META: Record<
+  VisualStatus,
   { label: string; color: string; glow: string; description: string }
 > = {
   locked: {
@@ -43,18 +45,43 @@ const STATUS_META: Record<
     glow: "#e08585",
     description: "Needs attention",
   },
+  unread: {
+    label: "Unread",
+    color: "#b7dca5",
+    glow: "#8fbd78",
+    description: "Generated and ready to read",
+  },
+  recommended: {
+    label: "Recommended",
+    color: "#2f6f44",
+    glow: "#5fa774",
+    description: "Suggested by prerequisite order",
+  },
+  reading: {
+    label: "Reading",
+    color: "#2f6f44",
+    glow: "#5fa774",
+    description: "Opened for study",
+  },
+  read: {
+    label: "Read",
+    color: "#8a5a32",
+    glow: "#c08a52",
+    description: "Marked complete by learner",
+  },
 };
 
 type DagGraphNode = NodeObject<DagNode> & DagNode & {
   name: string;
   val: number;
   color: string;
+  visualStatus: VisualStatus;
 };
 
 type DagGraphLink = LinkObject<DagGraphNode, DagEdge> & {
   source: string;
   target: string;
-  status: DagNodeStatus;
+  visualStatus: VisualStatus;
   required_defines: string[];
 };
 
@@ -76,7 +103,7 @@ export function DagWorkbench({
   onReadOutput,
 }: DagWorkbenchProps) {
   const [dag, setDag] = useState<DagPayload | null>(null);
-  const [filter, setFilter] = useState<DagNodeStatus | "all">("all");
+  const [filter, setFilter] = useState<DagFilter>("all");
   const [error, setError] = useState<string>("");
   const [svgMessage, setSvgMessage] = useState<string>("");
   const graphRef = useRef<GraphRef>(undefined);
@@ -87,6 +114,12 @@ export function DagWorkbench({
   const size = useElementSize(stageRef);
   const reducedMotion = usePrefersReducedMotion();
   const selectedId = selectedNodeId;
+  const learningReady = Boolean(dag?.learning_ready);
+  const activeOrder = useMemo<VisualStatus[]>(
+    () => (learningReady ? READING_STATUS_ORDER : GENERATION_STATUS_ORDER),
+    [learningReady],
+  );
+  const filters = useMemo<DagFilter[]>(() => ["all", ...activeOrder], [activeOrder]);
 
   useEffect(() => {
     let active = true;
@@ -117,10 +150,14 @@ export function DagWorkbench({
   const visibleIds = useMemo(() => {
     if (filter === "all") return new Set(graph.nodes.map((node) => String(node.id)));
     return new Set(
-      graph.nodes.filter((node) => node.status === filter).map((node) => String(node.id)),
+      graph.nodes.filter((node) => node.visualStatus === filter).map((node) => String(node.id)),
     );
   }, [filter, graph.nodes]);
   const selected = selectedId ? graph.byId.get(selectedId) : undefined;
+
+  useEffect(() => {
+    if (filter !== "all" && !activeOrder.includes(filter)) setFilter("all");
+  }, [activeOrder, filter]);
 
   useEffect(() => {
     if (selectedId && !graph.byId.has(selectedId)) onSelectedNodeChange("");
@@ -193,11 +230,11 @@ export function DagWorkbench({
   };
 
   return (
-    <section className="dag-workbench" aria-label="Knowledge DAG">
-      <aside className="dag-rail" aria-label="DAG status filters">
+    <section className="dag-workbench" aria-label="Knowledge graph">
+      <aside className="dag-rail" aria-label="Knowledge graph filters">
         <div>
-          <h2>DAG</h2>
-          <p className="muted">Knowledge tree growth</p>
+          <h2>知识图谱</h2>
+          <p className="muted">{learningReady ? "Learning progress" : "Knowledge generation"}</p>
         </div>
         <div className="dag-stats">
           <span>
@@ -210,7 +247,7 @@ export function DagWorkbench({
           </span>
         </div>
         <div className="dag-filter-list">
-          {FILTERS.map((item) => (
+          {filters.map((item) => (
             <button
               key={item}
               type="button"
@@ -220,7 +257,7 @@ export function DagWorkbench({
               <span
                 className={`dag-dot ${item === "all" ? "dag-dot-all" : `dag-dot-${item}`}`}
               />
-              <span>{item === "all" ? "All" : STATUS_META[item].label}</span>
+              <span>{item === "all" ? "All" : VISUAL_META[item].label}</span>
               <b>{item === "all" ? graph.nodes.length : graph.counts[item]}</b>
             </button>
           ))}
@@ -261,21 +298,21 @@ export function DagWorkbench({
             nodeThreeObject={(node: DagGraphNode) => makeNodeObject(node, node.id === selectedId)}
             nodeThreeObjectExtend
             linkVisibility={(link) => visibleIds.has(endpointId(link.source)) && visibleIds.has(endpointId(link.target))}
-            linkColor={(link) => STATUS_META[link.status].glow}
-            linkWidth={(link) => (link.status === "running" ? 3.3 : 1.6)}
+            linkColor={(link) => VISUAL_META[link.visualStatus].glow}
+            linkWidth={(link) => (isActiveVisual(link.visualStatus) ? 3.3 : 1.6)}
             linkOpacity={0.42}
             linkDirectionalParticles={(link) => {
               if (reducedMotion) return 0;
-              if (link.status === "running") return 5;
-              if (link.status === "ready" || link.status === "complete") return 2;
+              if (isActiveVisual(link.visualStatus)) return 5;
+              if (isPositiveVisual(link.visualStatus)) return 2;
               return 0;
             }}
-            linkDirectionalParticleSpeed={(link) => (link.status === "running" ? 0.012 : 0.006)}
-            linkDirectionalParticleWidth={(link) => (link.status === "running" ? 3.6 : 2.2)}
-            linkDirectionalParticleColor={(link) => STATUS_META[link.status].glow}
+            linkDirectionalParticleSpeed={(link) => (isActiveVisual(link.visualStatus) ? 0.012 : 0.006)}
+            linkDirectionalParticleWidth={(link) => (isActiveVisual(link.visualStatus) ? 3.6 : 2.2)}
+            linkDirectionalParticleColor={(link) => VISUAL_META[link.visualStatus].glow}
             linkDirectionalArrowLength={4.5}
             linkDirectionalArrowRelPos={0.96}
-            linkDirectionalArrowColor={(link) => STATUS_META[link.status].glow}
+            linkDirectionalArrowColor={(link) => VISUAL_META[link.visualStatus].glow}
             cooldownTicks={80}
             onEngineTick={handleEngineTick}
             onEngineStop={handleEngineStop}
@@ -334,11 +371,18 @@ function NodeInspector({
       {node ? (
         <>
           <div className="inspector-head">
-            <span className={`dag-state state-${node.status}`}>{STATUS_META[node.status].label}</span>
+            <span className={`dag-state state-${node.visualStatus}`}>{VISUAL_META[node.visualStatus].label}</span>
             <span className="muted">{node.label}</span>
           </div>
           <h2>{node.title}</h2>
-          <p className="muted">{STATUS_META[node.status].description}</p>
+          <p className="muted">{VISUAL_META[node.visualStatus].description}</p>
+          {node.recommended && node.recommendation_reason && (
+            <p className="ok">{node.recommendation_reason}</p>
+          )}
+          {node.affected_by_feedback && (
+            <p className="hint">A prerequisite was revised after this node was marked read.</p>
+          )}
+          {node.last_feedback_error && <p className="errors">{node.last_feedback_error}</p>}
           {node.summary && <p>{node.summary}</p>}
           <InspectorList title="Prerequisites" nodes={prerequisites} onFocus={onFocus} />
           <InspectorList title="Dependents" nodes={dependents} onFocus={onFocus} />
@@ -353,10 +397,16 @@ function NodeInspector({
             Click a bud in the tree to fly closer and inspect prerequisites, defines, and outputs.
           </p>
           <div className="dag-legend">
-            {STATUS_ORDER.map((status) => (
+            {GENERATION_STATUS_ORDER.map((status) => (
               <span key={status}>
                 <i className={`dag-dot dag-dot-${status}`} />
-                {STATUS_META[status].label}
+                {VISUAL_META[status].label}
+              </span>
+            ))}
+            {READING_STATUS_ORDER.map((status) => (
+              <span key={status}>
+                <i className={`dag-dot dag-dot-${status}`} />
+                {VISUAL_META[status].label}
               </span>
             ))}
           </div>
@@ -375,7 +425,7 @@ function OutputActions({
 }) {
   const outputs = node.output_paths.map(outputNameFromPath).filter(Boolean);
   const disabledMessage =
-    node.status !== "complete"
+    node.generation_status !== "complete"
       ? "Output not ready"
       : outputs.length === 0
         ? "No output file found"
@@ -397,7 +447,7 @@ function OutputActions({
               className={index === 0 ? "" : "ghost"}
               onClick={() => onReadOutput?.(name, String(node.id))}
             >
-              {outputs.length === 1 ? "Read Output" : `Read ${name}`}
+              {outputs.length === 1 ? "Start Learning" : `Read ${name}`}
             </button>
           ))}
         </div>
@@ -422,7 +472,7 @@ function InspectorList({
         <div className="node-link-list">
           {nodes.map((node) => (
             <button key={node.id} type="button" className="node-link" onClick={() => onFocus(String(node.id))}>
-              <span className={`dag-dot dag-dot-${node.status}`} />
+              <span className={`dag-dot dag-dot-${node.visualStatus}`} />
               {node.label}
             </button>
           ))}
@@ -457,28 +507,35 @@ interface DagGraph {
   nodes: DagGraphNode[];
   links: DagGraphLink[];
   byId: Map<string, DagGraphNode>;
-  counts: Record<DagNodeStatus, number>;
+  counts: Record<VisualStatus, number>;
 }
 
 function buildGraph(
   dag: DagPayload | null,
   positions: Map<string, DagNodePosition>,
 ): DagGraph {
-  const counts: Record<DagNodeStatus, number> = {
+  const counts: Record<VisualStatus, number> = {
     locked: 0,
     ready: 0,
     running: 0,
     complete: 0,
     failed: 0,
+    unread: 0,
+    recommended: 0,
+    reading: 0,
+    read: 0,
   };
+  const learningReady = Boolean(dag?.learning_ready);
   const nodes = (dag?.nodes ?? []).map((node) => {
-    counts[node.status] += 1;
+    const visualStatus = visualStatusForNode(node, learningReady);
+    counts[visualStatus] += 1;
     const graphNode: DagGraphNode = {
       ...node,
       id: node.id,
       name: node.title,
-      val: node.status === "running" ? 7 : node.status === "complete" ? 5 : 4,
-      color: STATUS_META[node.status].color,
+      val: isActiveVisual(visualStatus) ? 7 : isPositiveVisual(visualStatus) ? 5 : 4,
+      color: VISUAL_META[visualStatus].color,
+      visualStatus,
     };
     restoreNodePosition(graphNode, positions);
     return graphNode;
@@ -490,10 +547,26 @@ function buildGraph(
       ...edge,
       source: edge.from,
       target: edge.to,
-      status: byId.get(edge.to)?.status ?? "locked",
+      visualStatus: byId.get(edge.to)?.visualStatus ?? "locked",
       required_defines: edge.required_defines,
     }));
   return { nodes, links, byId, counts };
+}
+
+function visualStatusForNode(node: DagNode, learningReady: boolean): VisualStatus {
+  const generation = node.generation_status ?? node.status;
+  if (!learningReady) return generation;
+  if (generation === "failed" || generation === "locked") return generation;
+  if (generation !== "complete") return generation;
+  return node.reading_status || "unread";
+}
+
+function isActiveVisual(status: VisualStatus): boolean {
+  return status === "running" || status === "recommended" || status === "reading";
+}
+
+function isPositiveVisual(status: VisualStatus): boolean {
+  return status === "ready" || status === "complete" || status === "read";
 }
 
 function cacheNodePositions(
@@ -535,6 +608,11 @@ function dagSignature(dag: DagPayload): string {
       title: node.title,
       label: node.label,
       status: node.status,
+      generation_status: node.generation_status,
+      reading_status: node.reading_status,
+      recommended: node.recommended,
+      affected_by_feedback: node.affected_by_feedback,
+      learning_ready: node.learning_ready,
       summary: node.summary,
       source_order_index: node.source_order_index,
       defines: sortedStrings(node.defines),
@@ -554,7 +632,7 @@ function dagSignature(dag: DagPayload): string {
       required_defines: sortedStrings(edge.required_defines),
     }))
     .sort((left, right) => `${left.from}:${left.to}`.localeCompare(`${right.from}:${right.to}`));
-  return JSON.stringify({ nodes, edges, roots: sortedStrings(dag.roots) });
+  return JSON.stringify({ nodes, edges, roots: sortedStrings(dag.roots), learning_ready: dag.learning_ready });
 }
 
 function sortedStrings(items: string[]): string[] {
@@ -562,27 +640,27 @@ function sortedStrings(items: string[]): string[] {
 }
 
 function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
-  const meta = STATUS_META[node.status];
+  const meta = VISUAL_META[node.visualStatus];
   const group = new THREE.Group();
   const core = new THREE.Mesh(
     new THREE.SphereGeometry(selected ? 8 : 6, 24, 16),
     new THREE.MeshStandardMaterial({
       color: meta.color,
       emissive: meta.glow,
-      emissiveIntensity: node.status === "running" || selected ? 0.55 : 0.18,
+      emissiveIntensity: isActiveVisual(node.visualStatus) || selected ? 0.55 : 0.18,
       roughness: 0.46,
       metalness: 0.02,
       transparent: true,
-      opacity: node.status === "locked" ? 0.72 : 0.96,
+      opacity: node.visualStatus === "locked" ? 0.72 : 0.96,
     }),
   );
   group.add(core);
 
-  if (node.status !== "locked") {
+  if (node.visualStatus !== "locked") {
     const leaf = new THREE.Mesh(
       new THREE.SphereGeometry(2.7, 16, 8),
       new THREE.MeshStandardMaterial({
-        color: node.status === "failed" ? "#c96c6c" : meta.glow,
+        color: node.visualStatus === "failed" ? "#c96c6c" : meta.glow,
         roughness: 0.52,
         transparent: true,
         opacity: 0.88,
@@ -594,7 +672,7 @@ function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
     group.add(leaf);
   }
 
-  if (selected || node.status === "running") {
+  if (selected || isActiveVisual(node.visualStatus)) {
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(selected ? 12 : 9, 0.55, 8, 42),
       new THREE.MeshBasicMaterial({
@@ -611,7 +689,7 @@ function makeNodeObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
 }
 
 function nodeTooltip(node: DagGraphNode): string {
-  const meta = STATUS_META[node.status];
+  const meta = VISUAL_META[node.visualStatus];
   return `${node.label}<br/><b>${node.title}</b><br/>${meta.label}`;
 }
 

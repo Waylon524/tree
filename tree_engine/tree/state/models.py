@@ -34,12 +34,23 @@ class Route(str, Enum):
     FAIL_KNOWLEDGE_GAP = "FAIL_KNOWLEDGE_GAP"
 
 
+class ExamReconciliationAction(str, Enum):
+    KEEP_FAIL = "KEEP_FAIL"
+    REVISE_EXAM = "REVISE_EXAM"
+
+
 class ExamSections(BaseModel):
     knowledge_point: str
     covered_node_ids: list[str] = Field(default_factory=list)
     blind_exam: str
     answer_key: str
     writer_instructions: str
+
+
+class ExamReconciliationResult(BaseModel):
+    action: ExamReconciliationAction
+    reason: str = ""
+    exam_sections: ExamSections | None = None
 
 
 class NodeRunRecord(BaseModel):
@@ -53,6 +64,7 @@ class NodeRunRecord(BaseModel):
     draft_path: Path | None = None
     previous_bottleneck: str | None = None
     last_error: str | None = None
+    exam_repair_count: int = 0
 
 
 class PipelineState(BaseModel):

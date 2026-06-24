@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 import re
 
-from tree.state.models import ExamSections, Route
+from tree.state.models import (
+    ExamReconciliationAction,
+    ExamReconciliationResult,
+    ExamSections,
+    Route,
+)
 
 
 class ParseError(Exception):
@@ -14,6 +19,10 @@ class ParseError(Exception):
 
 _ROUTE_PATTERN = re.compile(r"^ROUTE:\s*(PASS|FAIL_KNOWLEDGE_GAP)\s*$", re.MULTILINE)
 _EXAM_ID_PATTERN = re.compile(r"^EXAM_ID:\s*(.+)$", re.MULTILINE)
+_RECONCILIATION_ACTION_PATTERN = re.compile(
+    r"^ACTION:\s*(KEEP_FAIL|REVISE_EXAM)\s*$", re.MULTILINE
+)
+_REASON_PATTERN = re.compile(r"^REASON:\s*(.+)$", re.MULTILINE)
 
 
 def extract_section(text: str, header: str) -> str:
@@ -60,6 +69,18 @@ def parse_exam_sections(text: str) -> ExamSections:
         answer_key=extract_section(text, "Answer_Key"),
         writer_instructions=extract_section(text, "Writer_Instructions"),
     )
+
+
+def parse_exam_reconciliation(text: str) -> ExamReconciliationResult:
+    """Parse examiner Phase C output into a keep/revise decision."""
+    match = _RECONCILIATION_ACTION_PATTERN.search(text)
+    if not match:
+        raise ParseError("No ACTION: KEEP_FAIL or ACTION: REVISE_EXAM found")
+    action = ExamReconciliationAction(match.group(1))
+    reason_match = _REASON_PATTERN.search(text)
+    reason = reason_match.group(1).strip() if reason_match else ""
+    exam_sections = parse_exam_sections(text) if action is ExamReconciliationAction.REVISE_EXAM else None
+    return ExamReconciliationResult(action=action, reason=reason, exam_sections=exam_sections)
 
 
 def extract_bottleneck_report(text: str) -> str:

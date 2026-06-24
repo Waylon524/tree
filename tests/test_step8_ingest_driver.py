@@ -612,10 +612,16 @@ async def test_unchanged_material_skips_planner_rebuild_when_artifacts_ready(tmp
         raise AssertionError("unchanged materials should resume from existing planner artifacts")
 
     monkeypatch.setattr("tree.engine.ingest_driver.rebuild_planner", boom)
-    summary = await prepare_sources(_ingest_engine(tmp_path, indexer=indexer))
+    engine = _ingest_engine(tmp_path, indexer=indexer)
+    summary = await prepare_sources(engine)
 
     assert summary["resumed"] is True
     assert summary["mtu_count"] == 2
+    stages = engine.progress.load()["stages"]
+    assert stages["cluster"]["status"] == "complete"
+    assert stages["cluster"]["message"] == "Reused existing nodes"
+    assert stages["link"]["status"] == "complete"
+    assert stages["link"]["message"] == "Reused existing DAG"
 
 
 async def test_clean_failure_marks_stage_failed_without_advancing_done(tmp_path, monkeypatch):

@@ -14,12 +14,13 @@ from tree.agents.parsers import (
     ParseError,
     extract_bottleneck_report,
     parse_exam_id,
+    parse_exam_reconciliation,
     parse_exam_sections,
     parse_route,
 )
 from tree.io import paths
 from tree.model.client import LLMClient
-from tree.state.models import AuditResult, ExamSections
+from tree.state.models import AuditResult, ExamReconciliationResult, ExamSections
 
 
 class ExaminerAgent(Agent):
@@ -119,6 +120,56 @@ class ExaminerAgent(Agent):
             bottleneck_report=extract_bottleneck_report(raw),
         )
 
+    async def reconcile_exam(
+        self,
+        *,
+        exam_paper: str,
+        answer_key: str,
+        draft_text: str,
+        bottleneck_report: str,
+        prior_paths: list[str],
+        prior_contents: list[str],
+        retrieved: list[dict] | None = None,
+        node_context: str | None = None,
+        branch_context: str | None = None,
+    ) -> ExamReconciliationResult:
+        parts = [
+            "## Task: Exam Reconciliation (Phase C)\n",
+            "A NodeRun reached the iteration limit. Decide whether the exam/answer key is "
+            "internally wrong or ambiguous, or whether the draft still genuinely fails.\n",
+            f"[Exam Paper]:\n{exam_paper}\n",
+            f"[Standard Answers]:\n{answer_key}\n",
+            f"[Current Draft]:\n{draft_text}\n",
+            f"[Latest Bottleneck Report]:\n{bottleneck_report}\n",
+            "Prior completed file paths:\n" + "\n".join(f"  - {p}" for p in prior_paths) + "\n",
+        ]
+        context = node_context or branch_context
+        if context:
+            parts.append(
+                "Planner-bound ActiveNode context. A revised exam must keep exactly the declared "
+                f"Covered_Node_IDs and stay inside this boundary:\n{context}\n"
+            )
+        if prior_contents:
+            parts.append("Prior completed file contents:\n")
+            for i, content in enumerate(prior_contents):
+                parts.append(f"--- File {i + 1} ---\n{content}\n")
+        if retrieved:
+            parts.append(_format_retrieved(retrieved))
+        parts.append(
+            "Return ACTION: KEEP_FAIL when the answer key is sound and the draft still needs "
+            "teaching changes. Return ACTION: REVISE_EXAM only when the exam or answer key is "
+            "wrong, ambiguous, outside scope, or contradicts the draft/source formulas.\n"
+            "For ACTION: REVISE_EXAM, return a complete replacement using exactly these five "
+            "sections after ACTION/REASON:\n"
+            "## [Next_Knowledge_Point]\n## [Covered_Node_IDs]\n## [Blind_Exam]\n"
+            "## [Answer_Key]\n## [Writer_Instructions]\n"
+        )
+
+        user = "\n".join(parts)
+        raw = await self.complete(user)
+        raw = await self._repair_reconciliation_format(user, raw)
+        return parse_exam_reconciliation(raw)
+
     async def _repair_exam_format(self, original_user: str, raw: str) -> str:
         for _ in range(self._max_format_retries):
             try:
@@ -153,6 +204,23 @@ class ExaminerAgent(Agent):
                     "invent analysis. Preserve the Bottleneck Report meaning, but end with exactly:\n"
                     "ROUTE: PASS\nEXAM_ID: <title>\nor:\nROUTE: FAIL_KNOWLEDGE_GAP\nEXAM_ID: <title>\n\n"
                     f"Original task:\n{original_user}\n\nPrevious unparseable output:\n{raw}\n"
+                )
+        return raw
+
+    async def _repair_reconciliation_format(self, original_user: str, raw: str) -> str:
+        for _ in range(self._max_format_retries):
+            try:
+                parse_exam_reconciliation(raw)
+                return raw
+            except ParseError as exc:
+                raw = await self.complete(
+                    "Repair the machine-readable exam reconciliation format. Do not change the "
+                    "substantive decision. Return ACTION: KEEP_FAIL with a short REASON, or "
+                    "ACTION: REVISE_EXAM with REASON and complete sections:\n"
+                    "## [Next_Knowledge_Point]\n## [Covered_Node_IDs]\n## [Blind_Exam]\n"
+                    "## [Answer_Key]\n## [Writer_Instructions]\n\n"
+                    f"Parser error: {exc}\n\nOriginal task:\n{original_user}\n\n"
+                    f"Previous unparseable output:\n{raw}\n"
                 )
         return raw
 

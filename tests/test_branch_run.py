@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from tree.engine.node_run import NodeRunner, ledger_covered_node_ids
 from tree.io import paths
+from tree.observability.limiter import IterationLimitExceeded
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditResult,
     CoverageSnapshot,
+    ExamReconciliationAction,
+    ExamReconciliationResult,
     ExamSections,
     NodeExecutionRecord,
     NodeRunRecord,
@@ -40,6 +45,32 @@ class _FakeExaminer:
         self.audit_calls += 1
         route = Route.FAIL_KNOWLEDGE_GAP if self.audit_calls <= self.fail_count else Route.PASS
         return AuditResult(route=route, exam_id="化学平衡", bottleneck_report="# Bottleneck Report\n缺公式")
+
+
+class _ReconcilingExaminer(_FakeExaminer):
+    def __init__(self, *, action=ExamReconciliationAction.REVISE_EXAM):
+        super().__init__(fail_then_pass=0)
+        self.action = action
+        self.reconcile_calls = 0
+
+    async def reconcile_exam(self, **kw):
+        self.reconcile_calls += 1
+        if self.action is ExamReconciliationAction.KEEP_FAIL:
+            return ExamReconciliationResult(
+                action=ExamReconciliationAction.KEEP_FAIL,
+                reason="draft is still missing a method",
+            )
+        return ExamReconciliationResult(
+            action=ExamReconciliationAction.REVISE_EXAM,
+            reason="answer key contradicted the draft formula",
+            exam_sections=ExamSections(
+                knowledge_point="化学平衡",
+                covered_node_ids=["n1"],
+                blind_exam="Revised Q",
+                answer_key="Revised A",
+                writer_instructions="Scope: revised",
+            ),
+        )
 
 
 class _FakeStudent:
@@ -281,3 +312,95 @@ async def test_node_run_resumes_saved_exam_and_draft_without_recompose(tmp_path)
     assert examiner.audit_calls == 1
     assert writer.calls == 0
     assert (paths.outputs_root(tmp_path) / "002.化学平衡.md").exists()
+
+
+async def test_node_run_reconciles_bad_answer_key_at_iteration_limit(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text(
+        "# 002. 化学平衡\n\n"
+        "相同活化能降低量时，速率提升倍数相同。\n",
+        encoding="utf-8",
+    )
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state = state_mgr.update_node_run(
+        state,
+        "n1::run",
+        exam_sections=ExamSections(
+            knowledge_point="化学平衡",
+            covered_node_ids=["n1"],
+            blind_exam="Bad Q",
+            answer_key="Bad A",
+            writer_instructions="Scope: x",
+        ),
+        draft_path=draft,
+        current_iteration=5,
+        previous_bottleneck="# Bottleneck Report\nAnswer key contradicts draft formula.",
+    )
+    state_mgr.save(state)
+    examiner = _ReconcilingExaminer()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=_FakeWriter(),
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    result = await runner.run_one("n1")
+
+    assert result == "node_complete"
+    assert examiner.reconcile_calls == 1
+    assert examiner.compose_kwargs == []
+    assert examiner.audit_calls == 1
+    state = state_mgr.load()
+    assert state.node_runs[0].exam_repair_count == 1
+    assert state.node_runs[0].exam_sections is not None
+    assert state.node_runs[0].exam_sections.answer_key == "Revised A"
+    assert state.node_runs[0].status == "complete"
+    assert (paths.outputs_root(tmp_path) / "002.化学平衡.md").exists()
+
+
+async def test_node_run_keep_fail_reconciliation_still_raises_iteration_limit(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("# 002. 化学平衡\n\n缺方法。\n", encoding="utf-8")
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state = state_mgr.update_node_run(
+        state,
+        "n1::run",
+        exam_sections=ExamSections(
+            knowledge_point="化学平衡",
+            covered_node_ids=["n1"],
+            blind_exam="Q",
+            answer_key="A",
+            writer_instructions="Scope: x",
+        ),
+        draft_path=draft,
+        current_iteration=5,
+        previous_bottleneck="# Bottleneck Report\nStill missing a method.",
+    )
+    state_mgr.save(state)
+    examiner = _ReconcilingExaminer(action=ExamReconciliationAction.KEEP_FAIL)
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=_FakeWriter(),
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    with pytest.raises(IterationLimitExceeded, match="exam_repair_count=1"):
+        await runner.run_one("n1")
+
+    state = state_mgr.load()
+    assert examiner.reconcile_calls == 1
+    assert state.node_runs[0].exam_repair_count == 1

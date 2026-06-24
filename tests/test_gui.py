@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from tree.io import paths
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
-from tree.state.models import NodeExecutionRecord, NodeRunRecord, PipelineState
+from tree.state.models import NodeExecutionRecord, NodeRunRecord, PipelineState, WriterResult
 
 TOKEN = "test-token"
 
@@ -175,6 +175,10 @@ def test_dag_payload_labels_edges_and_statuses(workspace):
     }
     assert data["nodes"][0]["label"] == "001. Root"
     assert data["nodes"][0]["output_paths"] == ["outputs/001.Root.md"]
+    assert data["nodes"][0]["generation_status"] == "complete"
+    assert data["nodes"][0]["reading_status"] == "unread"
+    assert data["nodes"][0]["recommended"] is False
+    assert data["nodes"][0]["learning_ready"] is False
     assert data["nodes"][1]["prerequisites"] == ["n1"]
     assert data["nodes"][1]["dependents"] == ["n3"]
     assert data["edges"] == [
@@ -198,6 +202,206 @@ def test_dag_payload_labels_edges_and_statuses(workspace):
     assert data["stats"]["statuses"]["locked"] == 1
     assert data["stats"]["statuses"]["running"] == 1
     assert data["stats"]["statuses"]["failed"] == 1
+
+
+def test_learning_state_marks_read_and_recommends_next_node(workspace):
+    write_json_atomic(
+        paths.knowledge_dag_path(workspace),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [
+                    {"node_id": "n1", "title": "Root", "source_order_index": 0},
+                    {"node_id": "n2", "title": "Next", "source_order_index": 1},
+                ],
+                "edges": [
+                    {"from_node_id": "n1", "to_node_id": "n2", "relation": "prerequisite"},
+                ],
+                "roots": ["n1"],
+            },
+        ),
+    )
+    write_json_atomic(
+        paths.knowledge_ledger_path(workspace),
+        {
+            "records": [
+                {"node_id": "n1", "node_ids": ["n1"], "output_path": "outputs/001.Root.md"},
+                {"node_id": "n2", "node_ids": ["n2"], "output_path": "outputs/002.Next.md"},
+            ]
+        },
+    )
+    client = _authed_client(workspace)
+
+    initial = client.get("/api/dag").json()
+    by_id = {node["id"]: node for node in initial["nodes"]}
+    assert initial["learning_ready"] is True
+    assert by_id["n1"]["reading_status"] == "recommended"
+    assert by_id["n1"]["recommended"] is True
+    assert by_id["n2"]["reading_status"] == "unread"
+
+    opened = client.post("/api/learning/nodes/n1/open").json()
+    assert opened["state"]["reading_status"] == "reading"
+    read = client.post("/api/learning/nodes/n1/read", json={"read": True}).json()
+    assert read["state"]["reading_status"] == "read"
+
+    updated = client.get("/api/dag").json()
+    by_id = {node["id"]: node for node in updated["nodes"]}
+    assert by_id["n1"]["reading_status"] == "read"
+    assert by_id["n2"]["reading_status"] == "recommended"
+    assert by_id["n2"]["recommended"] is True
+
+
+def test_learning_feedback_revises_output_and_marks_dependents_affected(workspace, monkeypatch):
+    write_json_atomic(
+        paths.knowledge_dag_path(workspace),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [
+                    {"node_id": "n1", "title": "Root", "source_order_index": 0},
+                    {"node_id": "n2", "title": "Next", "source_order_index": 1},
+                ],
+                "edges": [
+                    {"from_node_id": "n1", "to_node_id": "n2", "relation": "prerequisite"},
+                ],
+                "roots": ["n1"],
+            },
+        ),
+    )
+    outputs = paths.outputs_root(workspace)
+    (outputs / "001.Root.md").write_text("# Root\n\n旧内容\n", encoding="utf-8")
+    (outputs / "002.Next.md").write_text("# Next\n\n下游内容\n", encoding="utf-8")
+    write_json_atomic(
+        paths.knowledge_ledger_path(workspace),
+        {
+            "records": [
+                {"node_id": "n1", "node_ids": ["n1"], "output_path": "outputs/001.Root.md"},
+                {"node_id": "n2", "node_ids": ["n2"], "output_path": "outputs/002.Next.md"},
+            ]
+        },
+    )
+    indexed: list[tuple[str, str]] = []
+    captured: dict[str, str] = {}
+
+    class _FakeSettings:
+        source_mtu_chunk_tokens = 20000
+
+    class _FakeClient:
+        async def close(self):
+            return None
+
+    class _FakeWriter:
+        def __init__(self, client):
+            self.client = client
+
+        async def revise_from_feedback(self, **kwargs):
+            captured["feedback"] = kwargs["user_feedback"]
+            captured["current"] = kwargs["current_text"]
+            return WriterResult(draft_content="# Root\n\n修订内容")
+
+    class _FakeRAG:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def query(self, *args, **kwargs):
+            return []
+
+        def close(self):
+            return None
+
+    class _FakeIndexer:
+        def __init__(self, rag, **kwargs):
+            self.rag = rag
+
+        def index_finished_file(self, root, node_id, path):
+            indexed.append((node_id, path.name))
+            return 1
+
+    monkeypatch.setattr("tree.learning.Settings.from_env", lambda root: _FakeSettings())
+    monkeypatch.setattr("tree.learning.LLMClient", lambda settings: _FakeClient())
+    monkeypatch.setattr("tree.learning.WriterAgent", _FakeWriter)
+    monkeypatch.setattr("tree.learning.RAGClient", _FakeRAG)
+    monkeypatch.setattr("tree.learning.RAGIndexer", _FakeIndexer)
+
+    client = _authed_client(workspace)
+    assert client.post("/api/learning/nodes/n2/read", json={"read": True}).status_code == 200
+
+    resp = client.post(
+        "/api/learning/nodes/n1/feedback",
+        json={"feedback": "需要补充公式含义"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "complete"
+    assert (workspace / body["backup_path"]).is_file()
+    assert (outputs / "001.Root.md").read_text(encoding="utf-8") == "# Root\n\n修订内容\n"
+    assert indexed == [("n1", "001.Root.md")]
+    assert captured["feedback"] == "需要补充公式含义"
+    assert "旧内容" in captured["current"]
+
+    dag = client.get("/api/dag").json()
+    by_id = {node["id"]: node for node in dag["nodes"]}
+    assert by_id["n1"]["reading_status"] == "recommended"
+    assert by_id["n2"]["affected_by_feedback"] is True
+
+
+def test_learning_feedback_failure_keeps_original_output(workspace, monkeypatch):
+    write_json_atomic(
+        paths.knowledge_dag_path(workspace),
+        envelope(
+            schema="tree.knowledge-dag",
+            data={
+                "nodes": [{"node_id": "n1", "title": "Root", "source_order_index": 0}],
+                "edges": [],
+                "roots": ["n1"],
+            },
+        ),
+    )
+    output = paths.outputs_root(workspace) / "001.Root.md"
+    output.write_text("# Root\n\n旧内容\n", encoding="utf-8")
+    write_json_atomic(
+        paths.knowledge_ledger_path(workspace),
+        {"records": [{"node_id": "n1", "node_ids": ["n1"], "output_path": "outputs/001.Root.md"}]},
+    )
+
+    class _FakeSettings:
+        source_mtu_chunk_tokens = 20000
+
+    class _FakeClient:
+        async def close(self):
+            return None
+
+    class _FailingWriter:
+        def __init__(self, client):
+            self.client = client
+
+        async def revise_from_feedback(self, **kwargs):
+            raise RuntimeError("writer failed")
+
+    class _FakeRAG:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def query(self, *args, **kwargs):
+            return []
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("tree.learning.Settings.from_env", lambda root: _FakeSettings())
+    monkeypatch.setattr("tree.learning.LLMClient", lambda settings: _FakeClient())
+    monkeypatch.setattr("tree.learning.WriterAgent", _FailingWriter)
+    monkeypatch.setattr("tree.learning.RAGClient", _FakeRAG)
+
+    client = _authed_client(workspace)
+    resp = client.post("/api/learning/nodes/n1/feedback", json={"feedback": "补充例题"})
+
+    assert resp.status_code == 500
+    assert output.read_text(encoding="utf-8") == "# Root\n\n旧内容\n"
+    dag = client.get("/api/dag").json()
+    node = dag["nodes"][0]
+    assert "writer failed" in node["last_feedback_error"]
 
 
 def test_extension_requires_token(workspace):

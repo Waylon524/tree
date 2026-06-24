@@ -100,6 +100,14 @@ def knowledge_ledger_path(root: Path) -> Path:
     return runtime_root(root) / "knowledge-ledger.json"
 
 
+def learning_state_path(root: Path) -> Path:
+    return runtime_root(root) / "learning-state.json"
+
+
+def learning_revisions_root(root: Path) -> Path:
+    return runtime_root(root) / "learning-revisions"
+
+
 def import_manifest_path(root: Path) -> Path:
     """UI/product import history for files copied into materials/."""
     return runtime_root(root) / "import-manifest.json"
@@ -164,6 +172,7 @@ def ensure_workspace_dirs(root: Path) -> None:
         ocr_markdown_root(root),
         source_markdown_root(root),
         drafts_root(root),
+        learning_revisions_root(root),
         planner_root(root),
         pipeline_temp_root(root),
         services_root(root),

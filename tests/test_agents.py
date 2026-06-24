@@ -7,7 +7,7 @@ from tree.agents.examiner import ExaminerAgent
 from tree.agents.prompts import ARCHIVIST_MTU_PROMPT
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
-from tree.state.models import Route
+from tree.state.models import ExamReconciliationAction, Route
 
 _EXAM_OUTPUT = """## [Next_Knowledge_Point]
 01. 化学平衡
@@ -70,6 +70,41 @@ async def test_examiner_audit_parses_route():
     assert audit.route is Route.FAIL_KNOWLEDGE_GAP
     assert audit.exam_id == "化学平衡"
     assert "MISSING_FORMULA" in audit.bottleneck_report
+
+
+async def test_examiner_reconcile_exam_parses_revised_exam():
+    response = """ACTION: REVISE_EXAM
+REASON: answer key contradicted the draft formula
+
+## [Next_Knowledge_Point]
+01. 化学平衡
+
+## [Covered_Node_IDs]
+n1
+
+## [Blind_Exam]
+Q
+
+## [Answer_Key]
+A
+
+## [Writer_Instructions]
+Scope: x
+"""
+    agent = ExaminerAgent(_FakeClient({"examiner": response}))
+
+    result = await agent.reconcile_exam(
+        exam_paper="bad Q",
+        answer_key="bad A",
+        draft_text="draft",
+        bottleneck_report="answer key contradiction",
+        prior_paths=[],
+        prior_contents=[],
+    )
+
+    assert result.action is ExamReconciliationAction.REVISE_EXAM
+    assert result.exam_sections is not None
+    assert result.exam_sections.answer_key == "A"
 
 
 async def test_student_answer_returns_text():
@@ -975,6 +1010,29 @@ async def test_writer_draft_returns_content():
         prior_paths=[], prior_contents=[],
     )
     assert result.draft_content.startswith("# 化学平衡")
+
+
+async def test_writer_revise_from_feedback_uses_feedback_as_optimize_context():
+    client = _FakeClient({"writer": "# 化学平衡\n修订内容"})
+    agent = WriterAgent(client)
+
+    result = await agent.revise_from_feedback(
+        span_title="化学平衡",
+        file_seq="001",
+        current_text="# 化学平衡\n旧内容",
+        user_feedback="这里没有解释平衡移动",
+        prior_paths=[],
+        prior_contents=[],
+        node_context="TARGET n1",
+    )
+
+    assert result.draft_content.startswith("# 化学平衡")
+    role, prompt = client.calls[-1]
+    assert role == "writer"
+    assert "User feedback for this generated learning node" in prompt
+    assert "这里没有解释平衡移动" in prompt
+    assert "Current draft (OPTIMIZE this)" in prompt
+    assert "TARGET n1" in prompt
 
 
 def test_sanitize_writer_context_redacts_exam_blocks():

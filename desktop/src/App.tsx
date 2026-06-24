@@ -38,7 +38,7 @@ const PAGES: Array<{ key: Page; label: string }> = [
   { key: "overview", label: "Overview" },
   { key: "materials", label: "Imported Files" },
   { key: "outputs", label: "Generated Files" },
-  { key: "dag", label: "DAG" },
+  { key: "dag", label: "知识图谱" },
   { key: "settings", label: "Settings" },
 ];
 
@@ -321,8 +321,8 @@ function Dashboard({
 
 function DagLoading() {
   return (
-    <section className="dag-loading" aria-label="Loading DAG">
-      <span className="pill">Loading DAG</span>
+    <section className="dag-loading" aria-label="Loading knowledge graph">
+      <span className="pill">Loading Graph</span>
     </section>
   );
 }

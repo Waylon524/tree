@@ -42,6 +42,23 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
             _set_stage(engine, "clean", total=0, done=0, status="complete", message="Cleaning complete")
             _set_stage(engine, "cut", total=0, done=0, status="complete", message="Cutting complete")
             summary = _existing_planner_summary(root)
+            _set_stage(
+                engine,
+                "cluster",
+                total=summary["node_count"],
+                done=summary["node_count"],
+                status="complete",
+                message="Reused existing nodes",
+            )
+            edge_count = summary["hard_edge_count"] + summary["soft_order_edge_count"]
+            _set_stage(
+                engine,
+                "link",
+                total=edge_count,
+                done=edge_count,
+                status="complete",
+                message="Reused existing DAG",
+            )
             await ensure_all_embedded(engine)
             return summary
 

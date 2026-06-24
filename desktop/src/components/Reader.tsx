@@ -9,6 +9,9 @@ import {
   exportOutputs,
   fetchOutputRaw,
   isTauri,
+  markLearningNodeRead,
+  openLearningNode,
+  submitLearningFeedback,
 } from "../api";
 import type { RawOutput } from "../api";
 
@@ -29,11 +32,17 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
   const [error, setError] = useState<string>("");
   const [exporting, setExporting] = useState<boolean>(false);
   const [exportMsg, setExportMsg] = useState<string>("");
+  const [learningMsg, setLearningMsg] = useState<string>("");
+  const [feedback, setFeedback] = useState<string>("");
+  const [feedbackBusy, setFeedbackBusy] = useState<boolean>(false);
+  const [readBusy, setReadBusy] = useState<boolean>(false);
 
   useEffect(() => {
     let active = true;
     setOutput(null);
     setError("");
+    setLearningMsg("");
+    setFeedback("");
     fetchOutputRaw(target.name)
       .then((data) => {
         if (active) setOutput(data);
@@ -45,6 +54,21 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
       active = false;
     };
   }, [target.name]);
+
+  useEffect(() => {
+    if (!target.nodeId || target.from !== "dag") return;
+    let active = true;
+    openLearningNode(target.nodeId)
+      .then(() => {
+        if (active) setLearningMsg("Reading progress saved.");
+      })
+      .catch((err: unknown) => {
+        if (active) setLearningMsg(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [target.from, target.nodeId]);
 
   const chooseDestination = async (): Promise<string | null> => {
     if (isTauri()) return chooseExportDirectory();
@@ -68,6 +92,37 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
       setExportMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const markRead = async (): Promise<void> => {
+    if (!target.nodeId) return;
+    setReadBusy(true);
+    setLearningMsg("");
+    try {
+      await markLearningNodeRead(target.nodeId, true);
+      setLearningMsg("Marked as read.");
+    } catch (err) {
+      setLearningMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReadBusy(false);
+    }
+  };
+
+  const submitFeedback = async (): Promise<void> => {
+    if (!target.nodeId || !feedback.trim()) return;
+    setFeedbackBusy(true);
+    setLearningMsg("");
+    try {
+      await submitLearningFeedback(target.nodeId, feedback.trim());
+      const updated = await fetchOutputRaw(target.name);
+      setOutput(updated);
+      setFeedback("");
+      setLearningMsg("Feedback applied. Please reread this node.");
+    } catch (err) {
+      setLearningMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFeedbackBusy(false);
     }
   };
 
@@ -95,12 +150,42 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
           <button type="button" onClick={() => void exportCurrent()} disabled={exporting}>
             {exporting ? "Exporting..." : "Export this file"}
           </button>
+          {target.nodeId && (
+            <button type="button" onClick={() => void markRead()} disabled={readBusy}>
+              {readBusy ? "Saving..." : "完成阅读"}
+            </button>
+          )}
         </div>
       </header>
 
       {exportMsg && <p className={exportMsg.includes("failed") ? "errors" : "ok"}>{exportMsg}</p>}
+      {learningMsg && (
+        <p className={learningMsg.includes("failed") || learningMsg.includes("Error") ? "errors" : "ok"}>
+          {learningMsg}
+        </p>
+      )}
       {error && <p className="errors">{error}</p>}
       {!output && !error && <p className="muted">Loading output...</p>}
+      {target.nodeId && output && (
+        <section className="reader-feedback" aria-label="Learning feedback">
+          <h2>反馈微调</h2>
+          <textarea
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+            placeholder="例如：这里没有讲清楚公式里的符号含义，或者缺少一个推导步骤。"
+            rows={4}
+          />
+          <div className="reader-feedback-actions">
+            <button
+              type="button"
+              onClick={() => void submitFeedback()}
+              disabled={feedbackBusy || !feedback.trim()}
+            >
+              {feedbackBusy ? "Revising..." : "提交反馈"}
+            </button>
+          </div>
+        </section>
+      )}
       {output && (
         <article className="reader-markdown">
           <ReactMarkdown

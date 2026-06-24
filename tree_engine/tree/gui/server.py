@@ -44,6 +44,12 @@ from tree.cli.dashboard.model import build_watch_model
 from tree.config import load_runtime_env
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
+from tree.learning import (
+    mark_node_opened,
+    mark_node_read,
+    reading_view_for_dag,
+    revise_node_from_feedback,
+)
 from tree.observability.progress import STAGES
 from tree.planner.pipeline import load_dag
 from tree.planner.store import read_json, write_json_atomic
@@ -146,6 +152,42 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     def api_dag(request: Request) -> dict[str, Any]:
         _require(request)
         return _dag_model(root)
+
+    @app.post("/api/learning/nodes/{node_id}/open")
+    def api_learning_node_open(request: Request, node_id: str) -> dict[str, Any]:
+        _require(request)
+        return {
+            "node_id": node_id,
+            "state": mark_node_opened(root, node_id).model_dump(mode="json"),
+        }
+
+    @app.post("/api/learning/nodes/{node_id}/read")
+    def api_learning_node_read(
+        request: Request,
+        node_id: str,
+        payload: dict[str, Any] | None = Body(None),
+    ) -> dict[str, Any]:
+        _require(request)
+        read = True if payload is None else bool(payload.get("read", True))
+        return {
+            "node_id": node_id,
+            "state": mark_node_read(root, node_id, read=read).model_dump(mode="json"),
+        }
+
+    @app.post("/api/learning/nodes/{node_id}/feedback")
+    async def api_learning_node_feedback(
+        request: Request,
+        node_id: str,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        _require(request)
+        feedback = str(payload.get("feedback") or "").strip()
+        try:
+            return await revise_node_from_feedback(root, node_id, feedback)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/api/extension")
     def api_extension(request: Request) -> dict[str, object]:
@@ -493,17 +535,20 @@ def _dag_model(root: Path) -> dict[str, Any]:
     outputs = _dag_output_paths(root)
 
     payload_nodes = []
+    generation_statuses: dict[str, str] = {}
     for node in sorted(nodes, key=lambda n: (n.get("source_order_index", 0), n.get("node_id", ""))):
         node_id = str(node.get("node_id") or "")
         if not node_id:
             continue
         status = _dag_node_status(node_id, parents, covered, active, failed)
+        generation_statuses[node_id] = status
         payload_nodes.append(
             {
                 "id": node_id,
                 "title": str(node.get("title") or node_id),
                 "label": labels.get(node_id, node_id),
                 "status": status,
+                "generation_status": status,
                 "defines": [str(item) for item in (node.get("defines") or [])],
                 "collections": [str(item) for item in (node.get("collections") or [])],
                 "summary": str(node.get("summary") or ""),
@@ -513,6 +558,15 @@ def _dag_model(root: Path) -> dict[str, Any]:
                 "output_paths": outputs.get(node_id, []),
             }
         )
+    learning_view = reading_view_for_dag(
+        root,
+        node_ids=[str(node["id"]) for node in payload_nodes],
+        parents=parents,
+        children=children,
+        generation_statuses=generation_statuses,
+    )
+    for node in payload_nodes:
+        node.update(learning_view.get(str(node["id"]), {}))
 
     payload_edges = [
         {
@@ -528,17 +582,27 @@ def _dag_model(root: Path) -> dict[str, Any]:
     status_counts = {status: 0 for status in ("locked", "ready", "running", "complete", "failed")}
     for node in payload_nodes:
         status_counts[str(node["status"])] += 1
+    reading_counts = {status: 0 for status in ("unread", "recommended", "reading", "read")}
+    for node in payload_nodes:
+        reading_status = str(node.get("reading_status") or "unread")
+        if reading_status in reading_counts:
+            reading_counts[reading_status] += 1
     roots = dag.get("roots") or sorted(
         node["id"] for node in payload_nodes if not parents.get(str(node["id"]))
+    )
+    learning_ready = bool(payload_nodes) and all(
+        node.get("generation_status") == "complete" for node in payload_nodes
     )
     return {
         "nodes": payload_nodes,
         "edges": payload_edges,
         "roots": [str(item) for item in roots],
+        "learning_ready": learning_ready,
         "stats": {
             "nodes": len(payload_nodes),
             "edges": len(payload_edges),
             "statuses": status_counts,
+            "reading_statuses": reading_counts,
         },
         "updated_at": str(model.get("updated_at") or ""),
     }

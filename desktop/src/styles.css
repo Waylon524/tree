@@ -948,6 +948,19 @@ table.stages td {
   background: var(--failed);
 }
 
+.dag-dot-unread {
+  background: #b7dca5;
+}
+
+.dag-dot-recommended,
+.dag-dot-reading {
+  background: #2f6f44;
+}
+
+.dag-dot-read {
+  background: #8a5a32;
+}
+
 .dag-stage {
   position: relative;
   min-width: 0;
@@ -1060,6 +1073,20 @@ table.stages td {
   background: var(--failed);
 }
 
+.state-unread {
+  background: #b7dca5;
+  color: #1f3f29;
+}
+
+.state-recommended,
+.state-reading {
+  background: #2f6f44;
+}
+
+.state-read {
+  background: #8a5a32;
+}
+
 .dag-inspector h2 {
   color: var(--text);
   font-size: 18px;
@@ -1154,6 +1181,36 @@ table.stages td {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.reader-feedback {
+  max-width: 820px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.reader-feedback h2 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 16px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.reader-feedback textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+}
+
+.reader-feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 .reader-markdown {

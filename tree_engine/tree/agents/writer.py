@@ -72,6 +72,40 @@ class WriterAgent(Agent):
         raw = await self.complete("\n".join(parts))
         return WriterResult(draft_content=raw)
 
+    async def revise_from_feedback(
+        self,
+        *,
+        span_title: str,
+        file_seq: str,
+        current_text: str,
+        user_feedback: str,
+        prior_paths: list[str],
+        prior_contents: list[str],
+        retrieved: list[dict] | None = None,
+        node_context: str | None = None,
+    ) -> WriterResult:
+        """Surgically revise a finished learning node from reader feedback."""
+        feedback = sanitize_writer_context(user_feedback)
+        instructions = (
+            "This is a learner feedback revision, not a full NodeRun. "
+            "Apply the smallest necessary edits to the current generated Markdown. "
+            "Preserve correct sections, the current H1, and the deterministic prerequisite block "
+            "if present. Do not rerun or reveal exam logic. Do not expand into future or sibling "
+            "KnowledgeNodes. Return the full revised Markdown file, not a patch."
+        )
+        return await self.draft(
+            span_title=span_title,
+            file_seq=file_seq,
+            bottleneck_report=f"User feedback for this generated learning node:\n{feedback}",
+            prior_paths=prior_paths,
+            prior_contents=prior_contents,
+            draft_text=current_text,
+            previous_bottleneck=None,
+            writer_instructions=instructions,
+            retrieved=retrieved,
+            node_context=node_context,
+        )
+
 
 def sanitize_writer_context(text: str) -> str:
     """Remove exam-only blocks before text is sent to the writer."""
