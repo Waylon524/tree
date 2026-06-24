@@ -33,6 +33,15 @@
   --fruit-soft: #ef8378;
   --wither: #a85a3c;
 
+  /* Fruit ripeness scale (small fruit -> green -> turning -> amber -> ripe -> picked) */
+  --ripe-set: #2f6f44;
+  --ripe-unripe: #5f9e44;
+  --ripe-turning: #a9bf45;
+  --ripe-almost: #e0a838;
+  --ripe-ripe: #d8453d;
+  --ripe-picked: #7c2f2b;
+  --ripe-blighted: #8a6a4a;
+
   /* Pipeline/status tokens mapped onto the tree palette */
   --done: var(--leaf-mature);
   --running: #5a9e3f;
@@ -64,6 +73,14 @@
     --fruit: #ef6f63;
     --fruit-soft: #f59488;
     --wither: #c97f5c;
+
+    --ripe-set: #3f8a56;
+    --ripe-unripe: #7bbf57;
+    --ripe-turning: #c2d56a;
+    --ripe-almost: #f0c468;
+    --ripe-ripe: #ef6f63;
+    --ripe-picked: #b5635a;
+    --ripe-blighted: #a98a63;
 
     --done: var(--leaf-mature);
     --running: #7bc15a;
@@ -1012,37 +1029,36 @@ table.stages td {
   background: var(--accent);
 }
 
-.dag-dot-locked {
-  background: var(--wait);
+.dag-dot-set {
+  background: var(--ripe-set);
+  transform: scale(0.78);
 }
 
-.dag-dot-ready,
-.dag-dot-unread {
-  background: var(--leaf-young);
+.dag-dot-unripe {
+  background: var(--ripe-unripe);
 }
 
-.dag-dot-running {
-  background: var(--running);
+.dag-dot-turning {
+  background: var(--ripe-turning);
 }
 
-.dag-dot-reading {
-  background: var(--leaf-mid);
+.dag-dot-almost {
+  background: var(--ripe-almost);
 }
 
-.dag-dot-complete,
-.dag-dot-read {
-  background: var(--leaf-mature);
+.dag-dot-picked {
+  background: var(--ripe-picked);
 }
 
-.dag-dot-failed {
-  background: var(--wither);
+.dag-dot-blighted {
+  background: var(--ripe-blighted);
 }
 
-.dag-dot-recommended {
-  background: var(--fruit);
+.dag-dot-ripe {
+  background: var(--ripe-ripe);
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--fruit) 26%, transparent),
-    0 0 9px color-mix(in srgb, var(--fruit) 55%, transparent);
+    0 0 0 2px color-mix(in srgb, var(--ripe-ripe) 26%, transparent),
+    0 0 9px color-mix(in srgb, var(--ripe-ripe) 55%, transparent);
 }
 
 .dag-stage {
@@ -1137,37 +1153,37 @@ table.stages td {
   text-transform: uppercase;
 }
 
-.state-locked {
-  background: var(--wait);
+.state-set {
+  background: var(--ripe-set);
 }
 
-.state-ready,
-.state-unread {
-  background: var(--leaf-young);
+.state-unripe {
+  background: var(--ripe-unripe);
   color: #1f3f12;
 }
 
-.state-running {
-  background: var(--running);
+.state-turning {
+  background: var(--ripe-turning);
+  color: #34400f;
 }
 
-.state-reading {
-  background: var(--leaf-mid);
+.state-almost {
+  background: var(--ripe-almost);
+  color: #4a3308;
 }
 
-.state-complete,
-.state-read {
-  background: var(--leaf-mature);
+.state-picked {
+  background: var(--ripe-picked);
 }
 
-.state-failed {
-  background: var(--wither);
+.state-blighted {
+  background: var(--ripe-blighted);
 }
 
-.state-recommended {
-  background: var(--fruit);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fruit) 50%, transparent),
-    0 2px 10px color-mix(in srgb, var(--fruit) 40%, transparent);
+.state-ripe {
+  background: var(--ripe-ripe);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ripe-ripe) 50%, transparent),
+    0 2px 10px color-mix(in srgb, var(--ripe-ripe) 40%, transparent);
 }
 
 .dag-inspector h2 {
@@ -1435,5 +1451,363 @@ table.stages td {
 
   .reader-markdown {
     padding: 16px;
+  }
+}
+
+/* --- tree theme: orchard components -------------------------------------- */
+
+.grow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.grow-title {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 18px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.grow-head .muted {
+  margin: 0;
+}
+
+.stage-name {
+  width: auto;
+  min-width: 96px;
+}
+.stage-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.stage-glyph {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bar-bg) 70%, transparent);
+}
+.glyph-done {
+  color: var(--done);
+  background: color-mix(in srgb, var(--done) 14%, transparent);
+}
+.glyph-running {
+  color: var(--running);
+  background: color-mix(in srgb, var(--running) 16%, transparent);
+}
+.glyph-failed {
+  color: var(--failed);
+  background: color-mix(in srgb, var(--failed) 14%, transparent);
+}
+
+.soil-card {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+.soil-card h2 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 18px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.lang-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.lang-toggle button {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+.lang-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tend {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.legend-note {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11px;
+}
+.seeds-head {
+  align-items: center;
+}
+
+.dag-scene {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+.apple-scene {
+  width: min(72%, 360px);
+  height: auto;
+}
+.dag-scene-caption {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.orchard-banner {
+  position: relative;
+  margin-bottom: 22px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--bg-canopy), var(--card));
+  box-shadow: var(--shadow);
+}
+.orchard-scene {
+  display: block;
+  width: 100%;
+  height: 120px;
+}
+.orchard-banner-text {
+  padding: 14px 20px 18px;
+}
+.orchard-banner-text h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  letter-spacing: 0;
+}
+.orchard-banner-text p {
+  margin: 0;
+}
+
+.tree-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.tree-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent), var(--shadow);
+}
+.tree-card-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.tree-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tree-card-title strong {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.tree-card-title small {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.tree-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+.tree-edit {
+  display: grid;
+  gap: 8px;
+}
+.tree-edit label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tree-edit input,
+.tree-edit textarea,
+.tree-uproot input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+}
+.tree-uproot {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.tree-uproot h3 {
+  margin: 0;
+  color: var(--failed);
+  font-size: 14px;
+}
+.stat-small {
+  font-size: 13px !important;
+}
+
+@keyframes tree-sway {
+  0%,
+  100% {
+    transform: rotate(-1.2deg);
+  }
+  50% {
+    transform: rotate(1.2deg);
+  }
+}
+@keyframes apple-fall {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  80% {
+    transform: translateY(78px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(86px);
+    opacity: 0;
+  }
+}
+@keyframes seed-drop {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(54px);
+    opacity: 0;
+  }
+}
+@keyframes sprout-rise {
+  0% {
+    transform: scaleY(0.05);
+  }
+  60% {
+    transform: scaleY(1.06);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+@keyframes branch-draw {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes fruit-pop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes fruit-cull {
+  0%,
+  60% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0.2;
+    transform: translateY(16px);
+  }
+}
+@keyframes fruit-sort {
+  0% {
+    transform: translateX(-12px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.tree-sway {
+  transform-box: fill-box;
+  animation: tree-sway 5s ease-in-out infinite;
+}
+.sprout-rise {
+  transform-box: fill-box;
+  animation: sprout-rise 2.2s ease-out infinite alternate;
+}
+.branch-draw {
+  animation: branch-draw 1.6s ease-out infinite alternate;
+}
+.apple-fall {
+  animation: apple-fall 2.4s ease-in infinite;
+}
+.seed-drop {
+  animation: seed-drop 1.8s ease-in infinite;
+}
+.fruit-pop,
+.fruit-keep {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: fruit-pop 1.8s ease-out infinite alternate;
+}
+.fruit-cull {
+  animation: fruit-cull 2.6s ease-in-out infinite;
+}
+.fruit-sort {
+  animation: fruit-sort 1.8s ease-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-sway,
+  .sprout-rise,
+  .branch-draw,
+  .apple-fall,
+  .seed-drop,
+  .fruit-pop,
+  .fruit-keep,
+  .fruit-cull,
+  .fruit-sort {
+    animation: none;
   }
 }

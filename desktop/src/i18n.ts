@@ -1,0 +1,504 @@
+import { createContext, createElement, useContext, useState } from "react";
+import type { ReactNode } from "react";
+
+export type Lang = "zh" | "en";
+
+const STORAGE_KEY = "tree_lang";
+
+type Dict = Record<string, string>;
+
+const zh: Dict = {
+  // brand / chrome
+  "brand.tagline": "知识果园",
+  "common.loading": "加载中…",
+  "common.none": "无",
+  "common.back": "返回",
+  "common.save": "保存",
+  "common.saving": "保存中…",
+  "common.retry": "重试",
+  "common.live": "在线",
+  "common.connecting": "连接中…",
+  "common.switch": "切换",
+  "common.updated": "更新于",
+
+  // nav
+  "nav.grow": "生长",
+  "nav.fruits": "果实",
+  "nav.harvest": "收获",
+  "nav.tend": "照料",
+
+  // engine / phase chips
+  "engine.label": "引擎",
+  "conn.live": "在线",
+  "conn.connecting": "连接中…",
+
+  // grow page
+  "grow.grow": "生长",
+  "grow.rest": "休眠",
+  "grow.heading": "让知识树生长",
+  "grow.subtitle": "从种子到果实,一步步培育这棵知识树。",
+  "grow.waiting": "等待状态…",
+  "grow.materials": "种子",
+  "grow.nodes": "知识点",
+  "grow.edges": "枝条",
+  "grow.active": "进行中",
+  "grow.embed": "向量服务",
+  "grow.errors": "异常",
+
+  // stage metaphors (keyed by backend stage key)
+  "stage.ocr": "采集",
+  "stage.clean": "筛净",
+  "stage.cut": "分种",
+  "stage.embed": "播种",
+  "stage.cluster": "发芽",
+  "stage.link": "生枝",
+  "stage.noderun": "结果",
+  "stage.ocr.tip": "从资料里拾取原始种子",
+  "stage.clean.tip": "簸去噪声,留下饱满的种子",
+  "stage.cut.tip": "切成一粒粒可教学单元",
+  "stage.embed.tip": "把种子播进向量土壤",
+  "stage.cluster.tip": "种子聚成知识点幼苗",
+  "stage.link.tip": "连出先修依赖,长成枝干",
+  "stage.noderun.tip": "命题打磨,结出成品果实",
+
+  // fruits page
+  "fruits.title": "果实",
+  "fruits.empty": "还没有结出果实。",
+  "fruits.exportSelected": "导出所选",
+  "fruits.exportAll": "全部导出",
+  "fruits.selectToExport": "请先勾选要导出的果实。",
+  "fruits.noneToExport": "没有可导出的果实。",
+  "fruits.exportCancelled": "已取消导出。",
+
+  // harvest page (DAG)
+  "harvest.title": "收获",
+  "harvest.subtitle": "一棵结满知识的果树",
+  "harvest.nodes": "果实",
+  "harvest.edges": "枝条",
+  "harvest.all": "全部",
+  "harvest.fit": "适配",
+  "harvest.reset": "复位",
+  "harvest.openSvg": "打开 SVG",
+  "harvest.canvasHint": "滚轮缩放 · 拖拽旋转 · 右键拖拽平移",
+  "harvest.selectNode": "选择一颗果实",
+  "harvest.selectHint": "点击树上的果实,飞近查看它的先修、定义与成品。",
+  "harvest.emptyTitle": "果树还在培育",
+  "harvest.emptyHint": "继续生长,直到知识点萌发成型。",
+  "harvest.prerequisites": "先修",
+  "harvest.dependents": "后继",
+  "harvest.defines": "定义",
+  "harvest.collections": "来源",
+  "harvest.outputs": "成品",
+  "harvest.startLearning": "开始学习",
+  "harvest.read": "阅读",
+  "harvest.outputNotReady": "成品尚未就绪",
+  "harvest.noOutput": "未找到成品文件",
+  "harvest.affected": "某个先修在你读完后被修订过。",
+
+  // ripeness labels
+  "ripe.set": "小果实",
+  "ripe.unripe": "青果",
+  "ripe.turning": "转色",
+  "ripe.almost": "将熟",
+  "ripe.ripe": "熟透",
+  "ripe.picked": "已收",
+  "ripe.blighted": "枯果",
+  "ripe.set.desc": "先修未完成,刚坐果",
+  "ripe.unripe.desc": "已就绪,等待生长",
+  "ripe.turning.desc": "正在生成",
+  "ripe.almost.desc": "已生成,尚未轮到阅读",
+  "ripe.ripe.desc": "成熟,推荐现在阅读",
+  "ripe.picked.desc": "已确认读完,已收获",
+  "ripe.blighted.desc": "生成失败,需要关注",
+
+  // stage scene captions (harvest pre-fruit animation)
+  "scene.ocr": "在苹果树上采集种果",
+  "scene.clean": "筛去坏果,留下好果",
+  "scene.cut": "把果实分拣成一份份",
+  "scene.embed": "把种子播进土壤",
+  "scene.cluster": "苹果树正在发芽",
+  "scene.link": "新枝正在抽长",
+  "scene.noderun": "枝头开始结果",
+  "scene.idle": "果树还在等待生长",
+
+  // tend page
+  "tend.title": "照料",
+  "tend.fertilizer": "施肥",
+  "tend.note.llm": "LLM",
+  "tend.gather": "浸种",
+  "tend.note.ocr": "OCR",
+  "tend.climate": "气候",
+  "tend.note.runtime": "运行参数",
+  "tend.seeds": "种子",
+  "tend.language": "语言",
+  "tend.lang.zh": "中文",
+  "tend.lang.en": "EN",
+
+  // settings fields
+  "settings.apiKey": "API 密钥",
+  "settings.configured": "已配置",
+  "settings.baseUrl": "Base URL",
+  "settings.defaultModel": "默认模型",
+  "settings.paddleKey": "PaddleOCR 密钥",
+  "settings.llamaCtx": "llama-server 上下文",
+  "settings.mtuChunk": "Source MTU 分块 token",
+  "settings.save": "保存设置",
+  "settings.saved": "已保存全局设置。",
+  "role.examiner": "Examiner",
+  "role.student": "Student",
+  "role.writer": "Writer",
+  "role.archivist": "Archivist",
+  "role.dagger": "Dagger",
+
+  // seeds (materials)
+  "seeds.title": "种子",
+  "seeds.choose": "选择种子",
+  "seeds.import": "播入",
+  "seeds.empty": "还没有种子。",
+  "seeds.selected": "已选 {n} 个",
+  "seeds.imported": "已播入 {n}{skipped}",
+  "seeds.skipped": ",跳过 {n}",
+  "seeds.sourceGroup": "来源组",
+  "seeds.storedAs": "存为 {name}",
+  "seeds.active": "在用",
+  "seeds.missing": "缺失",
+  "seeds.legacy": "历史文件",
+  "seeds.sizeUnknown": "大小未知",
+
+  // orchard (project library)
+  "orchard.title": "果园",
+  "orchard.subtitle": "每个项目是一棵知识果树;种子、果实、收获状态各自独立。",
+  "orchard.plant": "种植",
+  "orchard.planting": "种植中…",
+  "orchard.graft": "嫁接已有",
+  "orchard.grafting": "嫁接中…",
+  "orchard.observe": "观察",
+  "orchard.observing": "进入中…",
+  "orchard.rename": "重命名",
+  "orchard.uproot": "拔除",
+  "orchard.uprooting": "拔除中…",
+  "orchard.newName": "新果树名称",
+  "orchard.nameRequired": "请填写果树名称。",
+  "orchard.currentTree": "当前果树",
+  "orchard.current": "当前",
+  "orchard.library": "果园",
+  "orchard.emptyTitle": "果园还是空的",
+  "orchard.emptyHint": "种下第一棵知识果树,或嫁接一个已有的 TREE 工作区。",
+  "orchard.imported": "种子",
+  "orchard.generated": "果实",
+  "orchard.storage": "占用",
+  "orchard.created": "创建",
+  "orchard.updated": "更新",
+  "orchard.lastOpened": "上次观察",
+  "orchard.neverOpened": "尚未观察",
+  "orchard.notYet": "尚未",
+  "orchard.name": "名称",
+  "orchard.description": "描述",
+  "orchard.noDescription": "暂无描述",
+  "orchard.renamed": "果树信息已保存。",
+  "orchard.uprooted": "果树已拔除。",
+  "orchard.uprootTitle": "拔除果树",
+  "orchard.uprootHint": "这会删除受管理的果树副本,且无法撤销。",
+  "orchard.uprootConfirm": "输入 {name} 以确认",
+  "orchard.back": "返回当前果树",
+
+  // gates
+  "gate.soil.title": "正在松土育苗",
+  "gate.soil.desc": "知识树生长前,需要准备本地 embedding 扩展。",
+  "gate.soil.install": "准备苗床",
+  "gate.soil.installing": "准备中…",
+  "gate.soil.checking": "正在检查苗床…",
+  "gate.soil.starting": "正在启动本地 TREE 服务,重试中…",
+  "gate.soil.failed": "无法连接本地 TREE 服务。",
+  "gate.token.desc": "粘贴 tre gui 链接里 ?token= 后面的 token。",
+  "gate.token.connect": "连接",
+
+  // reader
+  "reader.backToHarvest": "返回收获",
+  "reader.backToFruits": "返回果实",
+  "reader.export": "导出这颗果实",
+  "reader.exporting": "导出中…",
+  "reader.markRead": "摘下果实(完成阅读)",
+  "reader.marking": "保存中…",
+  "reader.marked": "已确认读完,这颗果实已收获。",
+  "reader.progressSaved": "阅读进度已保存。",
+  "reader.feedback": "反馈微调",
+  "reader.feedbackPlaceholder": "例如:这里没讲清楚公式里的符号含义,或缺少一个推导步骤。",
+  "reader.submit": "提交反馈",
+  "reader.revising": "修订中…",
+  "reader.feedbackApplied": "反馈已应用,请重新阅读这一节。",
+};
+
+const en: Dict = {
+  "brand.tagline": "knowledge orchard",
+  "common.loading": "Loading…",
+  "common.none": "None",
+  "common.back": "Back",
+  "common.save": "Save",
+  "common.saving": "Saving…",
+  "common.retry": "Retry",
+  "common.live": "live",
+  "common.connecting": "connecting…",
+  "common.switch": "Switch",
+  "common.updated": "Updated",
+
+  "nav.grow": "Grow",
+  "nav.fruits": "Fruits",
+  "nav.harvest": "Harvest",
+  "nav.tend": "Tend",
+
+  "engine.label": "engine",
+  "conn.live": "live",
+  "conn.connecting": "connecting…",
+
+  "grow.grow": "Grow",
+  "grow.rest": "Rest",
+  "grow.heading": "Grow the knowledge tree",
+  "grow.subtitle": "From seed to fruit — raise this knowledge tree step by step.",
+  "grow.waiting": "Waiting for status…",
+  "grow.materials": "seeds",
+  "grow.nodes": "nodes",
+  "grow.edges": "branches",
+  "grow.active": "active",
+  "grow.embed": "embed",
+  "grow.errors": "Errors",
+
+  "stage.ocr": "Gather",
+  "stage.clean": "Sift",
+  "stage.cut": "Sort",
+  "stage.embed": "Sow",
+  "stage.cluster": "Sprout",
+  "stage.link": "Branch",
+  "stage.noderun": "Fruit",
+  "stage.ocr.tip": "Gather raw seeds from the materials",
+  "stage.clean.tip": "Winnow noise, keep the full seeds",
+  "stage.cut.tip": "Sort into teachable units",
+  "stage.embed.tip": "Sow the seeds into vector soil",
+  "stage.cluster.tip": "Seeds sprout into node seedlings",
+  "stage.link.tip": "Link prerequisites into branches",
+  "stage.noderun.tip": "Refine and bear ripe fruit",
+
+  "fruits.title": "Fruits",
+  "fruits.empty": "No fruit has grown yet.",
+  "fruits.exportSelected": "Export selected",
+  "fruits.exportAll": "Export all",
+  "fruits.selectToExport": "Select fruit to export.",
+  "fruits.noneToExport": "No fruit to export.",
+  "fruits.exportCancelled": "Export cancelled.",
+
+  "harvest.title": "Harvest",
+  "harvest.subtitle": "A tree heavy with knowledge",
+  "harvest.nodes": "fruit",
+  "harvest.edges": "branches",
+  "harvest.all": "All",
+  "harvest.fit": "Fit",
+  "harvest.reset": "Reset",
+  "harvest.openSvg": "Open SVG",
+  "harvest.canvasHint": "Scroll to zoom · drag to rotate · right-drag to pan",
+  "harvest.selectNode": "Pick a fruit",
+  "harvest.selectHint": "Click a fruit on the tree to fly closer and inspect prerequisites, defines, and outputs.",
+  "harvest.emptyTitle": "The tree is still growing",
+  "harvest.emptyHint": "Keep growing until knowledge nodes take shape.",
+  "harvest.prerequisites": "Prerequisites",
+  "harvest.dependents": "Dependents",
+  "harvest.defines": "Defines",
+  "harvest.collections": "Collections",
+  "harvest.outputs": "Outputs",
+  "harvest.startLearning": "Start learning",
+  "harvest.read": "Read",
+  "harvest.outputNotReady": "Output not ready",
+  "harvest.noOutput": "No output file found",
+  "harvest.affected": "A prerequisite was revised after you read this node.",
+
+  "ripe.set": "Set",
+  "ripe.unripe": "Unripe",
+  "ripe.turning": "Turning",
+  "ripe.almost": "Almost ripe",
+  "ripe.ripe": "Ripe",
+  "ripe.picked": "Picked",
+  "ripe.blighted": "Blighted",
+  "ripe.set.desc": "Prerequisites pending; fruit just set",
+  "ripe.unripe.desc": "Ready, waiting to grow",
+  "ripe.turning.desc": "Being generated",
+  "ripe.almost.desc": "Grown; not your reading turn yet",
+  "ripe.ripe.desc": "Ripe — read this next",
+  "ripe.picked.desc": "Confirmed read — harvested",
+  "ripe.blighted.desc": "Generation failed — needs attention",
+
+  "scene.ocr": "Gathering fruit from the apple tree",
+  "scene.clean": "Sifting out the bad, keeping the good",
+  "scene.cut": "Sorting the fruit into portions",
+  "scene.embed": "Sowing the seeds into soil",
+  "scene.cluster": "The apple tree is sprouting",
+  "scene.link": "Fresh branches are reaching out",
+  "scene.noderun": "Fruit is setting on the branches",
+  "scene.idle": "The tree is waiting to grow",
+
+  "tend.title": "Tend",
+  "tend.fertilizer": "Fertilizer",
+  "tend.note.llm": "LLM",
+  "tend.gather": "Gather",
+  "tend.note.ocr": "OCR",
+  "tend.climate": "Climate",
+  "tend.note.runtime": "Runtime",
+  "tend.seeds": "Seeds",
+  "tend.language": "Language",
+  "tend.lang.zh": "中文",
+  "tend.lang.en": "EN",
+
+  "settings.apiKey": "API key",
+  "settings.configured": "Configured",
+  "settings.baseUrl": "Base URL",
+  "settings.defaultModel": "Default model",
+  "settings.paddleKey": "PaddleOCR key",
+  "settings.llamaCtx": "llama-server context",
+  "settings.mtuChunk": "Source MTU chunk tokens",
+  "settings.save": "Save settings",
+  "settings.saved": "Saved global settings.",
+  "role.examiner": "Examiner",
+  "role.student": "Student",
+  "role.writer": "Writer",
+  "role.archivist": "Archivist",
+  "role.dagger": "Dagger",
+
+  "seeds.title": "Seeds",
+  "seeds.choose": "Choose seeds",
+  "seeds.import": "Sow",
+  "seeds.empty": "No seeds yet.",
+  "seeds.selected": "Selected {n}",
+  "seeds.imported": "Sowed {n}{skipped}",
+  "seeds.skipped": ", skipped {n}",
+  "seeds.sourceGroup": "Source group",
+  "seeds.storedAs": "Stored as {name}",
+  "seeds.active": "active",
+  "seeds.missing": "missing",
+  "seeds.legacy": "Legacy file",
+  "seeds.sizeUnknown": "Size unknown",
+
+  "orchard.title": "Orchard",
+  "orchard.subtitle": "Each project is a knowledge tree; seeds, fruit, and harvest state stay separate.",
+  "orchard.plant": "Plant",
+  "orchard.planting": "Planting…",
+  "orchard.graft": "Graft existing",
+  "orchard.grafting": "Grafting…",
+  "orchard.observe": "Observe",
+  "orchard.observing": "Opening…",
+  "orchard.rename": "Rename",
+  "orchard.uproot": "Uproot",
+  "orchard.uprooting": "Uprooting…",
+  "orchard.newName": "New tree name",
+  "orchard.nameRequired": "Tree name is required.",
+  "orchard.currentTree": "Current tree",
+  "orchard.current": "Current",
+  "orchard.library": "Orchard",
+  "orchard.emptyTitle": "The orchard is empty",
+  "orchard.emptyHint": "Plant your first knowledge tree, or graft an existing TREE workspace.",
+  "orchard.imported": "Seeds",
+  "orchard.generated": "Fruit",
+  "orchard.storage": "Storage",
+  "orchard.created": "Created",
+  "orchard.updated": "Updated",
+  "orchard.lastOpened": "Last observed",
+  "orchard.neverOpened": "Never observed",
+  "orchard.notYet": "Not yet",
+  "orchard.name": "Name",
+  "orchard.description": "Description",
+  "orchard.noDescription": "No description",
+  "orchard.renamed": "Tree details saved.",
+  "orchard.uprooted": "Tree uprooted.",
+  "orchard.uprootTitle": "Uproot tree",
+  "orchard.uprootHint": "This removes the managed tree copy and cannot be undone.",
+  "orchard.uprootConfirm": "Type {name} to confirm",
+  "orchard.back": "Back to current tree",
+
+  "gate.soil.title": "Preparing the soil",
+  "gate.soil.desc": "The knowledge tree needs the local embedding extension before it can grow.",
+  "gate.soil.install": "Prepare the bed",
+  "gate.soil.installing": "Preparing…",
+  "gate.soil.checking": "Checking the seedbed…",
+  "gate.soil.starting": "Starting local TREE service. Retrying…",
+  "gate.soil.failed": "Could not connect to the local TREE service.",
+  "gate.token.desc": "Paste the token after ?token= from the tre gui URL.",
+  "gate.token.connect": "Connect",
+
+  "reader.backToHarvest": "Back to Harvest",
+  "reader.backToFruits": "Back to Fruits",
+  "reader.export": "Export this fruit",
+  "reader.exporting": "Exporting…",
+  "reader.markRead": "Pick this fruit (mark read)",
+  "reader.marking": "Saving…",
+  "reader.marked": "Confirmed read — this fruit is harvested.",
+  "reader.progressSaved": "Reading progress saved.",
+  "reader.feedback": "Feedback tuning",
+  "reader.feedbackPlaceholder": "e.g. the meaning of a symbol in the formula is unclear, or a derivation step is missing.",
+  "reader.submit": "Submit feedback",
+  "reader.revising": "Revising…",
+  "reader.feedbackApplied": "Feedback applied. Please reread this node.",
+};
+
+const DICTS: Record<Lang, Dict> = { zh, en };
+
+export function resolveInitialLang(): Lang {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === "zh" || stored === "en") return stored;
+  } catch {
+    /* localStorage unavailable */
+  }
+  return "zh";
+}
+
+export function persistLang(lang: Lang): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, lang);
+  } catch {
+    /* localStorage unavailable */
+  }
+}
+
+export type Translate = (key: string, vars?: Record<string, string | number>) => string;
+
+function translate(lang: Lang, key: string, vars?: Record<string, string | number>): string {
+  const table = DICTS[lang] ?? zh;
+  let text = table[key] ?? DICTS.en[key] ?? key;
+  if (vars) {
+    for (const [name, value] of Object.entries(vars)) {
+      text = text.replace(new RegExp(`\\{${name}\\}`, "g"), String(value));
+    }
+  }
+  return text;
+}
+
+interface LangContextValue {
+  lang: Lang;
+  setLang: (lang: Lang) => void;
+  t: Translate;
+}
+
+const LangContext = createContext<LangContextValue | null>(null);
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const [lang, setLangState] = useState<Lang>(resolveInitialLang);
+  const setLang = (next: Lang): void => {
+    persistLang(next);
+    setLangState(next);
+  };
+  const value: LangContextValue = {
+    lang,
+    setLang,
+    t: (key, vars) => translate(lang, key, vars),
+  };
+  return createElement(LangContext.Provider, { value }, children);
+}
+
+export function useLang(): LangContextValue {
+  const ctx = useContext(LangContext);
+  if (!ctx) {
+    return { lang: "zh", setLang: () => undefined, t: (key) => translate("zh", key) };
+  }
+  return ctx;
+}
+
+export function useT(): Translate {
+  return useLang().t;
+}

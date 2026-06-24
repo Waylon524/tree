@@ -6,8 +6,10 @@ import {
   fetchOutputs,
   isTauri,
 } from "../api";
+import { useT } from "../i18n";
 
 export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => void }) {
+  const t = useT();
   const [files, setFiles] = useState<string[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [selectedForExport, setSelectedForExport] = useState<string[]>([]);
@@ -61,7 +63,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
   const exportFiles = async (mode: "selected" | "all"): Promise<void> => {
     const names = mode === "all" ? files : selectedForExport;
     if (names.length === 0) {
-      setExportMsg(mode === "all" ? "No generated files to export." : "Select files to export.");
+      setExportMsg(mode === "all" ? t("fruits.noneToExport") : t("fruits.selectToExport"));
       return;
     }
     setExporting(true);
@@ -69,7 +71,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
     try {
       const destination = await chooseDestination();
       if (!destination) {
-        setExportMsg("Export cancelled.");
+        setExportMsg(t("fruits.exportCancelled"));
         return;
       }
       const result = await exportOutputs(destination, names);
@@ -91,7 +93,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
   return (
     <div className="card">
       <div className="section-head">
-        <h2>Generated Files</h2>
+        <h2>{t("fruits.title")}</h2>
         <div className="export-actions">
           <button
             className="ghost"
@@ -99,20 +101,20 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
             disabled={exporting || selectedForExport.length === 0}
             onClick={() => void exportFiles("selected")}
           >
-            Export selected
+            {t("fruits.exportSelected")}
           </button>
           <button
             type="button"
             disabled={exporting || files.length === 0}
             onClick={() => void exportFiles("all")}
           >
-            Export all
+            {t("fruits.exportAll")}
           </button>
         </div>
       </div>
       {exportMsg && <p className={exportMsg.includes("failed") ? "errors" : "hint"}>{exportMsg}</p>}
       {files.length === 0 ? (
-        <p className="muted">No generated files yet.</p>
+        <p className="muted">{t("fruits.empty")}</p>
       ) : (
         <ul className="outputs file-list">
           {files.map((name) => (

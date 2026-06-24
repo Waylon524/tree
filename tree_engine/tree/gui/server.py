@@ -700,6 +700,7 @@ def _stage_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
             active = [labels.get(item, item) for item in active]
         rows.append(
             {
+                "key": key,
                 "label": stage.get("label") or label,
                 "done": done,
                 "total": total,

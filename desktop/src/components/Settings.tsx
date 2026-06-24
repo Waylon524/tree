@@ -2,14 +2,10 @@ import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { fetchSettings, saveSettings } from "../api";
 import type { RoleKey, RoleModels, SettingsData, SettingsSave } from "../api";
+import { useLang, useT } from "../i18n";
+import { Materials } from "./Materials";
 
-const ROLES: Array<{ key: RoleKey; label: string }> = [
-  { key: "examiner", label: "Examiner" },
-  { key: "student", label: "Student" },
-  { key: "writer", label: "Writer" },
-  { key: "archivist", label: "Archivist" },
-  { key: "dagger", label: "Dagger" },
-];
+const ROLES: RoleKey[] = ["examiner", "student", "writer", "archivist", "dagger"];
 
 const EMPTY_ROLE_MODELS: RoleModels = {
   examiner: "",
@@ -44,10 +40,13 @@ function fieldsFromSettings(settings: SettingsData): SettingsSave {
 }
 
 export function Settings() {
+  const t = useT();
+  const { lang, setLang } = useLang();
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [fields, setFields] = useState<SettingsSave>(EMPTY_FIELDS);
   const [busy, setBusy] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
+  const [ok, setOk] = useState<boolean>(false);
 
   useEffect(() => {
     fetchSettings()
@@ -55,7 +54,10 @@ export function Settings() {
         setSettings(data);
         setFields(fieldsFromSettings(data));
       })
-      .catch((err: unknown) => setMessage(String(err)));
+      .catch((err: unknown) => {
+        setOk(false);
+        setMessage(String(err));
+      });
   }, []);
 
   const set = (key: keyof Omit<SettingsSave, "role_models">) => (
@@ -85,8 +87,10 @@ export function Settings() {
       const saved = await saveSettings(payload);
       setSettings(saved);
       setFields(fieldsFromSettings(saved));
-      setMessage("Saved global settings.");
+      setOk(true);
+      setMessage(t("settings.saved"));
     } catch (err) {
+      setOk(false);
       setMessage(String(err));
     } finally {
       setBusy(false);
@@ -94,101 +98,127 @@ export function Settings() {
   };
 
   return (
-    <section className="card settings-card">
-      <div className="section-head">
-        <h2>Settings</h2>
-        {settings && <span className="hint">{settings.config_path}</span>}
-      </div>
+    <div className="tend">
+      <Materials />
 
-      <form className="settings-form" onSubmit={(event) => void submit(event)}>
-        <fieldset>
-          <legend>LLM Provider</legend>
-          <div className="form-grid">
-            <label className="full">
-              <span className="label-row">
-                <span>API key</span>
-                {settings?.llm_api_key_configured && <b>Configured</b>}
-              </span>
-              <input
-                type="text"
-                value={fields.llm_api_key}
-                onChange={set("llm_api_key")}
-                placeholder="API key"
-              />
-            </label>
-            <label>
-              Base URL
-              <input value={fields.llm_base_url} onChange={set("llm_base_url")} />
-            </label>
-            <label>
-              Default model
-              <input value={fields.llm_model} onChange={set("llm_model")} />
-            </label>
+      <section className="card settings-card">
+        <div className="section-head">
+          <h2>{t("tend.title")}</h2>
+          <div className="lang-toggle" role="group" aria-label={t("tend.language")}>
+            <button
+              type="button"
+              className={lang === "zh" ? "active" : ""}
+              onClick={() => setLang("zh")}
+            >
+              {t("tend.lang.zh")}
+            </button>
+            <button
+              type="button"
+              className={lang === "en" ? "active" : ""}
+              onClick={() => setLang("en")}
+            >
+              {t("tend.lang.en")}
+            </button>
           </div>
-
-          <div className="role-grid">
-            {ROLES.map((role) => (
-              <label key={role.key}>
-                {role.label}
-                <input value={fields.role_models[role.key]} onChange={setRole(role.key)} />
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>OCR</legend>
-          <div className="form-grid">
-            <label className="full">
-              <span className="label-row">
-                <span>PaddleOCR key</span>
-                {settings?.paddleocr_api_token_configured && <b>Configured</b>}
-              </span>
-              <input
-                type="text"
-                value={fields.paddleocr_api_token}
-                onChange={set("paddleocr_api_token")}
-                placeholder="API key"
-              />
-            </label>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>Runtime</legend>
-          <div className="form-grid">
-            <label>
-              llama-server context
-              <input
-                type="number"
-                min="1024"
-                max="32768"
-                step="1"
-                value={fields.llama_server_ctx}
-                onChange={set("llama_server_ctx")}
-              />
-            </label>
-            <label>
-              Source MTU chunk tokens
-              <input
-                type="number"
-                min="500"
-                max="32768"
-                step="1"
-                value={fields.source_mtu_chunk_tokens}
-                onChange={set("source_mtu_chunk_tokens")}
-              />
-            </label>
-          </div>
-        </fieldset>
-
-        <div className="form-actions">
-          <button type="submit" disabled={busy}>
-            {busy ? "Saving..." : "Save settings"}
-          </button>
-          {message && <span className={message.startsWith("Saved") ? "ok" : "errors"}>{message}</span>}
         </div>
-      </form>
-    </section>
+        {settings && <span className="hint">{settings.config_path}</span>}
+
+        <form className="settings-form" onSubmit={(event) => void submit(event)}>
+          <fieldset>
+            <legend>
+              {t("tend.fertilizer")} <small className="legend-note">({t("tend.note.llm")})</small>
+            </legend>
+            <div className="form-grid">
+              <label className="full">
+                <span className="label-row">
+                  <span>{t("settings.apiKey")}</span>
+                  {settings?.llm_api_key_configured && <b>{t("settings.configured")}</b>}
+                </span>
+                <input
+                  type="text"
+                  value={fields.llm_api_key}
+                  onChange={set("llm_api_key")}
+                  placeholder={t("settings.apiKey")}
+                />
+              </label>
+              <label>
+                {t("settings.baseUrl")}
+                <input value={fields.llm_base_url} onChange={set("llm_base_url")} />
+              </label>
+              <label>
+                {t("settings.defaultModel")}
+                <input value={fields.llm_model} onChange={set("llm_model")} />
+              </label>
+            </div>
+
+            <div className="role-grid">
+              {ROLES.map((role) => (
+                <label key={role}>
+                  {t(`role.${role}`)}
+                  <input value={fields.role_models[role]} onChange={setRole(role)} />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>
+              {t("tend.gather")} <small className="legend-note">({t("tend.note.ocr")})</small>
+            </legend>
+            <div className="form-grid">
+              <label className="full">
+                <span className="label-row">
+                  <span>{t("settings.paddleKey")}</span>
+                  {settings?.paddleocr_api_token_configured && <b>{t("settings.configured")}</b>}
+                </span>
+                <input
+                  type="text"
+                  value={fields.paddleocr_api_token}
+                  onChange={set("paddleocr_api_token")}
+                  placeholder={t("settings.apiKey")}
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>
+              {t("tend.climate")} <small className="legend-note">({t("tend.note.runtime")})</small>
+            </legend>
+            <div className="form-grid">
+              <label>
+                {t("settings.llamaCtx")}
+                <input
+                  type="number"
+                  min="1024"
+                  max="32768"
+                  step="1"
+                  value={fields.llama_server_ctx}
+                  onChange={set("llama_server_ctx")}
+                />
+              </label>
+              <label>
+                {t("settings.mtuChunk")}
+                <input
+                  type="number"
+                  min="500"
+                  max="32768"
+                  step="1"
+                  value={fields.source_mtu_chunk_tokens}
+                  onChange={set("source_mtu_chunk_tokens")}
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <div className="form-actions">
+            <button type="submit" disabled={busy}>
+              {busy ? t("common.saving") : t("settings.save")}
+            </button>
+            {message && <span className={ok ? "ok" : "errors"}>{message}</span>}
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }

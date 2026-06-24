@@ -14,6 +14,7 @@ import {
   submitLearningFeedback,
 } from "../api";
 import type { RawOutput } from "../api";
+import { useT } from "../i18n";
 
 export interface ReaderTarget {
   name: string;
@@ -28,11 +29,14 @@ interface ReaderProps {
 }
 
 export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
+  const t = useT();
   const [output, setOutput] = useState<RawOutput | null>(null);
   const [error, setError] = useState<string>("");
   const [exporting, setExporting] = useState<boolean>(false);
   const [exportMsg, setExportMsg] = useState<string>("");
+  const [exportOk, setExportOk] = useState<boolean>(true);
   const [learningMsg, setLearningMsg] = useState<string>("");
+  const [learningOk, setLearningOk] = useState<boolean>(true);
   const [feedback, setFeedback] = useState<string>("");
   const [feedbackBusy, setFeedbackBusy] = useState<boolean>(false);
   const [readBusy, setReadBusy] = useState<boolean>(false);
@@ -60,15 +64,21 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
     let active = true;
     openLearningNode(target.nodeId)
       .then(() => {
-        if (active) setLearningMsg("Reading progress saved.");
+        if (active) {
+          setLearningOk(true);
+          setLearningMsg(t("reader.progressSaved"));
+        }
       })
       .catch((err: unknown) => {
-        if (active) setLearningMsg(err instanceof Error ? err.message : String(err));
+        if (active) {
+          setLearningOk(false);
+          setLearningMsg(err instanceof Error ? err.message : String(err));
+        }
       });
     return () => {
       active = false;
     };
-  }, [target.from, target.nodeId]);
+  }, [target.from, target.nodeId, t]);
 
   const chooseDestination = async (): Promise<string | null> => {
     if (isTauri()) return chooseExportDirectory();
@@ -81,14 +91,17 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
     try {
       const destination = await chooseDestination();
       if (!destination) {
-        setExportMsg("Export cancelled.");
+        setExportOk(false);
+        setExportMsg(t("fruits.exportCancelled"));
         return;
       }
       const result = await exportOutputs(destination, [target.name]);
       const failed = result.failed.length ? `, failed ${result.failed.length}` : "";
       const skipped = result.skipped.length ? `, skipped ${result.skipped.length}` : "";
+      setExportOk(result.failed.length === 0);
       setExportMsg(`Exported ${result.exported.length}${skipped}${failed}.`);
     } catch (err) {
+      setExportOk(false);
       setExportMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(false);
@@ -101,8 +114,10 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
     setLearningMsg("");
     try {
       await markLearningNodeRead(target.nodeId, true);
-      setLearningMsg("Marked as read.");
+      setLearningOk(true);
+      setLearningMsg(t("reader.marked"));
     } catch (err) {
+      setLearningOk(false);
       setLearningMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setReadBusy(false);
@@ -118,8 +133,10 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
       const updated = await fetchOutputRaw(target.name);
       setOutput(updated);
       setFeedback("");
-      setLearningMsg("Feedback applied. Please reread this node.");
+      setLearningOk(true);
+      setLearningMsg(t("reader.feedbackApplied"));
     } catch (err) {
+      setLearningOk(false);
       setLearningMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setFeedbackBusy(false);
@@ -133,46 +150,40 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
           <h1>{target.name}</h1>
           {output && (
             <p className="muted">
-              {formatBytes(output.size_bytes)} · Updated {formatDate(output.updated_at)}
+              {formatBytes(output.size_bytes)} · {t("common.updated")} {formatDate(output.updated_at)}
             </p>
           )}
         </div>
         <div className="reader-actions">
-          <button className="ghost" type="button" onClick={target.from === "dag" ? onBackToDag : onBackToOutputs}>
-            Back
-          </button>
-          <button className="ghost" type="button" onClick={onBackToDag}>
-            Back to DAG
-          </button>
-          <button className="ghost" type="button" onClick={onBackToOutputs}>
-            Back to Generated Files
+          <button
+            className="ghost"
+            type="button"
+            onClick={target.from === "dag" ? onBackToDag : onBackToOutputs}
+          >
+            {target.from === "dag" ? t("reader.backToHarvest") : t("reader.backToFruits")}
           </button>
           <button type="button" onClick={() => void exportCurrent()} disabled={exporting}>
-            {exporting ? "Exporting..." : "Export this file"}
+            {exporting ? t("reader.exporting") : t("reader.export")}
           </button>
           {target.nodeId && (
             <button type="button" onClick={() => void markRead()} disabled={readBusy}>
-              {readBusy ? "Saving..." : "完成阅读"}
+              {readBusy ? t("reader.marking") : t("reader.markRead")}
             </button>
           )}
         </div>
       </header>
 
-      {exportMsg && <p className={exportMsg.includes("failed") ? "errors" : "ok"}>{exportMsg}</p>}
-      {learningMsg && (
-        <p className={learningMsg.includes("failed") || learningMsg.includes("Error") ? "errors" : "ok"}>
-          {learningMsg}
-        </p>
-      )}
+      {exportMsg && <p className={exportOk ? "ok" : "errors"}>{exportMsg}</p>}
+      {learningMsg && <p className={learningOk ? "ok" : "errors"}>{learningMsg}</p>}
       {error && <p className="errors">{error}</p>}
-      {!output && !error && <p className="muted">Loading output...</p>}
+      {!output && !error && <p className="muted">{t("common.loading")}</p>}
       {target.nodeId && output && (
         <section className="reader-feedback" aria-label="Learning feedback">
-          <h2>反馈微调</h2>
+          <h2>{t("reader.feedback")}</h2>
           <textarea
             value={feedback}
             onChange={(event) => setFeedback(event.target.value)}
-            placeholder="例如：这里没有讲清楚公式里的符号含义，或者缺少一个推导步骤。"
+            placeholder={t("reader.feedbackPlaceholder")}
             rows={4}
           />
           <div className="reader-feedback-actions">
@@ -181,17 +192,14 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
               onClick={() => void submitFeedback()}
               disabled={feedbackBusy || !feedback.trim()}
             >
-              {feedbackBusy ? "Revising..." : "提交反馈"}
+              {feedbackBusy ? t("reader.revising") : t("reader.submit")}
             </button>
           </div>
         </section>
       )}
       {output && (
         <article className="reader-markdown">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-          >
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
             {output.markdown}
           </ReactMarkdown>
         </article>

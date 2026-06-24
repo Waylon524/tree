@@ -12,15 +12,16 @@ import {
   stopPipeline,
 } from "./api";
 import type { ExtensionState } from "./api";
+import { useT } from "./i18n";
 import { useProgress } from "./useProgress";
 import { ProgressPanel } from "./components/ProgressPanel";
-import { Materials } from "./components/Materials";
 import { Outputs } from "./components/Outputs";
 import { Settings } from "./components/Settings";
 import { ProjectLibrary } from "./components/ProjectLibrary";
+import { Seedling } from "./components/illustrations";
 import type { ReaderTarget } from "./components/Reader";
 
-type Page = "overview" | "materials" | "outputs" | "dag" | "reader" | "settings";
+type Page = "grow" | "fruits" | "harvest" | "reader" | "tend";
 
 const LazyDagWorkbench = lazy(() =>
   import("./components/DagWorkbench").then((module) => ({
@@ -34,12 +35,11 @@ const LazyReader = lazy(() =>
   })),
 );
 
-const PAGES: Array<{ key: Page; label: string }> = [
-  { key: "overview", label: "Overview" },
-  { key: "materials", label: "Imported Files" },
-  { key: "outputs", label: "Generated Files" },
-  { key: "dag", label: "知识图谱" },
-  { key: "settings", label: "Settings" },
+const NAV: Array<{ key: Page; labelKey: string }> = [
+  { key: "grow", labelKey: "nav.grow" },
+  { key: "fruits", labelKey: "nav.fruits" },
+  { key: "harvest", labelKey: "nav.harvest" },
+  { key: "tend", labelKey: "nav.tend" },
 ];
 
 export function App({ initialBootstrap }: { initialBootstrap: AppBootstrap | null }) {
@@ -99,13 +99,12 @@ export function App({ initialBootstrap }: { initialBootstrap: AppBootstrap | nul
 }
 
 function TokenGate({ onToken }: { onToken: (value: string) => void }) {
+  const t = useT();
   const [value, setValue] = useState<string>("");
   return (
     <div className="gate">
       <h1 className="brand">T.R.E.E.</h1>
-      <p className="muted">
-        Paste the token from the <code>tre gui</code> URL (the part after <code>?token=</code>).
-      </p>
+      <p className="muted">{t("gate.token.desc")}</p>
       <input
         value={value}
         onChange={(event: ChangeEvent<HTMLInputElement>) => setValue(event.target.value)}
@@ -120,13 +119,14 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
           }
         }}
       >
-        Connect
+        {t("gate.token.connect")}
       </button>
     </div>
   );
 }
 
 function ExtensionGate({ token, children }: { token: string; children: JSX.Element }) {
+  const t = useT();
   const [extension, setExtension] = useState<ExtensionState | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
@@ -152,9 +152,9 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
             detail.includes("Failed to fetch") ||
             detail.includes("NetworkError");
           if (transient && failures.current < 10) {
-            setError("Starting local TREE service. Retrying...");
+            setError(t("gate.soil.starting"));
           } else {
-            setError(`Could not connect to local TREE service. ${detail}`);
+            setError(`${t("gate.soil.failed")} ${detail}`);
           }
         });
     };
@@ -164,7 +164,7 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
       active = false;
       if (timer) window.clearInterval(timer);
     };
-  }, [token, shouldPoll]);
+  }, [token, shouldPoll, t]);
 
   const install = async (): Promise<void> => {
     setBusy(true);
@@ -182,34 +182,34 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
 
   const progress = extension?.progress ?? 0;
   const phase = extension?.phase ?? "checking";
-  const message = error || extension?.message || "Checking embedding extension...";
+  const message = error || extension?.message || t("gate.soil.checking");
 
   return (
     <div className="gate extension-gate">
       <h1 className="brand">T.R.E.E.</h1>
-      <section className="card">
-        <h2>Embedding Extension</h2>
-        <p className="muted">
-          TREE needs the local embedding extension before the workspace can run.
-        </p>
-        <div className="extension-status">
-          <span className={`pill phase-${phase}`}>{phase}</span>
-          <span className={error ? "errors" : "hint"}>{message}</span>
-        </div>
-        {(extension?.status === "installing" || busy) && (
-          <div className="progress-row">
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${Math.max(5, progress)}%` }} />
-            </div>
-            <span className="stage-pct">{progress}%</span>
+      <section className="card soil-card">
+        <Seedling />
+        <div>
+          <h2>{t("gate.soil.title")}</h2>
+          <p className="muted">{t("gate.soil.desc")}</p>
+          <div className="extension-status">
+            <span className={`pill phase-${phase}`}>{phase}</span>
+            <span className={error ? "errors" : "hint"}>{message}</span>
           </div>
-        )}
-        <button
-          onClick={() => void install()}
-          disabled={busy || extension?.status === "installing"}
-        >
-          {extension?.status === "installing" || busy ? "Installing..." : "Install extension"}
-        </button>
+          {(extension?.status === "installing" || busy) && (
+            <div className="progress-row">
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${Math.max(5, progress)}%` }} />
+              </div>
+              <span className="stage-pct">{progress}%</span>
+            </div>
+          )}
+          <button onClick={() => void install()} disabled={busy || extension?.status === "installing"}>
+            {extension?.status === "installing" || busy
+              ? t("gate.soil.installing")
+              : t("gate.soil.install")}
+          </button>
+        </div>
       </section>
     </div>
   );
@@ -224,8 +224,9 @@ function Dashboard({
   project: ProjectSummary | null;
   onSwitchProject?: () => void;
 }) {
+  const t = useT();
   const { status, connected } = useProgress(token);
-  const [page, setPage] = useState<Page>("overview");
+  const [page, setPage] = useState<Page>("grow");
   const [readerTarget, setReaderTarget] = useState<ReaderTarget | null>(null);
   const [selectedDagNodeId, setSelectedDagNodeId] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
@@ -250,54 +251,62 @@ function Dashboard({
       <header className="bar">
         <span className="brand">T.R.E.E.</span>
         <nav className="tabs" aria-label="Primary">
-          {PAGES.map((item) => (
+          {NAV.map((item) => (
             <button
               key={item.key}
               className={`tab ${page === item.key ? "active" : ""}`}
               onClick={() => setPage(item.key)}
               type="button"
             >
-              {item.label}
+              {t(item.labelKey)}
             </button>
           ))}
         </nav>
         {project && onSwitchProject && (
           <button className="project-chip" type="button" onClick={onSwitchProject}>
             <span>{project.name}</span>
-            <small>Switch</small>
+            <small>{t("common.switch")}</small>
           </button>
         )}
         <div className="bar-status">
           {status && (
-            <span className={`pill engine-${status.engine}`}>engine: {status.engine}</span>
+            <span className={`pill engine-${status.engine}`}>
+              {t("engine.label")}: {status.engine}
+            </span>
           )}
           <span className={`conn ${connected ? "on" : "off"}`}>
-            {connected ? "live" : "connecting…"}
+            {connected ? t("conn.live") : t("conn.connecting")}
           </span>
         </div>
       </header>
-      <main className={page === "dag" ? "main-dag" : page === "reader" ? "main-reader" : undefined}>
-        {page === "overview" && (
-          <section className="card">
+      <main className={page === "harvest" ? "main-dag" : page === "reader" ? "main-reader" : undefined}>
+        {page === "grow" && (
+          <section className="card grow-card">
+            <div className="grow-head">
+              <div>
+                <h2 className="grow-title">{t("grow.heading")}</h2>
+                <p className="muted">{t("grow.subtitle")}</p>
+              </div>
+              {status && <span className={`pill phase-${status.phase}`}>{status.phase}</span>}
+            </div>
             <div className="controls">
               <button onClick={() => void guard(runPipeline)()} disabled={busy}>
-                Run
+                {t("grow.grow")}
               </button>
               <button className="ghost" onClick={() => void guard(stopPipeline)()} disabled={busy}>
-                Stop
+                {t("grow.rest")}
               </button>
-              {status && <span className={`pill phase-${status.phase}`}>{status.phase}</span>}
             </div>
             <ProgressPanel status={status} />
           </section>
         )}
-        {page === "materials" && <Materials />}
-        {page === "outputs" && (
+        {page === "fruits" && (
           <Outputs onReadOutput={(name) => openReader({ name, from: "outputs" })} />
         )}
-        {page === "dag" && (
+        {page === "harvest" && (
           <Suspense fallback={<DagLoading />}>
             <LazyDagWorkbench
+              status={status}
               selectedNodeId={selectedDagNodeId}
               onSelectedNodeChange={setSelectedDagNodeId}
               onReadOutput={(name, nodeId) => openReader({ name, from: "dag", nodeId })}
@@ -308,29 +317,31 @@ function Dashboard({
           <Suspense fallback={<ReaderLoading />}>
             <LazyReader
               target={readerTarget}
-              onBackToDag={() => setPage("dag")}
-              onBackToOutputs={() => setPage("outputs")}
+              onBackToDag={() => setPage("harvest")}
+              onBackToOutputs={() => setPage("fruits")}
             />
           </Suspense>
         )}
-        {page === "settings" && <Settings />}
+        {page === "tend" && <Settings />}
       </main>
     </div>
   );
 }
 
 function DagLoading() {
+  const t = useT();
   return (
     <section className="dag-loading" aria-label="Loading knowledge graph">
-      <span className="pill">Loading Graph</span>
+      <span className="pill">{t("common.loading")}</span>
     </section>
   );
 }
 
 function ReaderLoading() {
+  const t = useT();
   return (
     <section className="card" aria-label="Loading reader">
-      <span className="pill">Loading Reader</span>
+      <span className="pill">{t("common.loading")}</span>
     </section>
   );
 }

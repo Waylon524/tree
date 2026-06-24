@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { initApi } from "./api";
+import { LanguageProvider } from "./i18n";
 import "./styles.css";
 
 const rootEl = document.getElementById("root");
@@ -12,7 +13,9 @@ if (!rootEl) throw new Error("root element missing");
 void initApi().then((initialBootstrap) => {
   createRoot(rootEl).render(
     <StrictMode>
-      <App initialBootstrap={initialBootstrap} />
+      <LanguageProvider>
+        <App initialBootstrap={initialBootstrap} />
+      </LanguageProvider>
     </StrictMode>,
   );
 });

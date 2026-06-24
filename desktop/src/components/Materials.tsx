@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchImportedFiles, listMaterials, uploadMaterials } from "../api";
 import type { ImportedFile } from "../api";
+import { useT } from "../i18n";
+import { FruitTreeMark } from "./illustrations";
 
 export function Materials() {
+  const t = useT();
   const [items, setItems] = useState<ImportedFile[]>([]);
   const [msg, setMsg] = useState<string>("");
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
@@ -29,8 +32,8 @@ export function Materials() {
     if (!files || files.length === 0) return;
     try {
       const res = await uploadMaterials("default", files);
-      const skipped = res.skipped.length ? `, skipped ${res.skipped.length}` : "";
-      setMsg(`Imported ${res.saved.length}${skipped}.`);
+      const skipped = res.skipped.length ? t("seeds.skipped", { n: res.skipped.length }) : "";
+      setMsg(t("seeds.imported", { n: res.saved.length, skipped }));
       if (fileRef.current) fileRef.current.value = "";
       setSelectedNames([]);
       refresh();
@@ -41,7 +44,10 @@ export function Materials() {
 
   return (
     <div className="card">
-      <h2>Imported Files</h2>
+      <div className="section-head seeds-head">
+        <h2>{t("seeds.title")}</h2>
+        <FruitTreeMark fruits={0} size={40} />
+      </div>
       <div className="controls">
         <input
           ref={fileRef}
@@ -54,36 +60,42 @@ export function Materials() {
           }}
         />
         <button className="ghost" type="button" onClick={() => fileRef.current?.click()}>
-          Choose files
+          {t("seeds.choose")}
         </button>
         <button onClick={() => void onUpload()} disabled={selectedNames.length === 0}>
-          Import
+          {t("seeds.import")}
         </button>
         {msg && <span className="hint">{msg}</span>}
       </div>
       {selectedNames.length > 0 && (
         <p className="hint selected-files">
-          Selected {selectedNames.length}: {selectedNames.slice(0, 3).join(", ")}
+          {t("seeds.selected", { n: selectedNames.length })}: {selectedNames.slice(0, 3).join(", ")}
           {selectedNames.length > 3 ? "..." : ""}
         </p>
       )}
       {items.length === 0 ? (
-        <p className="muted">No imported files yet.</p>
+        <p className="muted">{t("seeds.empty")}</p>
       ) : (
         <ul className="imported-list">
           {items.map((item) => (
             <li className="imported-item" key={item.id}>
               <div className="imported-title">
                 <b>{item.original_name}</b>
-                <span className={`pill import-${item.status}`}>{item.status}</span>
+                <span className={`pill import-${item.status}`}>
+                  {item.status === "missing" ? t("seeds.missing") : t("seeds.active")}
+                </span>
               </div>
               <div className="imported-meta">
-                {item.collection !== "default" && <span>Source group: {item.collection}</span>}
-                <span>{formatBytes(item.size_bytes)}</span>
-                <span>{formatImportedAt(item.imported_at)}</span>
+                {item.collection !== "default" && (
+                  <span>
+                    {t("seeds.sourceGroup")}: {item.collection}
+                  </span>
+                )}
+                <span>{item.size_bytes ? formatBytes(item.size_bytes) : t("seeds.sizeUnknown")}</span>
+                <span>{item.imported_at ? formatImportedAt(item.imported_at) : t("seeds.legacy")}</span>
               </div>
               {item.original_name !== item.stored_name && (
-                <p className="hint">Stored as {item.stored_name}</p>
+                <p className="hint">{t("seeds.storedAs", { name: item.stored_name })}</p>
               )}
             </li>
           ))}
@@ -110,14 +122,12 @@ function importedFileFromLegacyName(name: string): ImportedFile {
 }
 
 function formatBytes(value: number): string {
-  if (!value) return "Size unknown";
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatImportedAt(value: string): string {
-  if (!value) return "Legacy file";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();

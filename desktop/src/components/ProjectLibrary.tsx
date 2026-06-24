@@ -9,6 +9,8 @@ import {
   renameProject,
   selectProject,
 } from "../api";
+import { useT } from "../i18n";
+import { FruitTreeMark, OrchardScene } from "./illustrations";
 
 interface ProjectLibraryProps {
   bootstrap: AppBootstrap;
@@ -23,14 +25,14 @@ export function ProjectLibrary({
   onBootstrapChange,
   onBack,
 }: ProjectLibraryProps) {
+  const t = useT();
   const [projects, setProjects] = useState<ProjectSummary[]>(bootstrap.projects);
   const [currentProject, setCurrentProject] = useState<ProjectSummary | null>(
     bootstrap.current_project,
   );
-  const [selectedId, setSelectedId] = useState<string>(
-    bootstrap.current_project?.id ?? bootstrap.projects[0]?.id ?? "",
-  );
   const [name, setName] = useState<string>("");
+  const [editingId, setEditingId] = useState<string>("");
+  const [uprootId, setUprootId] = useState<string>("");
   const [editName, setEditName] = useState<string>("");
   const [editDescription, setEditDescription] = useState<string>("");
   const [deleteConfirm, setDeleteConfirm] = useState<string>("");
@@ -41,12 +43,6 @@ export function ProjectLibrary({
   useEffect(() => {
     setProjects(bootstrap.projects);
     setCurrentProject(bootstrap.current_project);
-    setSelectedId((previous) => {
-      if (previous && bootstrap.projects.some((project) => project.id === previous)) {
-        return previous;
-      }
-      return bootstrap.current_project?.id ?? bootstrap.projects[0]?.id ?? "";
-    });
   }, [bootstrap.projects, bootstrap.current_project]);
 
   const sortedProjects = useMemo(
@@ -59,29 +55,15 @@ export function ProjectLibrary({
     [projects],
   );
 
-  const selectedProject =
-    sortedProjects.find((project) => project.id === selectedId) ?? sortedProjects[0] ?? null;
-
-  useEffect(() => {
-    setEditName(selectedProject?.name ?? "");
-    setEditDescription(selectedProject?.description ?? "");
-    setDeleteConfirm("");
-  }, [selectedProject?.id, selectedProject?.name, selectedProject?.description]);
-
   const applySelection = (selection: ProjectSelection): void => {
     setProjects(selection.projects);
     setCurrentProject(selection.current_project);
-    setSelectedId(selection.current_project.id);
     onProjectReady(selection);
   };
 
   const applyBootstrap = (next: AppBootstrap): void => {
     setProjects(next.projects);
     setCurrentProject(next.current_project);
-    setSelectedId((previous) => {
-      if (previous && next.projects.some((project) => project.id === previous)) return previous;
-      return next.current_project?.id ?? next.projects[0]?.id ?? "";
-    });
     onBootstrapChange(next);
   };
 
@@ -89,7 +71,7 @@ export function ProjectLibrary({
     event.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) {
-      setError("Project name is required.");
+      setError(t("orchard.nameRequired"));
       return;
     }
     setBusyId("create");
@@ -106,7 +88,7 @@ export function ProjectLibrary({
     }
   };
 
-  const importExisting = async (): Promise<void> => {
+  const graft = async (): Promise<void> => {
     setBusyId("import");
     setError("");
     setMessage("");
@@ -124,7 +106,7 @@ export function ProjectLibrary({
     }
   };
 
-  const open = async (project: ProjectSummary): Promise<void> => {
+  const observe = async (project: ProjectSummary): Promise<void> => {
     setBusyId(`open:${project.id}`);
     setError("");
     setMessage("");
@@ -137,16 +119,25 @@ export function ProjectLibrary({
     }
   };
 
-  const saveDetails = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+  const startRename = (project: ProjectSummary): void => {
+    setUprootId("");
+    setEditingId(project.id);
+    setEditName(project.name);
+    setEditDescription(project.description ?? "");
+    setError("");
+    setMessage("");
+  };
+
+  const saveRename = async (event: FormEvent<HTMLFormElement>, id: string): Promise<void> => {
     event.preventDefault();
-    if (!selectedProject) return;
-    setBusyId(`save:${selectedProject.id}`);
+    setBusyId(`save:${id}`);
     setError("");
     setMessage("");
     try {
-      const next = await renameProject(selectedProject.id, editName, editDescription);
+      const next = await renameProject(id, editName, editDescription);
       applyBootstrap(next);
-      setMessage("Project details saved.");
+      setEditingId("");
+      setMessage(t("orchard.renamed"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -154,15 +145,23 @@ export function ProjectLibrary({
     }
   };
 
-  const removeProject = async (): Promise<void> => {
-    if (!selectedProject) return;
-    setBusyId(`delete:${selectedProject.id}`);
+  const startUproot = (project: ProjectSummary): void => {
+    setEditingId("");
+    setUprootId(project.id);
+    setDeleteConfirm("");
+    setError("");
+    setMessage("");
+  };
+
+  const uproot = async (project: ProjectSummary): Promise<void> => {
+    setBusyId(`delete:${project.id}`);
     setError("");
     setMessage("");
     try {
-      const next = await deleteProject(selectedProject.id, deleteConfirm);
+      const next = await deleteProject(project.id, deleteConfirm);
       applyBootstrap(next);
-      setMessage("Project deleted.");
+      setUprootId("");
+      setMessage(t("orchard.uprooted"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -176,170 +175,162 @@ export function ProjectLibrary({
         <span className="brand">T.R.E.E.</span>
         {onBack && (
           <button className="ghost" type="button" onClick={onBack}>
-            Back to project
+            {t("orchard.back")}
           </button>
         )}
       </header>
       <main className="project-library-main">
-        <section className="project-create">
-          <div>
-            <h1>Projects</h1>
-            <p className="muted">Imported files, generated files, DAG state, and runtime data stay separate.</p>
+        <section className="orchard-banner">
+          <OrchardScene />
+          <div className="orchard-banner-text">
+            <h1>{t("orchard.title")}</h1>
+            <p className="muted">{t("orchard.subtitle")}</p>
           </div>
-          <form className="project-form" onSubmit={(event) => void create(event)}>
-            <input
-              value={name}
-              maxLength={80}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="New project name"
-              aria-label="New project name"
-            />
-            <button type="submit" disabled={busyId === "create"}>
-              {busyId === "create" ? "Creating..." : "Create"}
-            </button>
-            <button
-              className="ghost"
-              type="button"
-              onClick={() => void importExisting()}
-              disabled={busyId === "import"}
-            >
-              {busyId === "import" ? "Importing..." : "Import Existing"}
-            </button>
-          </form>
         </section>
+
+        <form className="project-form" onSubmit={(event) => void create(event)}>
+          <input
+            value={name}
+            maxLength={80}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={t("orchard.newName")}
+            aria-label={t("orchard.newName")}
+          />
+          <button type="submit" disabled={busyId === "create"}>
+            {busyId === "create" ? t("orchard.planting") : t("orchard.plant")}
+          </button>
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => void graft()}
+            disabled={busyId === "import"}
+          >
+            {busyId === "import" ? t("orchard.grafting") : t("orchard.graft")}
+          </button>
+        </form>
 
         {error && <div className="errors project-error">{error}</div>}
         {message && <div className="success project-error">{message}</div>}
 
         {sortedProjects.length === 0 ? (
           <section className="project-empty">
-            <h2>No projects yet</h2>
-            <p className="muted">Create one or import an existing TREE workspace.</p>
+            <h2>{t("orchard.emptyTitle")}</h2>
+            <p className="muted">{t("orchard.emptyHint")}</p>
           </section>
         ) : (
-          <section className="project-workspace" aria-label="Project library">
-            <div className="project-grid" aria-label="Project list">
-              {sortedProjects.map((project) => (
+          <section className="project-grid" aria-label="Project list">
+            {sortedProjects.map((project) => {
+              const isCurrent = currentProject?.id === project.id;
+              return (
                 <article
-                  className={`project-card ${project.id === selectedProject?.id ? "selected" : ""}`}
+                  className={`tree-card ${isCurrent ? "selected" : ""}`}
                   key={project.id}
                 >
-                  <button
-                    className="project-card-main"
-                    type="button"
-                    onClick={() => setSelectedId(project.id)}
-                    aria-pressed={project.id === selectedProject?.id}
-                  >
-                    <span>
+                  <div className="tree-card-head">
+                    <FruitTreeMark fruits={project.output_count} size={52} />
+                    <div className="tree-card-title">
                       <strong>{project.name}</strong>
-                      {currentProject?.id === project.id && <small>Current project</small>}
-                    </span>
-                    <span className="muted">{formatProjectDate(project.last_opened_at)}</span>
-                  </button>
+                      {isCurrent && <small>{t("orchard.currentTree")}</small>}
+                      <span className="muted">{formatProjectDate(project.last_opened_at, t)}</span>
+                    </div>
+                  </div>
+
                   <dl className="project-stats">
                     <div>
-                      <dt>Imported</dt>
+                      <dt>{t("orchard.imported")}</dt>
                       <dd>{project.source_count}</dd>
                     </div>
                     <div>
-                      <dt>Generated</dt>
+                      <dt>{t("orchard.generated")}</dt>
                       <dd>{project.output_count}</dd>
                     </div>
+                    <div>
+                      <dt>{t("orchard.storage")}</dt>
+                      <dd className="stat-small">{formatBytes(project.storage_bytes)}</dd>
+                    </div>
                   </dl>
-                  <button
-                    type="button"
-                    onClick={() => void open(project)}
-                    disabled={busyId === `open:${project.id}`}
-                  >
-                    {busyId === `open:${project.id}` ? "Opening..." : "Open"}
-                  </button>
+
+                  {editingId === project.id ? (
+                    <form
+                      className="tree-edit"
+                      onSubmit={(event) => void saveRename(event, project.id)}
+                    >
+                      <label>
+                        {t("orchard.name")}
+                        <input
+                          value={editName}
+                          maxLength={80}
+                          onChange={(event) => setEditName(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        {t("orchard.description")}
+                        <textarea
+                          value={editDescription}
+                          maxLength={500}
+                          rows={3}
+                          onChange={(event) => setEditDescription(event.target.value)}
+                        />
+                      </label>
+                      <div className="tree-actions">
+                        <button type="submit" disabled={busyId === `save:${project.id}`}>
+                          {busyId === `save:${project.id}` ? t("common.saving") : t("common.save")}
+                        </button>
+                        <button className="ghost" type="button" onClick={() => setEditingId("")}>
+                          {t("common.back")}
+                        </button>
+                      </div>
+                    </form>
+                  ) : uprootId === project.id ? (
+                    <div className="tree-uproot">
+                      <h3>{t("orchard.uprootTitle")}</h3>
+                      <p className="muted">{t("orchard.uprootHint")}</p>
+                      <input
+                        value={deleteConfirm}
+                        onChange={(event) => setDeleteConfirm(event.target.value)}
+                        placeholder={t("orchard.uprootConfirm", { name: project.name })}
+                        aria-label="confirm uproot"
+                      />
+                      <div className="tree-actions">
+                        <button
+                          className="danger"
+                          type="button"
+                          onClick={() => void uproot(project)}
+                          disabled={
+                            deleteConfirm !== project.name || busyId === `delete:${project.id}`
+                          }
+                        >
+                          {busyId === `delete:${project.id}`
+                            ? t("orchard.uprooting")
+                            : t("orchard.uproot")}
+                        </button>
+                        <button className="ghost" type="button" onClick={() => setUprootId("")}>
+                          {t("common.back")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="tree-actions">
+                      <button
+                        type="button"
+                        onClick={() => void observe(project)}
+                        disabled={busyId === `open:${project.id}`}
+                      >
+                        {busyId === `open:${project.id}`
+                          ? t("orchard.observing")
+                          : t("orchard.observe")}
+                      </button>
+                      <button className="ghost" type="button" onClick={() => startRename(project)}>
+                        {t("orchard.rename")}
+                      </button>
+                      <button className="ghost" type="button" onClick={() => startUproot(project)}>
+                        {t("orchard.uproot")}
+                      </button>
+                    </div>
+                  )}
                 </article>
-              ))}
-            </div>
-
-            {selectedProject && (
-              <aside className="project-detail" aria-label="Project details">
-                <div className="project-detail-head">
-                  <div>
-                    <h2>{selectedProject.name}</h2>
-                    <p className="muted">{selectedProject.description || "No description"}</p>
-                  </div>
-                  <span className="pill">{currentProject?.id === selectedProject.id ? "Current" : "Library"}</span>
-                </div>
-
-                <dl className="project-meta-grid">
-                  <div>
-                    <dt>Imported</dt>
-                    <dd>{selectedProject.source_count}</dd>
-                  </div>
-                  <div>
-                    <dt>Generated</dt>
-                    <dd>{selectedProject.output_count}</dd>
-                  </div>
-                  <div>
-                    <dt>Storage</dt>
-                    <dd>{formatBytes(selectedProject.storage_bytes)}</dd>
-                  </div>
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{formatDate(selectedProject.created_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{formatDate(selectedProject.updated_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Last Opened</dt>
-                    <dd>{formatDate(selectedProject.last_opened_at)}</dd>
-                  </div>
-                </dl>
-
-                <form className="project-settings-form" onSubmit={(event) => void saveDetails(event)}>
-                  <label>
-                    Name
-                    <input
-                      value={editName}
-                      maxLength={80}
-                      onChange={(event) => setEditName(event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Description
-                    <textarea
-                      value={editDescription}
-                      maxLength={500}
-                      rows={4}
-                      onChange={(event) => setEditDescription(event.target.value)}
-                    />
-                  </label>
-                  <button type="submit" disabled={busyId === `save:${selectedProject.id}`}>
-                    {busyId === `save:${selectedProject.id}` ? "Saving..." : "Save details"}
-                  </button>
-                </form>
-
-                <section className="project-danger" aria-label="Delete project">
-                  <h3>Delete Project</h3>
-                  <p className="muted">This removes the managed project copy and cannot be undone.</p>
-                  <input
-                    value={deleteConfirm}
-                    onChange={(event) => setDeleteConfirm(event.target.value)}
-                    placeholder={`Type ${selectedProject.name}`}
-                    aria-label="Project delete confirmation"
-                  />
-                  <button
-                    className="danger"
-                    type="button"
-                    onClick={() => void removeProject()}
-                    disabled={
-                      deleteConfirm !== selectedProject.name ||
-                      busyId === `delete:${selectedProject.id}`
-                    }
-                  >
-                    {busyId === `delete:${selectedProject.id}` ? "Deleting..." : "Delete project"}
-                  </button>
-                </section>
-              </aside>
-            )}
+              );
+            })}
           </section>
         )}
       </main>
@@ -347,14 +338,9 @@ export function ProjectLibrary({
   );
 }
 
-function formatProjectDate(seconds: number): string {
-  if (!seconds) return "Never opened";
-  return `Last opened ${new Date(seconds * 1000).toLocaleString()}`;
-}
-
-function formatDate(seconds: number): string {
-  if (!seconds) return "Not yet";
-  return new Date(seconds * 1000).toLocaleString();
+function formatProjectDate(seconds: number, t: ReturnType<typeof useT>): string {
+  if (!seconds) return t("orchard.neverOpened");
+  return `${t("orchard.lastOpened")} ${new Date(seconds * 1000).toLocaleString()}`;
 }
 
 function formatBytes(bytes: number): string {

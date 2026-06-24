@@ -1,4 +1,5 @@
 export interface StageRow {
+  key?: string;
   label: string;
   done: number;
   total: number;
