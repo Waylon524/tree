@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tree.agents.archivist import ArchivistAgent
 from tree.agents.examiner import ExaminerAgent
 from tree.agents.prompts import ARCHIVIST_MTU_PROMPT
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
+from tree.planner.mtu import MtuCoverageError
 from tree.state.models import ExamReconciliationAction, Route
 
 _EXAM_OUTPUT = """## [Next_Knowledge_Point]
@@ -684,6 +687,58 @@ async def test_archivist_cut_mtus_fallback_merges_middle_short_concept_without_g
     assert len(client.calls) == 1
 
 
+async def test_archivist_cut_mtus_fallback_merges_mixed_short_and_example_empty_defines():
+    plan = """{
+      "units": [
+        {"start_line": 1, "end_line": 40, "title": "多元复合函数求导",
+         "defines": ["多元复合函数求导法则"], "summary": "说明多元复合函数求导的链式法则与基本计算边界。",
+         "unit_kind": "concept"},
+        {"start_line": 41, "end_line": 64, "title": "向量值函数求导例题",
+         "defines": [], "summary": "通过例题展示向量值函数求导步骤，不单独引入新的定义公式或方法。",
+         "unit_kind": "concept"},
+        {"start_line": 65, "end_line": 83, "title": "利用一阶微分形式不变性求导",
+         "defines": ["一阶微分形式不变性求导"], "summary": "说明一阶微分形式不变性求导的局部应用片段。",
+         "unit_kind": "concept"},
+        {"start_line": 84, "end_line": 120, "title": "高阶偏导计算",
+         "defines": ["高阶偏导计算"], "summary": "说明高阶偏导计算的顺序规则与典型边界。",
+         "unit_kind": "concept"}
+      ]
+    }"""
+    client = _FakeClient({"archivist": plan})
+    agent = ArchivistAgent(client)
+
+    mtus = await agent.cut_mtus(_markdown_lines(120), collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    assert [mtu.line_range for mtu in mtus] == [(1, 83), (84, 120)]
+    assert mtus[0].title == "多元复合函数求导"
+    assert mtus[0].defines == ["多元复合函数求导法则"]
+    assert mtus[1].title == "高阶偏导计算"
+    assert len(client.calls) == 1
+
+
+async def test_archivist_cut_mtus_fallback_keeps_regular_empty_defines_invalid():
+    plan = """{
+      "units": [
+        {"start_line": 1, "end_line": 30, "title": "连续函数定义",
+         "defines": ["连续函数"], "summary": "说明连续函数的定义与局部性质。",
+         "unit_kind": "concept"},
+        {"start_line": 31, "end_line": 60, "title": "偏导数定义",
+         "defines": [], "summary": "说明偏导数定义的基本内容，但缺少有效定义元数据。",
+         "unit_kind": "concept"},
+        {"start_line": 61, "end_line": 90, "title": "全微分定义",
+         "defines": ["全微分"], "summary": "说明全微分的定义与计算边界。",
+         "unit_kind": "concept"}
+      ]
+    }"""
+    client = _FakeClient({"archivist": plan})
+    agent = ArchivistAgent(client)
+
+    with pytest.raises(MtuCoverageError, match="empty_defines"):
+        await agent.cut_mtus(_markdown_lines(90), collection="课件", source_file="ch1.md", repair_attempts=0)
+
+    assert len(client.calls) == 1
+
+
 async def test_archivist_cut_mtus_repairs_short_units_before_metadata():
     plan = """{
       "units": [
@@ -960,6 +1015,8 @@ def test_archivist_mtu_prompt_emphasizes_strict_metadata_and_coverage():
     assert "at least 20 lines" in ARCHIVIST_MTU_PROMPT
     assert "must never have empty `defines`" in ARCHIVIST_MTU_PROMPT
     assert "do not put \"例题\"" in ARCHIVIST_MTU_PROMPT
+    assert "Defines are graph anchors for later prerequisite edges" in ARCHIVIST_MTU_PROMPT
+    assert "example/exercise/application/case fragments" in ARCHIVIST_MTU_PROMPT
     assert "Program code will merge or remove auxiliary units later" in ARCHIVIST_MTU_PROMPT
     assert "The owning concept may appear before or after the example" in ARCHIVIST_MTU_PROMPT
     assert 'broad reusable base terms such as "频率", "偏振", "光程", or "波长"' in ARCHIVIST_MTU_PROMPT

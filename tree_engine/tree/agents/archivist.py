@@ -162,7 +162,7 @@ class ArchivistAgent(Agent):
                 )
                 if attempt >= repair_attempts:
                     try:
-                        if _merge_short_units_fallback(partition, line_count=line_count):
+                        if _merge_semantic_units_fallback(partition, line_count=line_count):
                             final_plan = {"units": partition["valid_units"]}
                             units, _skipped = validate_and_normalize(final_plan, line_count)
                             units = sorted(units, key=lambda unit: (unit["start_line"], unit["end_line"]))
@@ -679,37 +679,91 @@ def _first_semantic_problem(
     return None
 
 
-def _merge_short_units_fallback(partition: dict[str, Any], *, line_count: int) -> bool:
+_AUXILIARY_EMPTY_DEFINE_MARKERS = (
+    "例题",
+    "习题",
+    "练习",
+    "应用",
+    "案例",
+    "示例",
+    "举例",
+    "题解",
+    "example",
+    "exercise",
+    "application",
+    "case",
+    "practice",
+    "problem",
+)
+
+
+def _merge_semantic_units_fallback(partition: dict[str, Any], *, line_count: int) -> bool:
     if partition["invalid_units"] or partition["missing_ranges"] or partition["overlap_ranges"]:
         return False
     problems = partition["semantic_unit_problems"]
-    if not problems or any(problem.get("problem_type") != "short_unit" for problem in problems):
+    if not problems:
+        return False
+    if not all(_can_fallback_merge_semantic_problem(partition["valid_units"], problem) for problem in problems):
         return False
 
     merged = False
     while True:
-        problem = _first_semantic_problem(partition, {"short_unit"})
+        problem = _first_fallback_merge_problem(partition)
         if problem is None:
+            if partition["semantic_unit_problems"]:
+                raise MtuCoverageError(
+                    "semantic unit fallback failed after merge: "
+                    f"semantic_unit_problems={partition['semantic_unit_problems']}"
+                )
             return merged
-        if not _merge_one_short_unit(partition["valid_units"], problem):
-            raise MtuCoverageError(f"short unit fallback failed for {problem}: no adjacent concept candidate")
+        if not _merge_one_semantic_unit(partition["valid_units"], problem):
+            raise MtuCoverageError(
+                f"semantic unit fallback failed for {problem}: no adjacent concept candidate"
+            )
         merged = True
         _refresh_mtu_partition_problems(partition, line_count=line_count)
         if partition["invalid_units"] or partition["missing_ranges"] or partition["overlap_ranges"]:
             raise MtuCoverageError(
-                "short unit fallback failed after merge: "
+                "semantic unit fallback failed after merge: "
                 f"invalid_units={partition['invalid_units']}; "
                 f"missing_ranges={partition['missing_ranges']}; "
                 f"overlap_ranges={partition['overlap_ranges']}"
             )
-        if any(problem.get("problem_type") != "short_unit" for problem in partition["semantic_unit_problems"]):
-            raise MtuCoverageError(
-                "short unit fallback failed after merge: "
-                f"semantic_unit_problems={partition['semantic_unit_problems']}"
-            )
 
 
-def _merge_one_short_unit(units: list[dict[str, Any]], problem: dict[str, Any]) -> bool:
+def _first_fallback_merge_problem(partition: dict[str, Any]) -> dict[str, Any] | None:
+    for problem in partition["semantic_unit_problems"]:
+        if _can_fallback_merge_semantic_problem(partition["valid_units"], problem):
+            return problem
+    return None
+
+
+def _can_fallback_merge_semantic_problem(units: list[dict[str, Any]], problem: dict[str, Any]) -> bool:
+    problem_type = str(problem.get("problem_type") or "")
+    if problem_type == "short_unit":
+        return True
+    if problem_type != "empty_defines":
+        return False
+    target_index = _semantic_problem_unit_index(units, problem)
+    if target_index is None:
+        return False
+    return _is_auxiliary_empty_define_unit(units[target_index])
+
+
+def _is_auxiliary_empty_define_unit(unit: dict[str, Any]) -> bool:
+    if unit.get("defines"):
+        return False
+    unit_kind = str(unit.get("unit_kind") or "").strip().lower()
+    if unit_kind in {"application", "excercise", "exercise", "review", "summary", "intro"}:
+        return True
+    haystack = " ".join(
+        str(unit.get(field) or "")
+        for field in ("title", "summary")
+    ).casefold()
+    return any(marker.casefold() in haystack for marker in _AUXILIARY_EMPTY_DEFINE_MARKERS)
+
+
+def _merge_one_semantic_unit(units: list[dict[str, Any]], problem: dict[str, Any]) -> bool:
     target_index = _semantic_problem_unit_index(units, problem)
     if target_index is None:
         return False
