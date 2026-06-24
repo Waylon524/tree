@@ -168,6 +168,11 @@ export async function deleteProject(id: string, confirmation: string): Promise<A
   return bootstrap;
 }
 
+export interface ProjectArchiveResult {
+  path: string;
+  bytes: number;
+}
+
 export async function chooseWorkspaceDirectory(): Promise<string | null> {
   if (!isTauri()) return null;
   const { open } = await import("@tauri-apps/plugin-dialog");
@@ -179,12 +184,69 @@ export async function chooseWorkspaceDirectory(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function chooseProjectArchiveDestination(projectName: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const safeName = projectName.replace(/[\\/:*?"<>|]+/g, "_").trim() || "TREE";
+  const selected = await save({
+    title: "Save parent tree archive",
+    defaultPath: `${safeName}.zip`,
+    filters: [{ name: "TREE Parent Tree", extensions: ["zip"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function chooseParentTreeArchive(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title: "Choose parent tree archive",
+    filters: [{ name: "TREE Parent Tree", extensions: ["zip"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 export async function importExistingProject(
   sourcePath: string,
   name?: string,
 ): Promise<ProjectSelection> {
   const selection = await invokeTauri<ProjectSelection>("import_existing_project", {
     sourcePath,
+    name,
+  });
+  setApiConfig(selection.api);
+  return selection;
+}
+
+export async function exportProjectArchive(
+  id: string,
+  destinationPath: string,
+): Promise<ProjectArchiveResult> {
+  return invokeTauri<ProjectArchiveResult>("export_project_archive", { id, destinationPath });
+}
+
+export async function transplantProject(
+  id: string,
+  destinationPath: string,
+  confirmation: string,
+): Promise<AppBootstrap> {
+  const bootstrap = await invokeTauri<AppBootstrap>("transplant_project", {
+    id,
+    destinationPath,
+    confirmation,
+  });
+  applyBootstrapApi(bootstrap);
+  return bootstrap;
+}
+
+export async function importParentTreeArchive(
+  archivePath: string,
+  name?: string,
+): Promise<ProjectSelection> {
+  const selection = await invokeTauri<ProjectSelection>("import_parent_tree_archive", {
+    archivePath,
     name,
   });
   setApiConfig(selection.api);

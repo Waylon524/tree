@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { AppBootstrap, ProjectSelection, ProjectSummary } from "../api";
 import {
-  chooseWorkspaceDirectory,
+  chooseParentTreeArchive,
+  chooseProjectArchiveDestination,
   createProject,
   deleteProject,
-  importExistingProject,
+  exportProjectArchive,
+  importParentTreeArchive,
   renameProject,
   selectProject,
+  transplantProject,
 } from "../api";
 import { useT } from "../i18n";
 import { FruitTreeMark, OrchardScene } from "./illustrations";
@@ -33,9 +36,11 @@ export function ProjectLibrary({
   const [name, setName] = useState<string>("");
   const [editingId, setEditingId] = useState<string>("");
   const [uprootId, setUprootId] = useState<string>("");
+  const [transplantId, setTransplantId] = useState<string>("");
   const [editName, setEditName] = useState<string>("");
   const [editDescription, setEditDescription] = useState<string>("");
   const [deleteConfirm, setDeleteConfirm] = useState<string>("");
+  const [transplantConfirm, setTransplantConfirm] = useState<string>("");
   const [busyId, setBusyId] = useState<string>("");
   const [error, setError] = useState<string>(bootstrap.error ?? "");
   const [message, setMessage] = useState<string>("");
@@ -88,17 +93,33 @@ export function ProjectLibrary({
     }
   };
 
-  const graft = async (): Promise<void> => {
+  const plantParentTree = async (): Promise<void> => {
     setBusyId("import");
     setError("");
     setMessage("");
     try {
-      const sourcePath = await chooseWorkspaceDirectory();
-      if (!sourcePath) return;
+      const archivePath = await chooseParentTreeArchive();
+      if (!archivePath) return;
       const trimmed = name.trim();
-      const selection = await importExistingProject(sourcePath, trimmed || undefined);
+      const selection = await importParentTreeArchive(archivePath, trimmed || undefined);
       setName("");
       applySelection(selection);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const propagate = async (project: ProjectSummary): Promise<void> => {
+    setBusyId(`propagate:${project.id}`);
+    setError("");
+    setMessage("");
+    try {
+      const destination = await chooseProjectArchiveDestination(project.name);
+      if (!destination) return;
+      const result = await exportProjectArchive(project.id, destination);
+      setMessage(t("orchard.propagated", { size: formatBytes(result.bytes) }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -121,6 +142,7 @@ export function ProjectLibrary({
 
   const startRename = (project: ProjectSummary): void => {
     setUprootId("");
+    setTransplantId("");
     setEditingId(project.id);
     setEditName(project.name);
     setEditDescription(project.description ?? "");
@@ -147,8 +169,18 @@ export function ProjectLibrary({
 
   const startUproot = (project: ProjectSummary): void => {
     setEditingId("");
+    setTransplantId("");
     setUprootId(project.id);
     setDeleteConfirm("");
+    setError("");
+    setMessage("");
+  };
+
+  const startTransplant = (project: ProjectSummary): void => {
+    setEditingId("");
+    setUprootId("");
+    setTransplantId(project.id);
+    setTransplantConfirm("");
     setError("");
     setMessage("");
   };
@@ -162,6 +194,24 @@ export function ProjectLibrary({
       applyBootstrap(next);
       setUprootId("");
       setMessage(t("orchard.uprooted"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const transplant = async (project: ProjectSummary): Promise<void> => {
+    setBusyId(`transplant:${project.id}`);
+    setError("");
+    setMessage("");
+    try {
+      const destination = await chooseProjectArchiveDestination(project.name);
+      if (!destination) return;
+      const next = await transplantProject(project.id, destination, transplantConfirm);
+      applyBootstrap(next);
+      setTransplantId("");
+      setMessage(t("orchard.transplanted"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -188,7 +238,7 @@ export function ProjectLibrary({
           </div>
         </section>
 
-        <form className="project-form" onSubmit={(event) => void create(event)}>
+        <form className="project-form project-plant-form" onSubmit={(event) => void create(event)}>
           <input
             value={name}
             maxLength={80}
@@ -197,15 +247,15 @@ export function ProjectLibrary({
             aria-label={t("orchard.newName")}
           />
           <button type="submit" disabled={busyId === "create"}>
-            {busyId === "create" ? t("orchard.planting") : t("orchard.plant")}
+            {busyId === "create" ? t("orchard.planting") : t("orchard.fromSeeds")}
           </button>
           <button
             className="ghost"
             type="button"
-            onClick={() => void graft()}
+            onClick={() => void plantParentTree()}
             disabled={busyId === "import"}
           >
-            {busyId === "import" ? t("orchard.grafting") : t("orchard.graft")}
+            {busyId === "import" ? t("orchard.planting") : t("orchard.fromParentTree")}
           </button>
         </form>
 
@@ -281,6 +331,34 @@ export function ProjectLibrary({
                         </button>
                       </div>
                     </form>
+                  ) : transplantId === project.id ? (
+                    <div className="tree-uproot">
+                      <h3>{t("orchard.transplantTitle")}</h3>
+                      <p className="muted">{t("orchard.transplantHint")}</p>
+                      <input
+                        value={transplantConfirm}
+                        onChange={(event) => setTransplantConfirm(event.target.value)}
+                        placeholder={t("orchard.uprootConfirm", { name: project.name })}
+                        aria-label="confirm transplant"
+                      />
+                      <div className="tree-actions">
+                        <button
+                          type="button"
+                          onClick={() => void transplant(project)}
+                          disabled={
+                            transplantConfirm !== project.name ||
+                            busyId === `transplant:${project.id}`
+                          }
+                        >
+                          {busyId === `transplant:${project.id}`
+                            ? t("orchard.transplanting")
+                            : t("orchard.transplant")}
+                        </button>
+                        <button className="ghost" type="button" onClick={() => setTransplantId("")}>
+                          {t("common.back")}
+                        </button>
+                      </div>
+                    </div>
                   ) : uprootId === project.id ? (
                     <div className="tree-uproot">
                       <h3>{t("orchard.uprootTitle")}</h3>
@@ -322,6 +400,19 @@ export function ProjectLibrary({
                       </button>
                       <button className="ghost" type="button" onClick={() => startRename(project)}>
                         {t("orchard.rename")}
+                      </button>
+                      <button
+                        className="ghost"
+                        type="button"
+                        onClick={() => void propagate(project)}
+                        disabled={busyId === `propagate:${project.id}`}
+                      >
+                        {busyId === `propagate:${project.id}`
+                          ? t("orchard.propagating")
+                          : t("orchard.propagate")}
+                      </button>
+                      <button className="ghost" type="button" onClick={() => startTransplant(project)}>
+                        {t("orchard.transplant")}
                       </button>
                       <button className="ghost" type="button" onClick={() => startUproot(project)}>
                         {t("orchard.uproot")}
