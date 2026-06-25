@@ -1025,6 +1025,24 @@ table.stages td {
   font-variant-numeric: tabular-nums;
 }
 
+.dag-regrow {
+  margin: 10px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prereq-reminder {
+  margin-top: 14px;
+  border: 1px solid color-mix(in srgb, var(--ripe-almost) 55%, var(--border));
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--ripe-almost) 12%, transparent);
+}
+.prereq-reminder .hint {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
 .dag-filter-list {
   display: flex;
   flex-direction: column;
@@ -1809,6 +1827,47 @@ table.stages td {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
+}
+.tree-more {
+  position: relative;
+}
+.tree-more-toggle {
+  white-space: nowrap;
+}
+.tree-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+.tree-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 21;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.tree-menu button {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  box-shadow: none;
+  text-align: left;
+}
+.tree-menu button:hover:not(:disabled) {
+  background: var(--bar-bg);
+}
+.tree-menu .uproot-item {
+  color: var(--failed);
 }
 .tree-edit {
   display: grid;

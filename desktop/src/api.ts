@@ -459,6 +459,12 @@ export async function submitLearningFeedback(
   return (await resp.json()) as FeedbackRevisionResult;
 }
 
+export async function regrowNode(nodeId: string): Promise<void> {
+  await expectOk(
+    await fetch(url(`/api/nodes/${encodeURIComponent(nodeId)}/regrow`), { method: "POST" }),
+  );
+}
+
 export async function listMaterials(): Promise<string[]> {
   const resp = await expectOk(await fetch(url("/api/materials")));
   return ((await resp.json()) as { materials: string[] }).materials;

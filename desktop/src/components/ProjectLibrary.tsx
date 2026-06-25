@@ -42,6 +42,7 @@ export function ProjectLibrary({
   const [deleteConfirm, setDeleteConfirm] = useState<string>("");
   const [transplantConfirm, setTransplantConfirm] = useState<string>("");
   const [busyId, setBusyId] = useState<string>("");
+  const [menuOpenId, setMenuOpenId] = useState<string>("");
   const [error, setError] = useState<string>(bootstrap.error ?? "");
   const [message, setMessage] = useState<string>("");
 
@@ -398,25 +399,69 @@ export function ProjectLibrary({
                           ? t("orchard.observing")
                           : t("orchard.observe")}
                       </button>
-                      <button className="ghost" type="button" onClick={() => startRename(project)}>
-                        {t("orchard.rename")}
-                      </button>
-                      <button
-                        className="ghost"
-                        type="button"
-                        onClick={() => void propagate(project)}
-                        disabled={busyId === `propagate:${project.id}`}
-                      >
-                        {busyId === `propagate:${project.id}`
-                          ? t("orchard.propagating")
-                          : t("orchard.propagate")}
-                      </button>
-                      <button className="ghost" type="button" onClick={() => startTransplant(project)}>
-                        {t("orchard.transplant")}
-                      </button>
-                      <button className="ghost" type="button" onClick={() => startUproot(project)}>
-                        {t("orchard.uproot")}
-                      </button>
+                      <div className="tree-more">
+                        <button
+                          className="ghost tree-more-toggle"
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={menuOpenId === project.id}
+                          onClick={() =>
+                            setMenuOpenId(menuOpenId === project.id ? "" : project.id)
+                          }
+                        >
+                          {t("orchard.more")} ▾
+                        </button>
+                        {menuOpenId === project.id && (
+                          <>
+                            <div className="tree-menu-backdrop" onClick={() => setMenuOpenId("")} />
+                            <div className="tree-menu" role="menu">
+                              <button
+                                className="ghost"
+                                type="button"
+                                onClick={() => {
+                                  setMenuOpenId("");
+                                  startRename(project);
+                                }}
+                              >
+                                {t("orchard.rename")}
+                              </button>
+                              <button
+                                className="ghost"
+                                type="button"
+                                disabled={busyId === `propagate:${project.id}`}
+                                onClick={() => {
+                                  setMenuOpenId("");
+                                  void propagate(project);
+                                }}
+                              >
+                                {busyId === `propagate:${project.id}`
+                                  ? t("orchard.propagating")
+                                  : t("orchard.propagate")}
+                              </button>
+                              <button
+                                className="ghost"
+                                type="button"
+                                onClick={() => {
+                                  setMenuOpenId("");
+                                  startTransplant(project);
+                                }}
+                              >
+                                {t("orchard.transplant")}
+                              </button>
+                              <button
+                                className="ghost uproot-item"
+                                type="button"
+                                onClick={() => {
+                                  setMenuOpenId("");
+                                  startUproot(project);
+                                }}
+                              >
+                                {t("orchard.uproot")}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </article>

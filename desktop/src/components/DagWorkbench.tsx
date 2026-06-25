@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import type { ForceGraphMethods, LinkObject, NodeObject } from "react-force-graph-3d";
 import * as THREE from "three";
-import { fetchDag, openDag } from "../api";
+import { fetchDag, openDag, regrowNode } from "../api";
 import type { DagEdge, DagNode, DagPayload } from "../api";
 import type { Status } from "../types";
 import { useT } from "../i18n";
@@ -98,6 +98,8 @@ export function DagWorkbench({
   const [filter, setFilter] = useState<DagFilter>("all");
   const [canopyScale, setCanopyScale] = useState<number>(1);
   const [showDownstream, setShowDownstream] = useState<boolean>(false);
+  const [regrowBusy, setRegrowBusy] = useState<boolean>(false);
+  const [actionMsg, setActionMsg] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [svgMessage, setSvgMessage] = useState<string>("");
   const graphRef = useRef<GraphRef>(undefined);
@@ -145,6 +147,25 @@ export function DagWorkbench({
   const selected = selectedId ? graph.byId.get(selectedId) : undefined;
   const downstreamActive = showDownstream && Boolean(selected);
 
+  // Unread prerequisite fruit of the selected node — highlighted in 3D and listed
+  // in the inspector so the reader knows what to read first.
+  const unreadAncestorIds = useMemo(() => {
+    if (!selected || downstreamActive) return new Set<string>();
+    const ids = new Set<string>();
+    for (const aid of ancestorsOf(selected.id, graph.byId)) {
+      const node = graph.byId.get(aid);
+      if (node && node.reading_status !== "read") ids.add(aid);
+    }
+    return ids;
+  }, [selected, downstreamActive, graph.byId]);
+  const unreadAncestors = useMemo(
+    () =>
+      [...unreadAncestorIds]
+        .map((id) => graph.byId.get(id))
+        .filter((node): node is DagGraphNode => Boolean(node)),
+    [unreadAncestorIds, graph.byId],
+  );
+
   const visibleIds = useMemo(() => {
     if (downstreamActive && selected) return descendantsOf(selected.id, graph.byId);
     if (filter === "all") return new Set(graph.nodes.map((node) => String(node.id)));
@@ -171,22 +192,45 @@ export function DagWorkbench({
   const focusNode = (node: DagGraphNode): void => {
     onSelectedNodeChange(String(node.id));
     setSvgMessage("");
-    const distance = 80;
-    const x = Number(node.x ?? 0);
-    const y = Number(node.y ?? 0);
-    const z = Number(node.z ?? 0);
-    const length = Math.hypot(x, y, z) || 1;
-    const ratio = 1 + distance / length;
-    graphRef.current?.cameraPosition(
-      { x: x * ratio, y: y * ratio, z: z * ratio },
-      { x, y, z },
-      reducedMotion ? 0 : 900,
+    const graph = graphRef.current;
+    if (!graph) return;
+    const nx = Number(node.x ?? 0);
+    const ny = Number(node.y ?? 0);
+    const nz = Number(node.z ?? 0);
+    const getCamera = graph.cameraPosition as unknown as () => { x: number; y: number; z: number };
+    const cam = getCamera();
+    // Keep the current viewing direction (camera stays on the same side of the
+    // node); just dolly gently toward it so it centers without flipping to a
+    // top-down close-up.
+    const ox = cam.x - nx;
+    const oy = cam.y - ny;
+    const oz = cam.z - nz;
+    const current = Math.hypot(ox, oy, oz) || 1;
+    const target = Math.max(220, current * 0.6); // gentle zoom, not too close
+    const k = target / current;
+    graph.cameraPosition(
+      { x: nx + ox * k, y: ny + oy * k, z: nz + oz * k },
+      { x: nx, y: ny, z: nz },
+      reducedMotion ? 0 : 700,
     );
   };
 
   const focusNodeId = (id: string): void => {
     const node = graph.byId.get(id);
     if (node) focusNode(node);
+  };
+
+  const regrow = async (id: string): Promise<void> => {
+    setRegrowBusy(true);
+    setActionMsg("");
+    try {
+      await regrowNode(id);
+      setActionMsg(t("harvest.regrowQueued"));
+    } catch (err) {
+      setActionMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRegrowBusy(false);
+    }
   };
 
   const runOpenSvg = async (): Promise<void> => {
@@ -312,7 +356,9 @@ export function DagWorkbench({
             nodeLabel={(node) => nodeTooltip(node, t)}
             nodeColor={(node) => node.color}
             nodeVisibility={(node) => visibleIds.has(String(node.id))}
-            nodeThreeObject={(node: DagGraphNode) => makeAppleObject(node, node.id === selectedId)}
+            nodeThreeObject={(node: DagGraphNode) =>
+              makeAppleObject(node, node.id === selectedId, unreadAncestorIds.has(String(node.id)))
+            }
             nodeThreeObjectExtend={false}
             linkVisibility={(link) =>
               visibleIds.has(endpointId(link.source)) && visibleIds.has(endpointId(link.target))
@@ -353,6 +399,10 @@ export function DagWorkbench({
         t={t}
         showDownstream={showDownstream}
         onToggleDownstream={setShowDownstream}
+        unreadAncestors={unreadAncestors}
+        onRegrow={regrow}
+        regrowBusy={regrowBusy}
+        actionMsg={actionMsg}
         onFocus={focusNodeId}
         onReadOutput={onReadOutput}
       />
@@ -366,6 +416,10 @@ function NodeInspector({
   t,
   showDownstream,
   onToggleDownstream,
+  unreadAncestors,
+  onRegrow,
+  regrowBusy,
+  actionMsg,
   onFocus,
   onReadOutput,
 }: {
@@ -374,6 +428,10 @@ function NodeInspector({
   t: Translate;
   showDownstream: boolean;
   onToggleDownstream: (value: boolean) => void;
+  unreadAncestors: DagGraphNode[];
+  onRegrow: (id: string) => void;
+  regrowBusy: boolean;
+  actionMsg: string;
   onFocus: (id: string) => void;
   onReadOutput?: (name: string, nodeId: string) => void;
 }) {
@@ -399,6 +457,14 @@ function NodeInspector({
           </div>
           <h2>{node.title}</h2>
           <p className="muted">{t(`ripe.${node.ripeness}.desc`)}</p>
+          {node.ripeness === "blighted" && (
+            <div className="dag-regrow">
+              <button type="button" onClick={() => onRegrow(String(node.id))} disabled={regrowBusy}>
+                {regrowBusy ? t("harvest.regrowing") : t("harvest.regrow")}
+              </button>
+              {actionMsg && <p className="hint">{actionMsg}</p>}
+            </div>
+          )}
           <label className="downstream-toggle">
             <input
               type="checkbox"
@@ -407,6 +473,24 @@ function NodeInspector({
             />
             {t("harvest.downstream")} <b>{downstreamCount}</b>
           </label>
+          {unreadAncestors.length > 0 && (
+            <div className="dag-inspector-section prereq-reminder">
+              <p className="hint">{t("harvest.prereqReminder", { n: unreadAncestors.length })}</p>
+              <div className="node-link-list">
+                {unreadAncestors.map((ancestor) => (
+                  <button
+                    key={ancestor.id}
+                    type="button"
+                    className="node-link"
+                    onClick={() => onFocus(String(ancestor.id))}
+                  >
+                    <span className={`dag-dot dag-dot-${ancestor.ripeness}`} />
+                    {ancestor.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {node.recommended && node.recommendation_reason && (
             <p className="ok">{node.recommendation_reason}</p>
           )}
@@ -548,9 +632,8 @@ function buildGraph(dag: DagPayload | null, canopyScale: number): DagGraph {
     picked: 0,
     blighted: 0,
   };
-  const learningReady = Boolean(dag?.learning_ready);
   const nodes = (dag?.nodes ?? []).map((node) => {
-    const ripeness = ripenessForNode(node, learningReady);
+    const ripeness = ripenessForNode(node);
     counts[ripeness] += 1;
     const graphNode: DagGraphNode = {
       ...node,
@@ -592,6 +675,23 @@ function descendantsOf(id: string, byId: Map<string, DagGraphNode>): Set<string>
       if (byId.has(dep) && !out.has(dep)) {
         out.add(dep);
         stack.push(dep);
+      }
+    }
+  }
+  return out;
+}
+
+// All transitive prerequisites of a node (its ancestors; excludes the node).
+function ancestorsOf(id: string, byId: Map<string, DagGraphNode>): Set<string> {
+  const out = new Set<string>();
+  const stack = [id];
+  while (stack.length) {
+    const current = stack.pop() as string;
+    const node = byId.get(current);
+    for (const prereq of node?.prerequisites ?? []) {
+      if (byId.has(prereq) && !out.has(prereq)) {
+        out.add(prereq);
+        stack.push(prereq);
       }
     }
   }
@@ -719,13 +819,14 @@ function applyCanopyLayout(
   }
 }
 
-function ripenessForNode(node: DagNode, learningReady: boolean): Ripeness {
+function ripenessForNode(node: DagNode): Ripeness {
   const generation = node.generation_status ?? node.status;
   if (generation === "failed") return "blighted";
   if (generation === "locked") return "set";
   if (generation === "ready") return "unripe";
   if (generation === "running") return "turning";
-  if (!learningReady) return "almost";
+  // generation === "complete": ripeness follows the per-node reading status, so a
+  // base fruit ripens (recommended) even while the upper canopy is still growing.
   const reading = node.reading_status || "unread";
   if (reading === "read") return "picked";
   if (reading === "recommended" || reading === "reading") return "ripe";
@@ -792,7 +893,11 @@ function sortedStrings(items: string[]): string[] {
   return [...items].sort((left, right) => left.localeCompare(right));
 }
 
-function makeAppleObject(node: DagGraphNode, selected: boolean): THREE.Object3D {
+function makeAppleObject(
+  node: DagGraphNode,
+  selected: boolean,
+  highlighted: boolean,
+): THREE.Object3D {
   const meta = RIPENESS_META[node.ripeness];
   const group = new THREE.Group();
   const boost = (Math.min(node.dependents?.length ?? 0, 8) / 8) * 2.4;
@@ -863,6 +968,16 @@ function makeAppleObject(node: DagGraphNode, selected: boolean): THREE.Object3D 
     );
     ring.rotation.x = Math.PI / 2;
     group.add(ring);
+  }
+
+  if (highlighted) {
+    // Unread prerequisite: an amber halo flags "read me before that node".
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(baseR + 5.5, 0.8, 8, 44),
+      new THREE.MeshBasicMaterial({ color: "#f0c468", transparent: true, opacity: 0.9 }),
+    );
+    halo.rotation.x = Math.PI / 2;
+    group.add(halo);
   }
 
   return group;

@@ -176,8 +176,10 @@ def test_dag_payload_labels_edges_and_statuses(workspace):
     assert data["nodes"][0]["label"] == "001. Root"
     assert data["nodes"][0]["output_paths"] == ["outputs/001.Root.md"]
     assert data["nodes"][0]["generation_status"] == "complete"
-    assert data["nodes"][0]["reading_status"] == "unread"
-    assert data["nodes"][0]["recommended"] is False
+    # A generated root fruit ripens (is recommended) even while the upper canopy
+    # is still growing — recommendation is per-node, not gated on whole-tree done.
+    assert data["nodes"][0]["reading_status"] == "recommended"
+    assert data["nodes"][0]["recommended"] is True
     assert data["nodes"][0]["learning_ready"] is False
     assert data["nodes"][1]["prerequisites"] == ["n1"]
     assert data["nodes"][1]["dependents"] == ["n3"]

@@ -54,6 +54,7 @@ from tree.observability.progress import STAGES
 from tree.planner.pipeline import load_dag
 from tree.planner.store import read_json, write_json_atomic
 from tree.planner.svg import write_dag_svg
+from tree.state.manager import StateManager
 from tree.rag.service import (
     embedding_bringup,
     embedding_extension_status,
@@ -182,12 +183,33 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     ) -> dict[str, Any]:
         _require(request)
         feedback = str(payload.get("feedback") or "").strip()
+        # Bring the embedding service up (best-effort) so RAG context is available;
+        # revise_node_from_feedback degrades gracefully if it is still unavailable.
+        threading.Thread(
+            target=_safe_start_embedding, args=(root,), name="tree-feedback-embed", daemon=True
+        ).start()
         try:
             return await revise_node_from_feedback(root, node_id, feedback)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/nodes/{node_id}/regrow")
+    def api_regrow_node(request: Request, node_id: str) -> dict[str, str]:
+        _require(request)
+        manager = StateManager(paths.pipeline_state_path(root))
+        state = manager.load()
+        execution = manager.find_execution(state, node_id)
+        if execution is None:
+            raise HTTPException(status_code=404, detail=f"No run state for node: {node_id}")
+        execution.status = "in_progress"
+        run = manager.find_run(state, execution.node_run_id)
+        if run is not None:
+            manager.reset_node_run(run)
+        manager.save(state)
+        start_engine(root)
+        return {"node_id": node_id, "status": "regrowing"}
 
     @app.get("/api/extension")
     def api_extension(request: Request) -> dict[str, object]:
@@ -630,12 +652,14 @@ def _dag_node_status(
     active: set[str],
     failed: set[str],
 ) -> str:
+    # Covered (output in the ledger) wins over a stale running/active flag, so a
+    # completed node never flickers back to "running" when the engine resumes.
+    if node_id in covered:
+        return "complete"
     if node_id in failed:
         return "failed"
     if node_id in active:
         return "running"
-    if node_id in covered:
-        return "complete"
     if parents.get(node_id, set()) <= covered:
         return "ready"
     return "locked"

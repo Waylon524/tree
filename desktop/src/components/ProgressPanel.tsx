@@ -27,9 +27,6 @@ export function ProgressPanel({ status }: { status: Status | null }) {
         <span className="kv">
           {t("grow.active")} <b>{status.active}</b>
         </span>
-        <span className="kv">
-          {t("grow.embed")} <b>{status.embedding_server}</b> · {status.embedding_backend}
-        </span>
       </div>
       {status.message && <p className="muted">{status.message}</p>}
       <table className="stages">

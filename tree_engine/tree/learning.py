@@ -102,14 +102,14 @@ def reading_view_for_dag(
         for node_id, record in state.nodes.items()
         if record.reading_status == "read" and node_id in node_ids
     }
-    recommended_ids = _recommended_node_ids(node_ids, parents, read_ids) if learning_ready else set()
+    recommended_ids = _recommended_node_ids(node_ids, parents, read_ids, generation_statuses)
 
     view: dict[str, dict[str, Any]] = {}
     for node_id in node_ids:
         record = state.nodes.get(node_id, LearningNodeState())
         status = record.reading_status if record.reading_status in READING_STATUSES else "unread"
         recommended = node_id in recommended_ids
-        if learning_ready and recommended and status == "unread":
+        if recommended and status == "unread":
             status = "recommended"
         view[node_id] = {
             "reading_status": status,
@@ -167,18 +167,18 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
         parents, children = _dag_adjacency(dag.get("edges") or [])
         prior_paths = _prior_output_paths(root, parents, node_id)
         query = f"{node.get('title', node_id)}\n{feedback}"
-        retrieved = rag.query(
-            query,
-            top_k=6,
-            filters={"content_kind": "source", "node_id": [node_id]},
-            include_drafts=False,
+        # RAG context is best-effort: if the embedding service is down the revision
+        # still proceeds from the current text + feedback instead of failing.
+        retrieved = _safe_rag_query(
+            rag, query, top_k=6, filters={"content_kind": "source", "node_id": [node_id]}
         )
-        finished = rag.query(
-            query,
-            top_k=6,
-            filters={"content_kind": "finished", "path": prior_paths},
-            include_drafts=False,
-        ) if prior_paths else []
+        finished = (
+            _safe_rag_query(
+                rag, query, top_k=6, filters={"content_kind": "finished", "path": prior_paths}
+            )
+            if prior_paths
+            else []
+        )
         result = await writer.revise_from_feedback(
             span_title=str(node.get("title") or node_id),
             file_seq=_node_file_seq(nodes, node_id),
@@ -195,7 +195,10 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
 
         backup = _backup_output(root, output_path)
         output_path.write_text(revised + "\n", encoding="utf-8")
-        indexer.index_finished_file(root, node_id, output_path)
+        try:
+            indexer.index_finished_file(root, node_id, output_path)
+        except Exception:
+            pass  # embedding may be down; the revised output is already saved
 
         state = load_learning_state(root)
         node_state = state.nodes.setdefault(node_id, LearningNodeState())
@@ -233,16 +236,29 @@ def _recommended_node_ids(
     node_ids: list[str],
     parents: dict[str, set[str]],
     read_ids: set[str],
+    generation_statuses: dict[str, str],
 ) -> set[str]:
-    ready = [
+    """Per-node recommendation: a generated node whose prerequisites are all read.
+
+    Decoupled from whole-tree completion, so base fruit (no prerequisites, or all
+    prerequisites already read) ripens as soon as it is generated — even while the
+    upper canopy is still growing.
+    """
+    return {
         node_id
         for node_id in node_ids
-        if node_id not in read_ids and parents.get(node_id, set()) <= read_ids
-    ]
-    if ready:
-        return set(ready)
-    unread_roots = [node_id for node_id in node_ids if node_id not in read_ids and not parents.get(node_id)]
-    return set(unread_roots[:1])
+        if generation_statuses.get(node_id) == "complete"
+        and node_id not in read_ids
+        and parents.get(node_id, set()) <= read_ids
+    }
+
+
+def _safe_rag_query(rag: RAGClient, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+    """Query RAG, returning [] if the embedding service is unavailable."""
+    try:
+        return rag.query(query, include_drafts=False, **kwargs)
+    except Exception:
+        return []
 
 
 def _recommendation_reason(

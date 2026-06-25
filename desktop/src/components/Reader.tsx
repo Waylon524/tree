@@ -39,6 +39,7 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
   const [learningOk, setLearningOk] = useState<boolean>(true);
   const [feedback, setFeedback] = useState<string>("");
   const [feedbackBusy, setFeedbackBusy] = useState<boolean>(false);
+  const [feedbackOpen, setFeedbackOpen] = useState<boolean>(false);
   const [readBusy, setReadBusy] = useState<boolean>(false);
 
   useEffect(() => {
@@ -133,6 +134,7 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
       const updated = await fetchOutputRaw(target.name);
       setOutput(updated);
       setFeedback("");
+      setFeedbackOpen(false);
       setLearningOk(true);
       setLearningMsg(t("reader.feedbackApplied"));
     } catch (err) {
@@ -166,6 +168,15 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
             {exporting ? t("reader.exporting") : t("reader.export")}
           </button>
           {target.nodeId && (
+            <button
+              className={feedbackOpen ? "" : "ghost"}
+              type="button"
+              onClick={() => setFeedbackOpen((open) => !open)}
+            >
+              {t("reader.feedback")}
+            </button>
+          )}
+          {target.nodeId && (
             <button type="button" onClick={() => void markRead()} disabled={readBusy}>
               {readBusy ? t("reader.marking") : t("reader.markRead")}
             </button>
@@ -177,7 +188,7 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
       {learningMsg && <p className={learningOk ? "ok" : "errors"}>{learningMsg}</p>}
       {error && <p className="errors">{error}</p>}
       {!output && !error && <p className="muted">{t("common.loading")}</p>}
-      {target.nodeId && output && (
+      {target.nodeId && output && feedbackOpen && (
         <section className="reader-feedback" aria-label="Learning feedback">
           <h2>{t("reader.feedback")}</h2>
           <textarea
