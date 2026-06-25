@@ -13,6 +13,7 @@ from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditResult,
+    AuditExamDefectKind,
     CoverageSnapshot,
     ExamReconciliationAction,
     ExamReconciliationResult,
@@ -71,6 +72,23 @@ class _ReconcilingExaminer(_FakeExaminer):
                 writer_instructions="Scope: revised",
             ),
         )
+
+
+class _AuditDefectExaminer(_ReconcilingExaminer):
+    def __init__(self, defect_kind: AuditExamDefectKind):
+        super().__init__(action=ExamReconciliationAction.REVISE_EXAM)
+        self.defect_kind = defect_kind
+
+    async def audit(self, **kw):
+        self.audit_calls += 1
+        if self.audit_calls == 1:
+            return AuditResult(
+                route=Route.FAIL_KNOWLEDGE_GAP,
+                exam_id="化学平衡",
+                bottleneck_report="# Bottleneck Report\nStandard answer is defective.",
+                exam_defect_kind=self.defect_kind,
+            )
+        return AuditResult(route=Route.PASS, exam_id="化学平衡", bottleneck_report="# Bottleneck Report\nok")
 
 
 class _FakeStudent:
@@ -312,6 +330,147 @@ async def test_node_run_resumes_saved_exam_and_draft_without_recompose(tmp_path)
     assert examiner.audit_calls == 1
     assert writer.calls == 0
     assert (paths.outputs_root(tmp_path) / "002.化学平衡.md").exists()
+
+
+async def test_node_run_answer_key_defect_reconciles_without_rewriting_question(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("# 002. 化学平衡\n\n已有正确草稿。\n", encoding="utf-8")
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state = state_mgr.update_node_run(
+        state,
+        "n1::run",
+        exam_sections=ExamSections(
+            knowledge_point="Original title",
+            covered_node_ids=["n1"],
+            blind_exam="Original Q",
+            answer_key="Original A",
+            writer_instructions="Scope: original",
+        ),
+        draft_path=draft,
+        current_iteration=1,
+    )
+    state_mgr.save(state)
+    examiner = _AuditDefectExaminer(AuditExamDefectKind.ANSWER_KEY_DEFECT)
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    result = await runner.run_one("n1")
+
+    assert result == "node_complete"
+    assert examiner.reconcile_calls == 1
+    assert examiner.audit_calls == 2
+    assert writer.calls == 0
+    state = state_mgr.load()
+    exam = state.node_runs[0].exam_sections
+    assert exam is not None
+    assert exam.blind_exam == "Original Q"
+    assert exam.answer_key == "Revised A"
+    assert exam.writer_instructions == "Scope: original"
+    assert state.node_runs[0].exam_repair_count == 1
+
+
+async def test_node_run_exam_defect_reconciles_full_exam(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("# 002. 化学平衡\n\n已有正确草稿。\n", encoding="utf-8")
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state = state_mgr.update_node_run(
+        state,
+        "n1::run",
+        exam_sections=ExamSections(
+            knowledge_point="Original title",
+            covered_node_ids=["n1"],
+            blind_exam="Original Q",
+            answer_key="Original A",
+            writer_instructions="Scope: original",
+        ),
+        draft_path=draft,
+        current_iteration=1,
+    )
+    state_mgr.save(state)
+    examiner = _AuditDefectExaminer(AuditExamDefectKind.EXAM_DEFECT)
+    student = _FakeStudent()
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=student,
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    result = await runner.run_one("n1")
+
+    assert result == "node_complete"
+    assert examiner.reconcile_calls == 1
+    assert writer.calls == 0
+    state = state_mgr.load()
+    exam = state.node_runs[0].exam_sections
+    assert exam is not None
+    assert exam.blind_exam == "Revised Q"
+    assert exam.answer_key == "Revised A"
+    assert exam.writer_instructions == "Scope: revised"
+    assert state.node_runs[0].exam_repair_count == 1
+    assert student.calls[1]["blind_exam"] == "Revised Q"
+
+
+async def test_node_run_exam_defect_after_repair_does_not_call_writer(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("# 002. 化学平衡\n\n已有草稿。\n", encoding="utf-8")
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state = state_mgr.update_node_run(
+        state,
+        "n1::run",
+        exam_sections=ExamSections(
+            knowledge_point="Original title",
+            covered_node_ids=["n1"],
+            blind_exam="Original Q",
+            answer_key="Original A",
+            writer_instructions="Scope: original",
+        ),
+        draft_path=draft,
+        current_iteration=1,
+        exam_repair_count=1,
+    )
+    state_mgr.save(state)
+    examiner = _AuditDefectExaminer(AuditExamDefectKind.EXAM_DEFECT)
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    with pytest.raises(RuntimeError, match="Exam repair already used"):
+        await runner.run_one("n1")
+
+    assert examiner.reconcile_calls == 0
+    assert writer.calls == 0
+    state = state_mgr.load()
+    assert state.node_runs[0].status == "failed"
+    assert "Exam repair already used" in (state.node_runs[0].last_error or "")
 
 
 async def test_node_run_reconciles_bad_answer_key_at_iteration_limit(tmp_path):

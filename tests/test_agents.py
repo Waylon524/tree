@@ -10,7 +10,7 @@ from tree.agents.prompts import ARCHIVIST_MTU_PROMPT
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.planner.mtu import MtuCoverageError
-from tree.state.models import ExamReconciliationAction, Route
+from tree.state.models import AuditExamDefectKind, ExamReconciliationAction, Route
 
 _EXAM_OUTPUT = """## [Next_Knowledge_Point]
 01. 化学平衡
@@ -73,6 +73,22 @@ async def test_examiner_audit_parses_route():
     assert audit.route is Route.FAIL_KNOWLEDGE_GAP
     assert audit.exam_id == "化学平衡"
     assert "MISSING_FORMULA" in audit.bottleneck_report
+    assert audit.exam_defect_kind is None
+
+
+async def test_examiner_audit_parses_answer_key_defect():
+    response = _AUDIT_OUTPUT.replace(
+        "ROUTE: FAIL_KNOWLEDGE_GAP",
+        "EXAM_DEFECT: ANSWER_KEY_DEFECT\nROUTE: FAIL_KNOWLEDGE_GAP",
+    )
+    agent = ExaminerAgent(_FakeClient({"examiner": response}))
+
+    audit = await agent.audit(
+        exam_paper="Q", answer_key="A", student_answer="ans", draft_text=None,
+        prior_paths=[], prior_contents=[],
+    )
+
+    assert audit.exam_defect_kind is AuditExamDefectKind.ANSWER_KEY_DEFECT
 
 
 async def test_examiner_reconcile_exam_parses_revised_exam():

@@ -6,6 +6,7 @@ import json
 import re
 
 from tree.state.models import (
+    AuditExamDefectKind,
     ExamReconciliationAction,
     ExamReconciliationResult,
     ExamSections,
@@ -19,6 +20,7 @@ class ParseError(Exception):
 
 _ROUTE_PATTERN = re.compile(r"^ROUTE:\s*(PASS|FAIL_KNOWLEDGE_GAP)\s*$", re.MULTILINE)
 _EXAM_ID_PATTERN = re.compile(r"^EXAM_ID:\s*(.+)$", re.MULTILINE)
+_AUDIT_DEFECT_PATTERN = re.compile(r"^EXAM_DEFECT:\s*(\S+)\s*$", re.MULTILINE)
 _RECONCILIATION_ACTION_PATTERN = re.compile(
     r"^ACTION:\s*(KEEP_FAIL|REVISE_EXAM)\s*$", re.MULTILINE
 )
@@ -56,6 +58,17 @@ def parse_exam_id(text: str) -> str:
     if not match:
         raise ParseError("No EXAM_ID: found in examiner output")
     return match.group(1).strip()
+
+
+def parse_audit_defect_kind(text: str) -> AuditExamDefectKind | None:
+    match = _AUDIT_DEFECT_PATTERN.search(text)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    try:
+        return AuditExamDefectKind(value)
+    except ValueError as exc:
+        raise ParseError(f"Invalid EXAM_DEFECT value: {value}") from exc
 
 
 def parse_exam_sections(text: str) -> ExamSections:

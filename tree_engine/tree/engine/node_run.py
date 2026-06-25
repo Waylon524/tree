@@ -13,7 +13,13 @@ from tree.io import file_ops, paths
 from tree.observability.limiter import IterationLimitExceeded, IterationLimiter
 from tree.planner.store import read_json, write_json_atomic
 from tree.state.manager import StateManager
-from tree.state.models import ExamReconciliationAction, ExamSections, IterationState, Route
+from tree.state.models import (
+    AuditExamDefectKind,
+    ExamReconciliationAction,
+    ExamSections,
+    IterationState,
+    Route,
+)
 
 
 class Retriever(Protocol):
@@ -185,6 +191,23 @@ class NodeRunner:
                 )
             else:
                 bottleneck_report = audit.bottleneck_report
+                if audit.exam_defect_kind is not None:
+                    repaired = await self._try_reconcile_exam_from_audit_defect(
+                        iter_state,
+                        execution,
+                        collections,
+                        prior_paths,
+                        allowed_paths,
+                        node_context,
+                        bottleneck_report=bottleneck_report,
+                        defect_kind=audit.exam_defect_kind,
+                    )
+                    if repaired:
+                        exam = iter_state.exam_sections
+                        assert exam is not None
+                        previous_bottleneck = iter_state.previous_bottleneck
+                        iteration = iter_state.iteration
+                        continue
 
             wq = f"{exam.knowledge_point}\n{bottleneck_report}"
             result = await self.writer.draft(
@@ -214,6 +237,47 @@ class NodeRunner:
                 last_error=None,
             )
 
+    async def _try_reconcile_exam_from_audit_defect(
+        self,
+        iter_state: IterationState,
+        execution: Any,
+        collections: list[str],
+        prior_paths: list[str],
+        allowed_paths: set[str],
+        node_context: str,
+        *,
+        bottleneck_report: str,
+        defect_kind: AuditExamDefectKind,
+    ) -> bool:
+        repair_count = self._exam_repair_count(execution)
+        if repair_count > 0:
+            error = (
+                f"Exam repair already used for {execution.node_id}; audit still reported "
+                f"{defect_kind.value}."
+            )
+            self._persist_run_state(execution.node_run_id, status="failed", last_error=error)
+            raise RuntimeError(error)
+
+        repaired = await self._reconcile_exam(
+            iter_state,
+            execution,
+            collections,
+            prior_paths,
+            allowed_paths,
+            node_context,
+            bottleneck_report=bottleneck_report,
+            answer_key_only=defect_kind is AuditExamDefectKind.ANSWER_KEY_DEFECT,
+        )
+        if repaired:
+            return True
+
+        error = (
+            f"Exam repair failed for {execution.node_id} after audit reported "
+            f"{defect_kind.value}."
+        )
+        self._persist_run_state(execution.node_run_id, status="failed", last_error=error)
+        raise RuntimeError(error)
+
     async def _try_reconcile_exam_at_limit(
         self,
         iter_state: IterationState,
@@ -223,30 +287,57 @@ class NodeRunner:
         allowed_paths: set[str],
         node_context: str,
     ) -> bool:
+        return await self._reconcile_exam(
+            iter_state,
+            execution,
+            collections,
+            prior_paths,
+            allowed_paths,
+            node_context,
+            bottleneck_report=iter_state.previous_bottleneck or "",
+            answer_key_only=False,
+            require_draft=True,
+            require_bottleneck=True,
+        )
+
+    async def _reconcile_exam(
+        self,
+        iter_state: IterationState,
+        execution: Any,
+        collections: list[str],
+        prior_paths: list[str],
+        allowed_paths: set[str],
+        node_context: str,
+        *,
+        bottleneck_report: str,
+        answer_key_only: bool,
+        require_draft: bool = False,
+        require_bottleneck: bool = False,
+    ) -> bool:
         exam = iter_state.exam_sections
         node_id = iter_state.covered_node_ids[0] if iter_state.covered_node_ids else execution.node_id
         if (
             exam is None
-            or iter_state.draft_path is None
-            or not iter_state.draft_path.exists()
-            or not iter_state.previous_bottleneck
             or not hasattr(self.examiner, "reconcile_exam")
         ):
             return False
+        has_draft = iter_state.draft_path is not None and iter_state.draft_path.exists()
+        if require_draft and not has_draft:
+            return False
+        if require_bottleneck and not bottleneck_report:
+            return False
 
-        state = self.state_mgr.load()
-        run = self.state_mgr.find_run(state, execution.node_run_id)
-        repair_count = int(getattr(run, "exam_repair_count", 0) or 0)
+        repair_count = self._exam_repair_count(execution)
         if repair_count > 0:
             return False
 
-        draft_text = iter_state.draft_path.read_text(encoding="utf-8")
-        query = f"{exam.knowledge_point}\n{iter_state.previous_bottleneck}\nexam answer key reconciliation"
+        draft_text = iter_state.draft_path.read_text(encoding="utf-8") if has_draft else "尚未创建"
+        query = f"{exam.knowledge_point}\n{bottleneck_report}\nexam answer key reconciliation"
         result = await self.examiner.reconcile_exam(
             exam_paper=exam.blind_exam,
             answer_key=exam.answer_key,
             draft_text=draft_text,
-            bottleneck_report=iter_state.previous_bottleneck,
+            bottleneck_report=bottleneck_report,
             prior_paths=prior_paths,
             prior_contents=[],
             retrieved=self.retriever.finished_hits(query, allowed_paths=allowed_paths, top_k=6)
@@ -275,14 +366,15 @@ class NodeRunner:
             )
             return False
 
-        iter_state.exam_sections = revised
-        iter_state.knowledge_point = _clean_title(revised.knowledge_point) or iter_state.knowledge_point
+        next_exam = exam.model_copy(update={"answer_key": revised.answer_key}) if answer_key_only else revised
+        iter_state.exam_sections = next_exam
+        iter_state.knowledge_point = _clean_title(next_exam.knowledge_point) or iter_state.knowledge_point
         iter_state.covered_node_ids = [node_id]
         iter_state.iteration = 0
         iter_state.previous_bottleneck = None
         self._persist_run_state(
             execution.node_run_id,
-            exam_sections=revised,
+            exam_sections=next_exam,
             current_iteration=0,
             previous_bottleneck=None,
             exam_repair_count=repair_count,
@@ -290,6 +382,11 @@ class NodeRunner:
             last_error=None,
         )
         return True
+
+    def _exam_repair_count(self, execution: Any) -> int:
+        state = self.state_mgr.load()
+        run = self.state_mgr.find_run(state, execution.node_run_id)
+        return int(getattr(run, "exam_repair_count", 0) or 0)
 
     def _iteration_limit_message(self, iter_state: IterationState, execution: Any) -> str:
         state = self.state_mgr.load()

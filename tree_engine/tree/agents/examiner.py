@@ -13,6 +13,7 @@ from tree.agents.base import Agent
 from tree.agents.parsers import (
     ParseError,
     extract_bottleneck_report,
+    parse_audit_defect_kind,
     parse_exam_id,
     parse_exam_reconciliation,
     parse_exam_sections,
@@ -107,7 +108,12 @@ class ExaminerAgent(Agent):
         if retrieved:
             parts.append(_format_retrieved(retrieved))
         parts.append(
-            "You must end the response with exactly:\n"
+            "If the audit detects a bad standard answer or bad exam, include one optional "
+            "machine-readable line before ROUTE:\n"
+            "EXAM_DEFECT: ANSWER_KEY_DEFECT\n"
+            "or:\n"
+            "EXAM_DEFECT: EXAM_DEFECT\n"
+            "Then end the response with exactly:\n"
             "ROUTE: PASS or ROUTE: FAIL_KNOWLEDGE_GAP\nEXAM_ID: <node title or output title>\n"
         )
 
@@ -118,6 +124,7 @@ class ExaminerAgent(Agent):
             route=parse_route(raw),
             exam_id=parse_exam_id(raw),
             bottleneck_report=extract_bottleneck_report(raw),
+            exam_defect_kind=parse_audit_defect_kind(raw),
         )
 
     async def reconcile_exam(
@@ -197,11 +204,15 @@ class ExaminerAgent(Agent):
             try:
                 parse_route(raw)
                 parse_exam_id(raw)
+                parse_audit_defect_kind(raw)
                 return raw
             except ParseError:
                 raw = await self.complete(
                     "Repair the machine-readable audit format. Do not change the judgment or "
-                    "invent analysis. Preserve the Bottleneck Report meaning, but end with exactly:\n"
+                    "invent analysis. Preserve the Bottleneck Report meaning. The response may "
+                    "include an optional line EXAM_DEFECT: ANSWER_KEY_DEFECT or "
+                    "EXAM_DEFECT: EXAM_DEFECT when the original judgment included one. End with "
+                    "exactly:\n"
                     "ROUTE: PASS\nEXAM_ID: <title>\nor:\nROUTE: FAIL_KNOWLEDGE_GAP\nEXAM_ID: <title>\n\n"
                     f"Original task:\n{original_user}\n\nPrevious unparseable output:\n{raw}\n"
                 )

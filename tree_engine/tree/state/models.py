@@ -39,6 +39,11 @@ class ExamReconciliationAction(str, Enum):
     REVISE_EXAM = "REVISE_EXAM"
 
 
+class AuditExamDefectKind(str, Enum):
+    ANSWER_KEY_DEFECT = "ANSWER_KEY_DEFECT"
+    EXAM_DEFECT = "EXAM_DEFECT"
+
+
 class ExamSections(BaseModel):
     knowledge_point: str
     covered_node_ids: list[str] = Field(default_factory=list)
@@ -86,6 +91,7 @@ class AuditResult(BaseModel):
     route: Route
     exam_id: str
     bottleneck_report: str
+    exam_defect_kind: AuditExamDefectKind | None = None
 
 
 class WriterResult(BaseModel):

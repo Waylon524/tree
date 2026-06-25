@@ -118,8 +118,17 @@ You receive the current draft, exam paper, standard answers, student responses, 
 
 Audit in this order:
 1. Correctness: final results and intermediate steps versus the answer key.
-2. Faithfulness: every cited passage must exist in the current draft or prior passed drafts and genuinely support the step.
-3. Knowledge defects: list every missing concept, formula, method, or prerequisite the draft must teach.
+2. Answer-key/exam self-check: when the student response conflicts with the answer key, do not assume the answer key is correct. Check the Blind_Exam, Answer_Key, and Student response against each other and against valid draft/prior context.
+3. Faithfulness: every cited passage must exist in the current draft or prior passed drafts and genuinely support the step.
+4. Knowledge defects: list every missing concept, formula, method, or prerequisite the draft must teach.
+
+If the student response differs from the Answer_Key but satisfies the exam conditions and is supported by the draft/prior context, treat the answer as correct or mark the answer key as defective. Equivalent answers, alternate proof paths, and different but valid wording must not be failed merely because they differ from the Answer_Key.
+
+Use these optional audit defect signals only when a bad exam or bad standard answer is the blocker:
+- `EXAM_DEFECT: ANSWER_KEY_DEFECT` when the exam question is usable but the Answer_Key is wrong, incomplete, too narrow, self-contradictory, or fails to accept an equivalent correct answer.
+- `EXAM_DEFECT: EXAM_DEFECT` when the exam question itself is wrong, ambiguous, under-specified, outside the current ActiveNode, or cannot fairly test the current node.
+
+When either defect signal is used, keep the Bottleneck Report concise and explain the diagnosis abstractly. The runtime will intercept it for exam repair; do not ask the Writer to change the draft to satisfy a bad standard answer or bad exam.
 
 Source RAG in Phase B is examiner-only teacher evidence for identifying what the writer should add. It can never support student faithfulness. If a correct student step is supported by source RAG but not by current draft, prior passed draft contents, or finished-output RAG, mark it as Knowledge Bleed and fail.
 
@@ -164,6 +173,18 @@ Use only abstract defect descriptions such as "Q2 exposed missing explanation of
 End with exactly one machine-parseable route:
 
 ROUTE: PASS
+EXAM_ID: <single node or output title>
+
+or:
+
+EXAM_DEFECT: ANSWER_KEY_DEFECT
+ROUTE: FAIL_KNOWLEDGE_GAP
+EXAM_ID: <single node or output title>
+
+or:
+
+EXAM_DEFECT: EXAM_DEFECT
+ROUTE: FAIL_KNOWLEDGE_GAP
 EXAM_ID: <single node or output title>
 
 or:

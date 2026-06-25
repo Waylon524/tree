@@ -9,12 +9,13 @@ from tree.agents.parsers import (
     extract_bottleneck_report,
     extract_json_object,
     extract_section,
+    parse_audit_defect_kind,
     parse_exam_id,
     parse_exam_reconciliation,
     parse_exam_sections,
     parse_route,
 )
-from tree.state.models import ExamReconciliationAction, Route
+from tree.state.models import AuditExamDefectKind, ExamReconciliationAction, Route
 
 _EXAM = """## [Next_Knowledge_Point]
 01. 化学平衡
@@ -53,6 +54,26 @@ def test_parse_exam_sections():
 def test_parse_route_and_exam_id():
     assert parse_route(_AUDIT) is Route.FAIL_KNOWLEDGE_GAP
     assert parse_exam_id(_AUDIT) == "化学平衡"
+
+
+def test_parse_audit_defect_kind_is_optional():
+    assert parse_audit_defect_kind(_AUDIT) is None
+
+
+def test_parse_audit_defect_kind_valid_values():
+    assert (
+        parse_audit_defect_kind(_AUDIT + "\nEXAM_DEFECT: ANSWER_KEY_DEFECT\n")
+        is AuditExamDefectKind.ANSWER_KEY_DEFECT
+    )
+    assert (
+        parse_audit_defect_kind(_AUDIT + "\nEXAM_DEFECT: EXAM_DEFECT\n")
+        is AuditExamDefectKind.EXAM_DEFECT
+    )
+
+
+def test_parse_audit_defect_kind_invalid_value_raises():
+    with pytest.raises(ParseError, match="Invalid EXAM_DEFECT"):
+        parse_audit_defect_kind(_AUDIT + "\nEXAM_DEFECT: STUDENT_ERROR\n")
 
 
 def test_extract_bottleneck_report_stops_before_route():
