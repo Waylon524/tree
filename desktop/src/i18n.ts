@@ -28,7 +28,15 @@ const zh: Dict = {
   "nav.tend": "照料",
 
   // engine / phase chips
-  "engine.label": "引擎",
+  "engine.label": "生长状态",
+  "engine.running": "生长中",
+  "engine.stopped": "休眠",
+  "engine.starting": "准备中",
+  "phase.idle": "待生长",
+  "phase.running": "生长中",
+  "phase.blocked": "受阻",
+  "phase.complete": "已完成",
+  "phase.failed": "枯萎",
   "conn.live": "在线",
   "conn.connecting": "连接中…",
 
@@ -69,6 +77,8 @@ const zh: Dict = {
   "fruits.selectToExport": "请先勾选要导出的果实。",
   "fruits.noneToExport": "没有可导出的果实。",
   "fruits.exportCancelled": "已取消导出。",
+  "fruits.search": "搜索果实…",
+  "fruits.count": "{n} 颗果实",
 
   // harvest page (DAG)
   "harvest.title": "收获",
@@ -94,6 +104,8 @@ const zh: Dict = {
   "harvest.outputNotReady": "成品尚未就绪",
   "harvest.noOutput": "未找到成品文件",
   "harvest.affected": "某个先修在你读完后被修订过。",
+  "harvest.canopy": "树冠大小",
+  "harvest.downstream": "只看后续果实",
 
   // ripeness labels
   "ripe.set": "小果实",
@@ -164,6 +176,8 @@ const zh: Dict = {
   "seeds.missing": "缺失",
   "seeds.legacy": "历史文件",
   "seeds.sizeUnknown": "大小未知",
+  "seeds.list": "已播种子 ({n})",
+  "seeds.sowing": "播种中…",
 
   // orchard (project library)
   "orchard.title": "果园",
@@ -255,7 +269,15 @@ const en: Dict = {
   "nav.harvest": "Harvest",
   "nav.tend": "Tend",
 
-  "engine.label": "engine",
+  "engine.label": "Growth",
+  "engine.running": "Growing",
+  "engine.stopped": "Resting",
+  "engine.starting": "Starting",
+  "phase.idle": "Idle",
+  "phase.running": "Growing",
+  "phase.blocked": "Blocked",
+  "phase.complete": "Complete",
+  "phase.failed": "Failed",
   "conn.live": "live",
   "conn.connecting": "connecting…",
 
@@ -293,6 +315,8 @@ const en: Dict = {
   "fruits.selectToExport": "Select fruit to export.",
   "fruits.noneToExport": "No fruit to export.",
   "fruits.exportCancelled": "Export cancelled.",
+  "fruits.search": "Search fruits…",
+  "fruits.count": "{n} fruit",
 
   "harvest.title": "Harvest",
   "harvest.subtitle": "A tree heavy with knowledge",
@@ -317,6 +341,8 @@ const en: Dict = {
   "harvest.outputNotReady": "Output not ready",
   "harvest.noOutput": "No output file found",
   "harvest.affected": "A prerequisite was revised after you read this node.",
+  "harvest.canopy": "Canopy size",
+  "harvest.downstream": "Downstream only",
 
   "ripe.set": "Set",
   "ripe.unripe": "Unripe",
@@ -382,6 +408,8 @@ const en: Dict = {
   "seeds.missing": "missing",
   "seeds.legacy": "Legacy file",
   "seeds.sizeUnknown": "Size unknown",
+  "seeds.list": "Sown seeds ({n})",
+  "seeds.sowing": "Sowing…",
 
   "orchard.title": "Orchard",
   "orchard.subtitle": "Each project is a knowledge tree; seeds, fruit, and harvest state stay separate.",

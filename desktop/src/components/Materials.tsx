@@ -8,7 +8,7 @@ export function Materials() {
   const t = useT();
   const [items, setItems] = useState<ImportedFile[]>([]);
   const [msg, setMsg] = useState<string>("");
-  const [selectedNames, setSelectedNames] = useState<string[]>([]);
+  const [sowing, setSowing] = useState<boolean>(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = (): void => {
@@ -27,18 +27,21 @@ export function Materials() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const onUpload = async (): Promise<void> => {
-    const files = fileRef.current?.files;
+  // Selecting seeds sows them straight away — no separate import button.
+  const sow = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return;
+    setSowing(true);
+    setMsg("");
     try {
       const res = await uploadMaterials("default", files);
       const skipped = res.skipped.length ? t("seeds.skipped", { n: res.skipped.length }) : "";
       setMsg(t("seeds.imported", { n: res.saved.length, skipped }));
-      if (fileRef.current) fileRef.current.value = "";
-      setSelectedNames([]);
       refresh();
     } catch (err) {
       setMsg(String(err));
+    } finally {
+      setSowing(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   };
 
@@ -54,52 +57,48 @@ export function Materials() {
           className="visually-hidden"
           type="file"
           multiple
-          onChange={(event) => {
-            const files = Array.from(event.target.files ?? []);
-            setSelectedNames(files.map((file) => file.name));
-          }}
+          onChange={(event) => void sow(event.target.files)}
         />
-        <button className="ghost" type="button" onClick={() => fileRef.current?.click()}>
-          {t("seeds.choose")}
-        </button>
-        <button onClick={() => void onUpload()} disabled={selectedNames.length === 0}>
-          {t("seeds.import")}
+        <button
+          className="ghost"
+          type="button"
+          disabled={sowing}
+          onClick={() => fileRef.current?.click()}
+        >
+          {sowing ? t("seeds.sowing") : t("seeds.choose")}
         </button>
         {msg && <span className="hint">{msg}</span>}
       </div>
-      {selectedNames.length > 0 && (
-        <p className="hint selected-files">
-          {t("seeds.selected", { n: selectedNames.length })}: {selectedNames.slice(0, 3).join(", ")}
-          {selectedNames.length > 3 ? "..." : ""}
-        </p>
-      )}
       {items.length === 0 ? (
         <p className="muted">{t("seeds.empty")}</p>
       ) : (
-        <ul className="imported-list">
-          {items.map((item) => (
-            <li className="imported-item" key={item.id}>
-              <div className="imported-title">
-                <b>{item.original_name}</b>
-                <span className={`pill import-${item.status}`}>
-                  {item.status === "missing" ? t("seeds.missing") : t("seeds.active")}
-                </span>
-              </div>
-              <div className="imported-meta">
-                {item.collection !== "default" && (
-                  <span>
-                    {t("seeds.sourceGroup")}: {item.collection}
+        <details className="seeds-list">
+          <summary>{t("seeds.list", { n: items.length })}</summary>
+          <ul className="imported-list">
+            {items.map((item) => (
+              <li className="imported-item" key={item.id}>
+                <div className="imported-title">
+                  <b>{item.original_name}</b>
+                  <span className={`pill import-${item.status}`}>
+                    {item.status === "missing" ? t("seeds.missing") : t("seeds.active")}
                   </span>
+                </div>
+                <div className="imported-meta">
+                  {item.collection !== "default" && (
+                    <span>
+                      {t("seeds.sourceGroup")}: {item.collection}
+                    </span>
+                  )}
+                  <span>{item.size_bytes ? formatBytes(item.size_bytes) : t("seeds.sizeUnknown")}</span>
+                  <span>{item.imported_at ? formatImportedAt(item.imported_at) : t("seeds.legacy")}</span>
+                </div>
+                {item.original_name !== item.stored_name && (
+                  <p className="hint">{t("seeds.storedAs", { name: item.stored_name })}</p>
                 )}
-                <span>{item.size_bytes ? formatBytes(item.size_bytes) : t("seeds.sizeUnknown")}</span>
-                <span>{item.imported_at ? formatImportedAt(item.imported_at) : t("seeds.legacy")}</span>
-              </div>
-              {item.original_name !== item.stored_name && (
-                <p className="hint">{t("seeds.storedAs", { name: item.stored_name })}</p>
-              )}
-            </li>
-          ))}
-        </ul>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   );

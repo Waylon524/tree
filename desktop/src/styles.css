@@ -12,6 +12,9 @@
   --bg: #f4eede;
   --bg-canopy: #eef3e2;
   --bg-soil: #e7dcc4;
+  --sky-top: #9fd2f0;
+  --sky-mid: #cfe8f3;
+  --sky-horizon: #e8f1d6;
   --card: #fffdf7;
   --text: #2b2419;
   --muted: #837457;
@@ -54,6 +57,9 @@
     --bg: #1a1611;
     --bg-canopy: #1d251a;
     --bg-soil: #211a11;
+    --sky-top: #233547;
+    --sky-mid: #28373f;
+    --sky-horizon: #222d1c;
     --card: #221c14;
     --text: #ece3d2;
     --muted: #a3957b;
@@ -983,6 +989,42 @@ table.stages td {
   line-height: 1.1;
 }
 
+.dag-canopy-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 18px;
+}
+.dag-canopy-control label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.dag-canopy-control label b {
+  color: var(--text);
+}
+.dag-canopy-control input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.downstream-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.downstream-toggle input {
+  margin: 0;
+  accent-color: var(--fruit);
+}
+.downstream-toggle b {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .dag-filter-list {
   display: flex;
   flex-direction: column;
@@ -1065,10 +1107,8 @@ table.stages td {
   position: relative;
   min-width: 0;
   min-height: 100%;
-  /* dagMode="bu": roots sit at the bottom (soil), leaves grow up (canopy). */
-  background:
-    radial-gradient(circle at 50% 14%, color-mix(in srgb, var(--leaf-young) 16%, transparent), transparent 42%),
-    linear-gradient(180deg, var(--bg-canopy) 0%, var(--bg) 54%, var(--bg-soil) 100%);
+  /* Orchard sky backdrop; the 3D ground + bushes sit in front of it. */
+  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 48%, var(--sky-horizon) 100%);
 }
 
 .dag-alert,
@@ -1551,6 +1591,136 @@ table.stages td {
 }
 .seeds-head {
   align-items: center;
+}
+
+/* Seeds — collapsible sown-list */
+.seeds-list {
+  margin-top: 12px;
+}
+.seeds-list > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+.seeds-list > summary::-webkit-details-marker {
+  display: none;
+}
+.seeds-list > summary::before {
+  content: "›";
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+.seeds-list[open] > summary {
+  margin-bottom: 10px;
+}
+.seeds-list[open] > summary::before {
+  transform: rotate(90deg);
+}
+.seeds-list .imported-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Tend — settings fieldsets as tidy cards */
+.settings-form fieldset {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  background: var(--bg);
+}
+.settings-form legend {
+  padding: 0 6px;
+  margin-bottom: 0;
+}
+
+/* Fruits — card grid */
+.count-note {
+  font-weight: 400;
+}
+.fruit-search {
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.fruit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 10px;
+}
+.fruit-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: var(--shadow-soft);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+.fruit-card:hover {
+  border-color: var(--trunk-soft);
+  transform: translateY(-1px);
+}
+.fruit-card.picked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.fruit-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 34px 12px 12px;
+  cursor: pointer;
+}
+.fruit-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+.fruit-seq {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 34px;
+  padding: 0 7px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fruit) 16%, transparent);
+  color: var(--fruit);
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.fruit-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.fruit-pick {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+}
+.fruit-pick input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .dag-scene {

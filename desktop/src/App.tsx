@@ -42,6 +42,9 @@ const NAV: Array<{ key: Page; labelKey: string }> = [
   { key: "tend", labelKey: "nav.tend" },
 ];
 
+const ENGINE_STATES = ["running", "stopped", "starting"];
+const PHASE_STATES = ["idle", "running", "blocked", "complete", "failed"];
+
 export function App({ initialBootstrap }: { initialBootstrap: AppBootstrap | null }) {
   const [bootstrap, setBootstrap] = useState<AppBootstrap | null>(initialBootstrap);
   const [showProjects, setShowProjects] = useState<boolean>(
@@ -271,7 +274,8 @@ function Dashboard({
         <div className="bar-status">
           {status && (
             <span className={`pill engine-${status.engine}`}>
-              {t("engine.label")}: {status.engine}
+              {t("engine.label")}:{" "}
+              {ENGINE_STATES.includes(status.engine) ? t(`engine.${status.engine}`) : status.engine}
             </span>
           )}
           <span className={`conn ${connected ? "on" : "off"}`}>
@@ -287,7 +291,11 @@ function Dashboard({
                 <h2 className="grow-title">{t("grow.heading")}</h2>
                 <p className="muted">{t("grow.subtitle")}</p>
               </div>
-              {status && <span className={`pill phase-${status.phase}`}>{status.phase}</span>}
+              {status && (
+                <span className={`pill phase-${status.phase}`}>
+                  {PHASE_STATES.includes(status.phase) ? t(`phase.${status.phase}`) : status.phase}
+                </span>
+              )}
             </div>
             <div className="controls">
               <button onClick={() => void guard(runPipeline)()} disabled={busy}>

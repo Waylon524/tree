@@ -1,19 +1,12 @@
-import { useEffect, useState } from "react";
-import {
-  chooseExportDirectory,
-  exportOutputs,
-  fetchOutputHtml,
-  fetchOutputs,
-  isTauri,
-} from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { chooseExportDirectory, exportOutputs, fetchOutputs, isTauri } from "../api";
 import { useT } from "../i18n";
 
 export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => void }) {
   const t = useT();
   const [files, setFiles] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string>("");
   const [selectedForExport, setSelectedForExport] = useState<string[]>([]);
-  const [html, setHtml] = useState<string>("");
+  const [query, setQuery] = useState<string>("");
   const [exporting, setExporting] = useState<boolean>(false);
   const [exportMsg, setExportMsg] = useState<string>("");
 
@@ -36,18 +29,11 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
     };
   }, []);
 
-  const open = async (name: string): Promise<void> => {
-    setSelected(name);
-    if (onReadOutput) {
-      onReadOutput(name);
-      return;
-    }
-    try {
-      setHtml(await fetchOutputHtml(name));
-    } catch {
-      setHtml("<p>Failed to load.</p>");
-    }
-  };
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return files;
+    return files.filter((name) => name.toLowerCase().includes(q));
+  }, [files, query]);
 
   const toggleExport = (name: string): void => {
     setSelectedForExport((current) =>
@@ -93,7 +79,9 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
   return (
     <div className="card">
       <div className="section-head">
-        <h2>{t("fruits.title")}</h2>
+        <h2>
+          {t("fruits.title")} <span className="muted count-note">{t("fruits.count", { n: files.length })}</span>
+        </h2>
         <div className="export-actions">
           <button
             className="ghost"
@@ -112,27 +100,64 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
           </button>
         </div>
       </div>
+      {files.length > 0 && (
+        <input
+          className="fruit-search"
+          type="search"
+          placeholder={t("fruits.search")}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      )}
       {exportMsg && <p className={exportMsg.includes("failed") ? "errors" : "hint"}>{exportMsg}</p>}
       {files.length === 0 ? (
         <p className="muted">{t("fruits.empty")}</p>
       ) : (
-        <ul className="outputs file-list">
-          {files.map((name) => (
-            <li className="file-row" key={name}>
-              <input
-                type="checkbox"
-                checked={selectedForExport.includes(name)}
-                onChange={() => toggleExport(name)}
-                aria-label={`Select ${name}`}
-              />
-              <a className={name === selected ? "sel" : ""} onClick={() => void open(name)}>
-                {name}
-              </a>
-            </li>
-          ))}
-        </ul>
+        <div className="fruit-grid">
+          {filtered.map((name) => {
+            const { seq, title } = parseFruit(name);
+            const picked = selectedForExport.includes(name);
+            return (
+              <div className={`fruit-card ${picked ? "picked" : ""}`} key={name}>
+                <div
+                  className="fruit-open"
+                  role="button"
+                  tabIndex={0}
+                  title={name}
+                  onClick={() => onReadOutput?.(name)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onReadOutput?.(name);
+                    }
+                  }}
+                >
+                  <span className="fruit-seq">{seq || "·"}</span>
+                  <span className="fruit-title">{title}</span>
+                </div>
+                <label className="fruit-pick" title="export">
+                  <input
+                    type="checkbox"
+                    checked={picked}
+                    onChange={() => toggleExport(name)}
+                    aria-label={name}
+                  />
+                </label>
+              </div>
+            );
+          })}
+        </div>
       )}
-      {html && <article className="markdown" dangerouslySetInnerHTML={{ __html: html }} />}
     </div>
   );
+}
+
+function parseFruit(name: string): { seq: string; title: string } {
+  const base = name.replace(/\.md$/i, "");
+  const match = base.match(/^(\d+)[.．、]\s*(.*)$/);
+  if (match) {
+    const title = match[2].replace(/--[a-z0-9]+$/i, "").trim();
+    return { seq: match[1], title: title || base };
+  }
+  return { seq: "", title: base };
 }
