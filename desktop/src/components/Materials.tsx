@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchImportedFiles, listMaterials, uploadMaterials } from "../api";
 import type { ImportedFile } from "../api";
 import { useT } from "../i18n";
+import { formatBytes, formatDateTime } from "../lib/format";
 import { FruitTreeMark } from "./illustrations";
 
 export function Materials() {
@@ -90,7 +91,7 @@ export function Materials() {
                     </span>
                   )}
                   <span>{item.size_bytes ? formatBytes(item.size_bytes) : t("seeds.sizeUnknown")}</span>
-                  <span>{item.imported_at ? formatImportedAt(item.imported_at) : t("seeds.legacy")}</span>
+                  <span>{item.imported_at ? formatDateTime(item.imported_at) : t("seeds.legacy")}</span>
                 </div>
                 {item.original_name !== item.stored_name && (
                   <p className="hint">{t("seeds.storedAs", { name: item.stored_name })}</p>
@@ -118,16 +119,4 @@ function importedFileFromLegacyName(name: string): ImportedFile {
     imported_at: "",
     status: "active",
   };
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatImportedAt(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
 }

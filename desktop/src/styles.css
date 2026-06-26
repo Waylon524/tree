@@ -1680,6 +1680,30 @@ table.stages td {
   font-weight: 400;
   font-size: 11px;
 }
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ui-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ui-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
 .seeds-head {
   align-items: center;
 }

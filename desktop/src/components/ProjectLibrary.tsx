@@ -13,7 +13,10 @@ import {
   transplantProject,
 } from "../api";
 import { useT } from "../i18n";
+import { formatBytes } from "../lib/format";
 import { FruitTreeMark, OrchardScene } from "./illustrations";
+import { ConfirmByName } from "./ui/ConfirmByName";
+import { Menu } from "./ui/Menu";
 
 interface ProjectLibraryProps {
   bootstrap: AppBootstrap;
@@ -39,10 +42,7 @@ export function ProjectLibrary({
   const [transplantId, setTransplantId] = useState<string>("");
   const [editName, setEditName] = useState<string>("");
   const [editDescription, setEditDescription] = useState<string>("");
-  const [deleteConfirm, setDeleteConfirm] = useState<string>("");
-  const [transplantConfirm, setTransplantConfirm] = useState<string>("");
   const [busyId, setBusyId] = useState<string>("");
-  const [menuOpenId, setMenuOpenId] = useState<string>("");
   const [error, setError] = useState<string>(bootstrap.error ?? "");
   const [message, setMessage] = useState<string>("");
 
@@ -172,7 +172,6 @@ export function ProjectLibrary({
     setEditingId("");
     setTransplantId("");
     setUprootId(project.id);
-    setDeleteConfirm("");
     setError("");
     setMessage("");
   };
@@ -181,7 +180,6 @@ export function ProjectLibrary({
     setEditingId("");
     setUprootId("");
     setTransplantId(project.id);
-    setTransplantConfirm("");
     setError("");
     setMessage("");
   };
@@ -191,7 +189,7 @@ export function ProjectLibrary({
     setError("");
     setMessage("");
     try {
-      const next = await deleteProject(project.id, deleteConfirm);
+      const next = await deleteProject(project.id, project.name);
       applyBootstrap(next);
       setUprootId("");
       setMessage(t("orchard.uprooted"));
@@ -209,7 +207,7 @@ export function ProjectLibrary({
     try {
       const destination = await chooseProjectArchiveDestination(project.name);
       if (!destination) return;
-      const next = await transplantProject(project.id, destination, transplantConfirm);
+      const next = await transplantProject(project.id, destination, project.name);
       applyBootstrap(next);
       setTransplantId("");
       setMessage(t("orchard.transplanted"));
@@ -333,61 +331,32 @@ export function ProjectLibrary({
                       </div>
                     </form>
                   ) : transplantId === project.id ? (
-                    <div className="tree-uproot">
-                      <h3>{t("orchard.transplantTitle")}</h3>
-                      <p className="muted">{t("orchard.transplantHint")}</p>
-                      <input
-                        value={transplantConfirm}
-                        onChange={(event) => setTransplantConfirm(event.target.value)}
-                        placeholder={t("orchard.uprootConfirm", { name: project.name })}
-                        aria-label="confirm transplant"
-                      />
-                      <div className="tree-actions">
-                        <button
-                          type="button"
-                          onClick={() => void transplant(project)}
-                          disabled={
-                            transplantConfirm !== project.name ||
-                            busyId === `transplant:${project.id}`
-                          }
-                        >
-                          {busyId === `transplant:${project.id}`
-                            ? t("orchard.transplanting")
-                            : t("orchard.transplant")}
-                        </button>
-                        <button className="ghost" type="button" onClick={() => setTransplantId("")}>
-                          {t("common.back")}
-                        </button>
-                      </div>
-                    </div>
+                    <ConfirmByName
+                      title={t("orchard.transplantTitle")}
+                      hint={t("orchard.transplantHint")}
+                      expectedName={project.name}
+                      placeholder={t("orchard.uprootConfirm", { name: project.name })}
+                      confirmLabel={t("orchard.transplant")}
+                      busyLabel={t("orchard.transplanting")}
+                      cancelLabel={t("common.back")}
+                      busy={busyId === `transplant:${project.id}`}
+                      onConfirm={() => void transplant(project)}
+                      onCancel={() => setTransplantId("")}
+                    />
                   ) : uprootId === project.id ? (
-                    <div className="tree-uproot">
-                      <h3>{t("orchard.uprootTitle")}</h3>
-                      <p className="muted">{t("orchard.uprootHint")}</p>
-                      <input
-                        value={deleteConfirm}
-                        onChange={(event) => setDeleteConfirm(event.target.value)}
-                        placeholder={t("orchard.uprootConfirm", { name: project.name })}
-                        aria-label="confirm uproot"
-                      />
-                      <div className="tree-actions">
-                        <button
-                          className="danger"
-                          type="button"
-                          onClick={() => void uproot(project)}
-                          disabled={
-                            deleteConfirm !== project.name || busyId === `delete:${project.id}`
-                          }
-                        >
-                          {busyId === `delete:${project.id}`
-                            ? t("orchard.uprooting")
-                            : t("orchard.uproot")}
-                        </button>
-                        <button className="ghost" type="button" onClick={() => setUprootId("")}>
-                          {t("common.back")}
-                        </button>
-                      </div>
-                    </div>
+                    <ConfirmByName
+                      title={t("orchard.uprootTitle")}
+                      hint={t("orchard.uprootHint")}
+                      expectedName={project.name}
+                      placeholder={t("orchard.uprootConfirm", { name: project.name })}
+                      confirmLabel={t("orchard.uproot")}
+                      busyLabel={t("orchard.uprooting")}
+                      cancelLabel={t("common.back")}
+                      busy={busyId === `delete:${project.id}`}
+                      danger
+                      onConfirm={() => void uproot(project)}
+                      onCancel={() => setUprootId("")}
+                    />
                   ) : (
                     <div className="tree-actions">
                       <button
@@ -399,69 +368,36 @@ export function ProjectLibrary({
                           ? t("orchard.observing")
                           : t("orchard.observe")}
                       </button>
-                      <div className="tree-more">
-                        <button
-                          className="ghost tree-more-toggle"
-                          type="button"
-                          aria-haspopup="menu"
-                          aria-expanded={menuOpenId === project.id}
-                          onClick={() =>
-                            setMenuOpenId(menuOpenId === project.id ? "" : project.id)
-                          }
-                        >
-                          {t("orchard.more")} ▾
-                        </button>
-                        {menuOpenId === project.id && (
-                          <>
-                            <div className="tree-menu-backdrop" onClick={() => setMenuOpenId("")} />
-                            <div className="tree-menu" role="menu">
-                              <button
-                                className="ghost"
-                                type="button"
-                                onClick={() => {
-                                  setMenuOpenId("");
-                                  startRename(project);
-                                }}
-                              >
-                                {t("orchard.rename")}
-                              </button>
-                              <button
-                                className="ghost"
-                                type="button"
-                                disabled={busyId === `propagate:${project.id}`}
-                                onClick={() => {
-                                  setMenuOpenId("");
-                                  void propagate(project);
-                                }}
-                              >
-                                {busyId === `propagate:${project.id}`
-                                  ? t("orchard.propagating")
-                                  : t("orchard.propagate")}
-                              </button>
-                              <button
-                                className="ghost"
-                                type="button"
-                                onClick={() => {
-                                  setMenuOpenId("");
-                                  startTransplant(project);
-                                }}
-                              >
-                                {t("orchard.transplant")}
-                              </button>
-                              <button
-                                className="ghost uproot-item"
-                                type="button"
-                                onClick={() => {
-                                  setMenuOpenId("");
-                                  startUproot(project);
-                                }}
-                              >
-                                {t("orchard.uproot")}
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
+                      <Menu
+                        label={t("orchard.more")}
+                        items={[
+                          {
+                            key: "rename",
+                            label: t("orchard.rename"),
+                            onClick: () => startRename(project),
+                          },
+                          {
+                            key: "propagate",
+                            label:
+                              busyId === `propagate:${project.id}`
+                                ? t("orchard.propagating")
+                                : t("orchard.propagate"),
+                            disabled: busyId === `propagate:${project.id}`,
+                            onClick: () => void propagate(project),
+                          },
+                          {
+                            key: "transplant",
+                            label: t("orchard.transplant"),
+                            onClick: () => startTransplant(project),
+                          },
+                          {
+                            key: "uproot",
+                            label: t("orchard.uproot"),
+                            danger: true,
+                            onClick: () => startUproot(project),
+                          },
+                        ]}
+                      />
                     </div>
                   )}
                 </article>
@@ -477,16 +413,4 @@ export function ProjectLibrary({
 function formatProjectDate(seconds: number, t: ReturnType<typeof useT>): string {
   if (!seconds) return t("orchard.neverOpened");
   return `${t("orchard.lastOpened")} ${new Date(seconds * 1000).toLocaleString()}`;
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
 }

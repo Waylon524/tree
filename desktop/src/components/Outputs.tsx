@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { chooseExportDirectory, exportOutputs, fetchOutputs, isTauri } from "../api";
+import { exportOutputs, fetchOutputs } from "../api";
 import { useT } from "../i18n";
+import { chooseExportDestination } from "../lib/export";
 
 export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => void }) {
   const t = useT();
@@ -41,11 +42,6 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
     );
   };
 
-  const chooseDestination = async (): Promise<string | null> => {
-    if (isTauri()) return chooseExportDirectory();
-    return window.prompt("Export destination folder path")?.trim() || null;
-  };
-
   const exportFiles = async (mode: "selected" | "all"): Promise<void> => {
     const names = mode === "all" ? files : selectedForExport;
     if (names.length === 0) {
@@ -55,7 +51,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
     setExporting(true);
     setExportMsg("");
     try {
-      const destination = await chooseDestination();
+      const destination = await chooseExportDestination();
       if (!destination) {
         setExportMsg(t("fruits.exportCancelled"));
         return;

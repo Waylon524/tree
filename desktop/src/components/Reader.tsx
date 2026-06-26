@@ -5,16 +5,16 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import {
-  chooseExportDirectory,
   exportOutputs,
   fetchOutputRaw,
-  isTauri,
   markLearningNodeRead,
   openLearningNode,
   submitLearningFeedback,
 } from "../api";
 import type { RawOutput } from "../api";
 import { useT } from "../i18n";
+import { formatBytes, formatDateTime } from "../lib/format";
+import { chooseExportDestination } from "../lib/export";
 
 export interface ReaderTarget {
   name: string;
@@ -81,16 +81,11 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
     };
   }, [target.from, target.nodeId, t]);
 
-  const chooseDestination = async (): Promise<string | null> => {
-    if (isTauri()) return chooseExportDirectory();
-    return window.prompt("Export destination folder path")?.trim() || null;
-  };
-
   const exportCurrent = async (): Promise<void> => {
     setExporting(true);
     setExportMsg("");
     try {
-      const destination = await chooseDestination();
+      const destination = await chooseExportDestination();
       if (!destination) {
         setExportOk(false);
         setExportMsg(t("fruits.exportCancelled"));
@@ -152,7 +147,7 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
           <h1>{target.name}</h1>
           {output && (
             <p className="muted">
-              {formatBytes(output.size_bytes)} · {t("common.updated")} {formatDate(output.updated_at)}
+              {formatBytes(output.size_bytes)} · {t("common.updated")} {formatDateTime(output.updated_at)}
             </p>
           )}
         </div>
@@ -217,17 +212,4 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
       )}
     </section>
   );
-}
-
-function formatBytes(value: number): string {
-  if (!value) return "0 B";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
 }
