@@ -1653,11 +1653,13 @@ mod tests {
         let root = temp_test_dir("archive-source");
         fs::create_dir_all(root.join("materials").join("default")).unwrap();
         fs::create_dir_all(root.join("outputs")).unwrap();
+        fs::create_dir_all(root.join(".tree").join("prompts")).unwrap();
         fs::create_dir_all(root.join(".tree").join("runtime").join("services")).unwrap();
         fs::write(root.join("project.json"), "{}").unwrap();
         fs::write(root.join("materials").join("default").join("lecture.md"), "seed").unwrap();
         fs::write(root.join("outputs").join("001.Root.md"), "fruit").unwrap();
         fs::write(root.join(".tree").join(".gitignore"), "*\n").unwrap();
+        fs::write(root.join(".tree").join("prompts").join("overrides.json"), "{}").unwrap();
         fs::write(root.join(".tree").join("runtime").join("learning-state.json"), "{}").unwrap();
         fs::write(root.join(".env"), "LLM_API_KEY=secret").unwrap();
         fs::write(root.join(".tree").join("config.env"), "PADDLEOCR_API_TOKEN=secret").unwrap();
@@ -1686,6 +1688,7 @@ mod tests {
         assert!(names.contains(&ARCHIVE_MANIFEST.to_string()));
         assert!(names.contains(&"materials/default/lecture.md".to_string()));
         assert!(names.contains(&"outputs/001.Root.md".to_string()));
+        assert!(names.contains(&".tree/prompts/overrides.json".to_string()));
         assert!(names.contains(&".tree/runtime/learning-state.json".to_string()));
         assert!(names.contains(&".tree/.gitignore".to_string()));
         assert!(!names.contains(&".env".to_string()));

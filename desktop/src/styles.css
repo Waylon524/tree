@@ -555,6 +555,79 @@ table.stages td {
   background: var(--bg);
   color: var(--text);
 }
+.settings-details {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  background: var(--bg);
+}
+.settings-details summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.settings-details[open] summary {
+  margin-bottom: 10px;
+}
+.advanced-group {
+  margin-top: 14px;
+}
+.advanced-group h3,
+.prompt-editor h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.toggle-label {
+  flex-direction: row !important;
+  align-items: center;
+  min-height: 34px;
+}
+.toggle-label input {
+  width: auto;
+}
+.prompt-details {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.prompt-actions,
+.prompt-editor-head,
+.prompt-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.prompt-actions {
+  margin: 12px 0;
+}
+.prompt-editor-head {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.prompt-editor {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg);
+}
+.prompt-editor textarea {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 .label-row {
   display: flex;
   align-items: center;

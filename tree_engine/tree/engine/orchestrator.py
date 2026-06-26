@@ -51,10 +51,10 @@ class TreeEngine:
                 max_format_retries=settings.max_format_retries,
                 project_root=self.root,
             ),
-            student=StudentAgent(self.client),
-            writer=WriterAgent(self.client),
-            archivist=ArchivistAgent(self.client),
-            dagger=DaggerAgent(self.client),
+            student=StudentAgent(self.client, project_root=self.root),
+            writer=WriterAgent(self.client, project_root=self.root),
+            archivist=ArchivistAgent(self.client, project_root=self.root),
+            dagger=DaggerAgent(self.client, project_root=self.root),
         )
         self.archivist = getattr(self.agents, "archivist", None)
         self.examiner = getattr(self.agents, "examiner", None)

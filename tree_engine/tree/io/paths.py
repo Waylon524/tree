@@ -40,6 +40,14 @@ def workspace_config_path(root: Path) -> Path:
     return workspace_home(root) / "config.env"
 
 
+def prompts_root(root: Path) -> Path:
+    return workspace_home(root) / "prompts"
+
+
+def prompt_overrides_path(root: Path) -> Path:
+    return prompts_root(root) / "overrides.json"
+
+
 def legacy_workspace_env_path(root: Path) -> Path:
     return root / ".env"
 
@@ -169,6 +177,7 @@ def ensure_workspace_dirs(root: Path) -> None:
         materials_root(root),
         outputs_root(root),
         runtime_root(root),
+        prompts_root(root),
         ocr_markdown_root(root),
         source_markdown_root(root),
         drafts_root(root),

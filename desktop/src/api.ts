@@ -542,6 +542,42 @@ export async function installExtension(): Promise<ExtensionState> {
 
 export type RoleKey = "examiner" | "student" | "writer" | "archivist" | "dagger";
 export type RoleModels = Record<RoleKey, string>;
+export type PromptKey =
+  | "examiner"
+  | "student"
+  | "writer"
+  | "archivist_clean"
+  | "archivist_mtu"
+  | "dagger"
+  | "dagger_prerequisites";
+
+export interface AdvancedSettings {
+  max_iterations: string;
+  max_active_node_runs: string;
+  max_examiner_span_nodes: string;
+  max_retries: string;
+  max_format_retries: string;
+  llm_timeout_sec: string;
+  pro_degradation_threshold: string;
+  pro_degradation_cooldown_sec: string;
+  source_ingest_concurrency: string;
+  source_ocr_concurrency: string;
+  source_ocr_pdf_max_pages_per_job: string;
+  source_ocr_upload_interval_sec: string;
+  source_embedding_concurrency: string;
+  archivist_mtu_cut_timeout_sec: string;
+  archivist_mtu_repair_attempts: string;
+  dagger_build_timeout_sec: string;
+  dagger_repair_attempts: string;
+  dagger_prerequisite_concurrency: string;
+  dagger_max_nodes_per_call: string;
+  dagger_embed_cluster_enabled: boolean;
+  dagger_cluster_similarity_threshold: string;
+  dagger_cluster_top_k: string;
+  dagger_cluster_max_size: string;
+  dagger_cluster_auto_accept_singleton: boolean;
+  dagger_cluster_auto_accept_same_collection: boolean;
+}
 
 export interface SettingsData {
   config_path: string;
@@ -554,14 +590,41 @@ export interface SettingsData {
   paddleocr_model: string;
   llama_server_ctx: number;
   source_mtu_chunk_tokens: number;
+  max_iterations: number;
+  max_active_node_runs: number;
+  max_examiner_span_nodes: number;
+  max_retries: number;
+  max_format_retries: number;
+  llm_timeout_sec: number;
+  pro_degradation_threshold: number;
+  pro_degradation_cooldown_sec: number;
+  source_ingest_concurrency: number;
+  source_ocr_concurrency: number;
+  source_ocr_pdf_max_pages_per_job: number;
+  source_ocr_upload_interval_sec: number;
+  source_embedding_concurrency: number;
+  archivist_mtu_cut_timeout_sec: number;
+  archivist_mtu_repair_attempts: number;
+  dagger_build_timeout_sec: number;
+  dagger_repair_attempts: number;
+  dagger_prerequisite_concurrency: number;
+  dagger_max_nodes_per_call: number;
+  dagger_embed_cluster_enabled: boolean;
+  dagger_cluster_similarity_threshold: number;
+  dagger_cluster_top_k: number;
+  dagger_cluster_max_size: number;
+  dagger_cluster_auto_accept_singleton: boolean;
+  dagger_cluster_auto_accept_same_collection: boolean;
 }
 
-export interface SettingsSave {
+export interface SettingsSave extends AdvancedSettings {
   llm_api_key: string;
   llm_base_url: string;
   llm_model: string;
   role_models: RoleModels;
   paddleocr_api_token: string;
+  paddleocr_api_url: string;
+  paddleocr_model: string;
   llama_server_ctx: string;
   source_mtu_chunk_tokens: string;
 }
@@ -580,6 +643,52 @@ export async function saveSettings(fields: SettingsSave): Promise<SettingsData> 
     }),
   );
   return (await resp.json()) as SettingsData;
+}
+
+export interface PromptItem {
+  key: PromptKey;
+  label: string;
+  default_text: string;
+  current_text: string;
+  custom_text: string;
+  is_custom: boolean;
+  base_hash: string;
+  saved_base_hash: string;
+  base_changed: boolean;
+  updated_at?: string | null;
+}
+
+export interface PromptSettings {
+  path: string;
+  prompts: PromptItem[];
+}
+
+export async function fetchPrompts(): Promise<PromptSettings> {
+  const resp = await expectOk(await fetch(url("/api/prompts")));
+  return (await resp.json()) as PromptSettings;
+}
+
+export async function savePrompt(key: PromptKey, text: string): Promise<PromptSettings> {
+  const resp = await expectOk(
+    await fetch(url(`/api/prompts/${encodeURIComponent(key)}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }),
+  );
+  return (await resp.json()) as PromptSettings;
+}
+
+export async function resetPrompt(key: PromptKey): Promise<PromptSettings> {
+  const resp = await expectOk(
+    await fetch(url(`/api/prompts/${encodeURIComponent(key)}`), { method: "DELETE" }),
+  );
+  return (await resp.json()) as PromptSettings;
+}
+
+export async function resetAllPrompts(): Promise<PromptSettings> {
+  const resp = await expectOk(await fetch(url("/api/prompts/reset"), { method: "POST" }));
+  return (await resp.json()) as PromptSettings;
 }
 
 export async function saveSetup(fields: Record<string, string>): Promise<string> {

@@ -14,7 +14,6 @@ from typing import Any
 
 from tree.agents.base import Agent
 from tree.agents.parsers import extract_json_object
-from tree.agents.prompts import ARCHIVIST_CLEAN_PROMPT, ARCHIVIST_MTU_PROMPT
 from tree.planner.ids import normalize_text_key
 from tree.planner.models import MTU
 from tree.planner.mtu import (
@@ -54,7 +53,7 @@ class ArchivistAgent(Agent):
             try:
                 raw_plan = await self.complete(
                     prompt_body + malformed_feedback,
-                    system_prompt=ARCHIVIST_CLEAN_PROMPT,
+                    system_prompt=self.prompt_text("archivist_clean"),
                     timeout_sec=timeout_sec,
                 )
                 plan = extract_json_object(raw_plan)
@@ -80,7 +79,7 @@ class ArchivistAgent(Agent):
                     valid_ranges=deleted_ranges,
                     invalid_ranges=invalid_ranges,
                 ),
-                system_prompt=ARCHIVIST_CLEAN_PROMPT,
+                system_prompt=self.prompt_text("archivist_clean"),
                 timeout_sec=timeout_sec,
             )
             repair_plan = extract_json_object(raw_repair)
@@ -120,7 +119,7 @@ class ArchivistAgent(Agent):
                 try:
                     raw = await self.complete(
                         prompt_body + malformed_feedback,
-                        system_prompt=ARCHIVIST_MTU_PROMPT,
+                        system_prompt=self.prompt_text("archivist_mtu"),
                         timeout_sec=timeout_sec,
                     )
                     plan = extract_json_object(raw)
@@ -275,7 +274,7 @@ class ArchivistAgent(Agent):
                     previous=previous,
                     next_unit=next_unit,
                 ),
-                system_prompt=ARCHIVIST_MTU_PROMPT,
+                system_prompt=self.prompt_text("archivist_mtu"),
                 timeout_sec=timeout_sec,
             )
             decision = extract_json_object(raw_repair)
@@ -310,7 +309,7 @@ class ArchivistAgent(Agent):
                     line_range=original_range,
                     metadata_error=field_error,
                 ),
-                system_prompt=ARCHIVIST_MTU_PROMPT,
+                system_prompt=self.prompt_text("archivist_mtu"),
                 timeout_sec=timeout_sec,
             )
             repair = extract_json_object(raw_repair)
@@ -375,7 +374,7 @@ class ArchivistAgent(Agent):
                     window_start=window_start,
                     window_end=window_end,
                 ),
-                system_prompt=ARCHIVIST_MTU_PROMPT,
+                system_prompt=self.prompt_text("archivist_mtu"),
                 timeout_sec=timeout_sec,
             )
             repair = extract_json_object(raw_repair)
@@ -416,7 +415,7 @@ class ArchivistAgent(Agent):
                 problem=problem,
                 duplicate_units=duplicate_units,
             ),
-            system_prompt=ARCHIVIST_MTU_PROMPT,
+            system_prompt=self.prompt_text("archivist_mtu"),
             timeout_sec=timeout_sec,
         )
         repair = extract_json_object(raw_repair)

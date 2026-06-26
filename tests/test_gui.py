@@ -293,7 +293,7 @@ def test_learning_feedback_revises_output_and_marks_dependents_affected(workspac
             return None
 
     class _FakeWriter:
-        def __init__(self, client):
+        def __init__(self, client, **kwargs):
             self.client = client
 
         async def revise_from_feedback(self, **kwargs):
@@ -375,7 +375,7 @@ def test_learning_feedback_failure_keeps_original_output(workspace, monkeypatch)
             return None
 
     class _FailingWriter:
-        def __init__(self, client):
+        def __init__(self, client, **kwargs):
             self.client = client
 
         async def revise_from_feedback(self, **kwargs):
@@ -625,6 +625,14 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["paddleocr_model"] == "PaddleOCR-VL-1.6"
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
+    assert data["max_iterations"] == 5
+    assert data["max_active_node_runs"] == 5
+    assert data["max_retries"] == 3
+    assert data["llm_timeout_sec"] == 480.0
+    assert data["source_ocr_concurrency"] == 5
+    assert data["archivist_mtu_repair_attempts"] == 8
+    assert data["dagger_embed_cluster_enabled"] is True
+    assert data["dagger_cluster_auto_accept_same_collection"] is False
     assert "llm_api_key" not in data
     assert "paddleocr_api_token" not in data
 
@@ -645,8 +653,17 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
                 "dagger": "dagger-model",
             },
             "paddleocr_api_token": "ocr-new",
+            "paddleocr_api_url": "https://ocr.test/jobs",
+            "paddleocr_model": "PaddleOCR-VL-Next",
             "llama_server_ctx": "22000",
             "source_mtu_chunk_tokens": "20000",
+            "max_iterations": "7",
+            "max_active_node_runs": "3",
+            "max_retries": "4",
+            "llm_timeout_sec": "600",
+            "source_ocr_upload_interval_sec": "2.5",
+            "dagger_embed_cluster_enabled": False,
+            "dagger_cluster_similarity_threshold": "0.72",
         },
     )
 
@@ -657,6 +674,9 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert data["role_models"]["dagger"] == "dagger-model"
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
+    assert data["max_iterations"] == 7
+    assert data["dagger_embed_cluster_enabled"] is False
+    assert data["dagger_cluster_similarity_threshold"] == 0.72
     written = paths.global_config_path().read_text(encoding="utf-8")
     assert "LLM_API_KEY=sk-new" in written
     assert "LLM_BASE_URL=https://llm.test" in written
@@ -667,10 +687,17 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert "ARCHIVIST_MODEL=arch-model" in written
     assert "DAGGER_MODEL=dagger-model" in written
     assert "PADDLEOCR_API_TOKEN=ocr-new" in written
-    assert "PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs" in written
-    assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in written
+    assert "PADDLEOCR_API_URL=https://ocr.test/jobs" in written
+    assert "PADDLEOCR_MODEL=PaddleOCR-VL-Next" in written
     assert "LLAMA_SERVER_CTX=22000" in written
     assert "SOURCE_MTU_CHUNK_TOKENS=20000" in written
+    assert "MAX_ITERATIONS=7" in written
+    assert "MAX_ACTIVE_NODE_RUNS=3" in written
+    assert "MAX_RETRIES=4" in written
+    assert "LLM_TIMEOUT_SEC=600" in written
+    assert "SOURCE_OCR_UPLOAD_INTERVAL_SEC=2.5" in written
+    assert "DAGGER_EMBED_CLUSTER_ENABLED=false" in written
+    assert "DAGGER_CLUSTER_SIMILARITY_THRESHOLD=0.72" in written
 
 
 def test_settings_post_rejects_invalid_runtime_numbers_without_writing(workspace):
@@ -681,6 +708,7 @@ def test_settings_post_rejects_invalid_runtime_numbers_without_writing(workspace
             "llm_base_url": "https://llm.test",
             "llama_server_ctx": "40000",
             "source_mtu_chunk_tokens": "20000",
+            "max_iterations": "5",
         },
     )
 
@@ -689,7 +717,7 @@ def test_settings_post_rejects_invalid_runtime_numbers_without_writing(workspace
     assert not config.exists()
 
 
-def test_settings_post_ignores_paddleocr_endpoint_and_model_overrides(workspace):
+def test_settings_post_writes_paddleocr_endpoint_and_model_overrides(workspace):
     config = paths.global_config_path()
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(
@@ -725,10 +753,38 @@ def test_settings_post_ignores_paddleocr_endpoint_and_model_overrides(workspace)
     assert "PADDLEOCR_API_TOKEN=old-ocr" in written
     assert "LLM_BASE_URL=https://new.test" in written
     assert "DAGGER_MODEL=dagger-new" in written
-    assert "PADDLEOCR_API_URL=https://paddleocr.aistudio-app.com/api/v2/ocr/jobs" in written
-    assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.6" in written
-    assert "https://ocr-new.test/jobs" not in written
-    assert "PaddleOCR-VL-1.7" not in written
+    assert "PADDLEOCR_API_URL=https://ocr-new.test/jobs" in written
+    assert "PADDLEOCR_MODEL=PaddleOCR-VL-1.7" in written
+
+
+def test_prompt_api_saves_and_resets_project_overrides(workspace):
+    client = _authed_client(workspace)
+
+    data = client.get("/api/prompts").json()
+    writer = next(item for item in data["prompts"] if item["key"] == "writer")
+    assert writer["is_custom"] is False
+    assert writer["current_text"] == writer["default_text"]
+
+    resp = client.put("/api/prompts/writer", json={"text": "CUSTOM WRITER"})
+    assert resp.status_code == 200
+    data = resp.json()
+    writer = next(item for item in data["prompts"] if item["key"] == "writer")
+    assert writer["is_custom"] is True
+    assert writer["current_text"] == "CUSTOM WRITER"
+    assert paths.prompt_overrides_path(workspace).exists()
+
+    resp = client.delete("/api/prompts/writer")
+    assert resp.status_code == 200
+    writer = next(item for item in resp.json()["prompts"] if item["key"] == "writer")
+    assert writer["is_custom"] is False
+
+
+def test_prompt_api_rejects_unknown_or_empty_prompt(workspace):
+    client = _authed_client(workspace)
+
+    assert client.put("/api/prompts/nope", json={"text": "x"}).status_code == 400
+    assert client.put("/api/prompts/writer", json={"text": ""}).status_code == 400
+    assert not paths.prompt_overrides_path(workspace).exists()
 
 
 def test_status_includes_engine_state(workspace):

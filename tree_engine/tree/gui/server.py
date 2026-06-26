@@ -42,6 +42,12 @@ from tree.cli.commands import config_cmd, inspect as inspect_cmd
 from tree.cli.commands.lifecycle import engine_status, quit_tree, start_engine, stop_engine
 from tree.cli.dashboard.model import build_watch_model
 from tree.config import load_runtime_env
+from tree.agents.prompts import (
+    list_prompt_settings,
+    reset_all_prompt_overrides,
+    reset_prompt_override,
+    save_prompt_override,
+)
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
 from tree.io import paths
 from tree.learning import (
@@ -226,6 +232,36 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     def api_settings(request: Request) -> dict[str, Any]:
         _require(request)
         return config_cmd.read_settings_config(root, env_path=paths.global_config_path())
+
+    @app.get("/api/prompts")
+    def api_prompts(request: Request) -> dict[str, Any]:
+        _require(request)
+        return list_prompt_settings(root)
+
+    @app.put("/api/prompts/{key}")
+    def api_save_prompt(
+        request: Request,
+        key: str,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        _require(request)
+        try:
+            return save_prompt_override(root, key, str(payload.get("text") or ""))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/prompts/{key}")
+    def api_reset_prompt(request: Request, key: str) -> dict[str, Any]:
+        _require(request)
+        try:
+            return reset_prompt_override(root, key)
+        except KeyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/prompts/reset")
+    def api_reset_all_prompts(request: Request) -> dict[str, Any]:
+        _require(request)
+        return reset_all_prompt_overrides(root)
 
     @app.websocket("/ws/progress")
     async def ws_progress(websocket: WebSocket) -> None:

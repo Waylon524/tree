@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from tree.agents.prompts import get_prompt
 from tree.model.client import LLMClient
 
@@ -11,10 +13,20 @@ class Agent:
 
     role: str = ""
 
-    def __init__(self, client: LLMClient, *, prompt_name: str | None = None):
+    def __init__(
+        self,
+        client: LLMClient,
+        *,
+        prompt_name: str | None = None,
+        project_root: Path | None = None,
+    ):
         self.client = client
         self.prompt_name = prompt_name or self.role
-        self.system_prompt = get_prompt(self.prompt_name)
+        self.project_root = project_root
+        self.system_prompt = self.prompt_text(self.prompt_name)
+
+    def prompt_text(self, prompt_name: str | None = None) -> str:
+        return get_prompt(prompt_name or self.prompt_name, project_root=self.project_root)
 
     async def complete(
         self,

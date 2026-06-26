@@ -12,7 +12,6 @@ from typing import Any
 
 from tree.agents.base import Agent
 from tree.agents.parsers import extract_json_object
-from tree.agents.prompts import DAGGER_PREREQUISITES_PROMPT, DAGGER_PROMPT
 
 
 class DaggerAgent(Agent):
@@ -24,7 +23,7 @@ class DaggerAgent(Agent):
         """Send MTU metadata, return parsed ``{"nodes": [...]}``."""
         user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
         raw = await self.complete(
-            user_prompt, system_prompt=DAGGER_PROMPT, timeout_sec=timeout_sec
+            user_prompt, system_prompt=self.prompt_text("dagger"), timeout_sec=timeout_sec
         )
         result = extract_json_object(raw)
         if not isinstance(result.get("nodes"), list):
@@ -37,7 +36,9 @@ class DaggerAgent(Agent):
         """Send nodes + define dictionary, return ``{"node_prerequisites": [...]}``."""
         user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
         raw = await self.complete(
-            user_prompt, system_prompt=DAGGER_PREREQUISITES_PROMPT, timeout_sec=timeout_sec
+            user_prompt,
+            system_prompt=self.prompt_text("dagger_prerequisites"),
+            timeout_sec=timeout_sec,
         )
         result = extract_json_object(raw)
         if not isinstance(result.get("node_prerequisites"), list):

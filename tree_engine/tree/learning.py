@@ -156,7 +156,7 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
     try:
         settings = Settings.from_env(root)
         client = LLMClient(settings)
-        writer = WriterAgent(client)
+        writer = WriterAgent(client, project_root=root)
         rag = RAGClient(store_path=paths.rag_store_path(root))
         indexer = RAGIndexer(
             rag,
@@ -443,4 +443,3 @@ def _node_file_seq(nodes: list[dict[str, Any]], node_id: str) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-

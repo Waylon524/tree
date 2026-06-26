@@ -5,8 +5,9 @@ from __future__ import annotations
 import pytest
 
 from tree.agents.archivist import ArchivistAgent
+from tree.agents.dagger import DaggerAgent
 from tree.agents.examiner import ExaminerAgent
-from tree.agents.prompts import ARCHIVIST_MTU_PROMPT
+from tree.agents.prompts import ARCHIVIST_MTU_PROMPT, save_prompt_override
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.planner.mtu import MtuCoverageError
@@ -42,9 +43,11 @@ class _FakeClient:
     def __init__(self, responses):
         self.responses = responses
         self.calls = []
+        self.systems = []
 
     async def call(self, role, system, user, *, timeout_sec=None):
         self.calls.append((role, user))
+        self.systems.append(system)
         r = self.responses[role]
         return r(user) if callable(r) else r
 
@@ -1083,6 +1086,34 @@ async def test_writer_draft_returns_content():
         prior_paths=[], prior_contents=[],
     )
     assert result.draft_content.startswith("# 化学平衡")
+
+
+async def test_agent_uses_project_prompt_override(tmp_path):
+    save_prompt_override(tmp_path, "writer", "CUSTOM WRITER PROMPT")
+    client = _FakeClient({"writer": "# 化学平衡\n内容"})
+    agent = WriterAgent(client, project_root=tmp_path)
+
+    await agent.draft(
+        span_title="化学平衡",
+        file_seq="01",
+        bottleneck_report="缺公式",
+        prior_paths=[],
+        prior_contents=[],
+    )
+
+    assert client.systems[-1] == "CUSTOM WRITER PROMPT"
+
+
+async def test_archivist_and_dagger_use_project_prompt_overrides(tmp_path):
+    save_prompt_override(tmp_path, "archivist_clean", "CUSTOM CLEAN PROMPT")
+    save_prompt_override(tmp_path, "dagger", "CUSTOM DAGGER PROMPT")
+    client = _FakeClient({"archivist": '{"deleted_ranges": []}', "dagger": '{"nodes": []}'})
+
+    await ArchivistAgent(client, project_root=tmp_path).clean("line 1")
+    await DaggerAgent(client, project_root=tmp_path).build_nodes([])
+
+    assert "CUSTOM CLEAN PROMPT" in client.systems
+    assert "CUSTOM DAGGER PROMPT" in client.systems
 
 
 async def test_writer_revise_from_feedback_uses_feedback_as_optimize_context():

@@ -34,7 +34,7 @@ class ExaminerAgent(Agent):
         max_format_retries: int = 2,
         project_root: Path | None = None,
     ):
-        super().__init__(client)
+        super().__init__(client, project_root=project_root)
         self._max_format_retries = max_format_retries
         self._project_root = project_root
 
