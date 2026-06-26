@@ -1,8 +1,9 @@
 name: release
 
-# Build the desktop installers (macOS Apple Silicon / Windows) and attach them to a
-# GitHub Release. Triggered by a version tag; workflow_dispatch builds without
-# releasing (to validate the pipeline).
+# Build the Windows desktop installers and attach them to a GitHub Release.
+# macOS is packaged, notarized, and uploaded from a local Mac release machine.
+# Triggered by a version tag; workflow_dispatch builds without releasing (to
+# validate the pipeline).
 on:
   push:
     tags: ["v*"]
@@ -15,7 +16,6 @@ on:
         type: choice
         options:
           - all
-          - macos
           - windows
 
 jobs:
@@ -31,10 +31,7 @@ jobs:
         run: |
           case "$TARGET" in
             all)
-              matrix='{"include":[{"os":"macos-latest","label":"macOS (Apple Silicon)","target":"macos","artifact":"macos-arm64"},{"os":"windows-latest","label":"Windows","target":"windows","artifact":"windows"}]}'
-              ;;
-            macos)
-              matrix='{"include":[{"os":"macos-latest","label":"macOS (Apple Silicon)","target":"macos","artifact":"macos-arm64"}]}'
+              matrix='{"include":[{"os":"windows-latest","label":"Windows","target":"windows","artifact":"windows"}]}'
               ;;
             windows)
               matrix='{"include":[{"os":"windows-latest","label":"Windows","target":"windows","artifact":"windows"}]}'
