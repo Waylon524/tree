@@ -18,6 +18,9 @@ on:
           - all
           - windows
 
+permissions:
+  contents: write
+
 jobs:
   select-targets:
     name: Select release targets
