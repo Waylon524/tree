@@ -1,6 +1,6 @@
 name: release
 
-# Build the desktop installers (macOS / Windows / Linux) and attach them to a
+# Build the desktop installers (macOS Apple Silicon / Windows) and attach them to a
 # GitHub Release. Triggered by a version tag; workflow_dispatch builds without
 # releasing (to validate the pipeline).
 on:
@@ -17,7 +17,6 @@ on:
           - all
           - macos
           - windows
-          - linux
 
 jobs:
   select-targets:
@@ -32,16 +31,13 @@ jobs:
         run: |
           case "$TARGET" in
             all)
-              matrix='{"include":[{"os":"macos-latest","label":"macOS (Apple Silicon)","target":"macos","artifact":"macos-arm64"},{"os":"macos-13","label":"macOS (Intel)","target":"macos","artifact":"macos-x64"},{"os":"ubuntu-22.04","label":"Linux","target":"linux","artifact":"linux"},{"os":"windows-latest","label":"Windows","target":"windows","artifact":"windows"}]}'
+              matrix='{"include":[{"os":"macos-latest","label":"macOS (Apple Silicon)","target":"macos","artifact":"macos-arm64"},{"os":"windows-latest","label":"Windows","target":"windows","artifact":"windows"}]}'
               ;;
             macos)
-              matrix='{"include":[{"os":"macos-latest","label":"macOS (Apple Silicon)","target":"macos","artifact":"macos-arm64"},{"os":"macos-13","label":"macOS (Intel)","target":"macos","artifact":"macos-x64"}]}'
+              matrix='{"include":[{"os":"macos-latest","label":"macOS (Apple Silicon)","target":"macos","artifact":"macos-arm64"}]}'
               ;;
             windows)
               matrix='{"include":[{"os":"windows-latest","label":"Windows","target":"windows","artifact":"windows"}]}'
-              ;;
-            linux)
-              matrix='{"include":[{"os":"ubuntu-22.04","label":"Linux","target":"linux","artifact":"linux"}]}'
               ;;
             *)
               echo "Unsupported target: $TARGET" >&2
