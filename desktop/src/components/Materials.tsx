@@ -4,6 +4,7 @@ import type { ImportedFile } from "../api";
 import { useT } from "../i18n";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { FruitTreeMark } from "./illustrations";
+import { Card, SectionHeader } from "./ui/Card";
 
 export function Materials() {
   const t = useT();
@@ -47,11 +48,12 @@ export function Materials() {
   };
 
   return (
-    <div className="card">
-      <div className="section-head seeds-head">
-        <h2>{t("seeds.title")}</h2>
-        <FruitTreeMark fruits={0} size={40} />
-      </div>
+    <Card>
+      <SectionHeader
+        className="seeds-head"
+        title={t("seeds.title")}
+        actions={<FruitTreeMark fruits={0} size={40} />}
+      />
       <div className="controls">
         <input
           ref={fileRef}
@@ -101,7 +103,7 @@ export function Materials() {
           </ul>
         </details>
       )}
-    </div>
+    </Card>
   );
 }
 

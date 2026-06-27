@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { exportOutputs, fetchOutputs } from "../api";
+import { fetchOutputs } from "../api";
 import { useT } from "../i18n";
-import { chooseExportDestination } from "../lib/export";
+import { useExport } from "../lib/useExport";
+import { Card, SectionHeader } from "./ui/Card";
+import { Message } from "./ui/Message";
 
 export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => void }) {
   const t = useT();
   const [files, setFiles] = useState<string[]>([]);
   const [selectedForExport, setSelectedForExport] = useState<string[]>([]);
   const [query, setQuery] = useState<string>("");
-  const [exporting, setExporting] = useState<boolean>(false);
-  const [exportMsg, setExportMsg] = useState<string>("");
+  const { exporting, message: exportMsg, ok: exportOk, exportFiles: runExport, reportEmpty } = useExport();
 
   useEffect(() => {
     let active = true;
@@ -45,57 +46,41 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
   const exportFiles = async (mode: "selected" | "all"): Promise<void> => {
     const names = mode === "all" ? files : selectedForExport;
     if (names.length === 0) {
-      setExportMsg(mode === "all" ? t("fruits.noneToExport") : t("fruits.selectToExport"));
+      reportEmpty(mode === "all" ? t("fruits.noneToExport") : t("fruits.selectToExport"));
       return;
     }
-    setExporting(true);
-    setExportMsg("");
-    try {
-      const destination = await chooseExportDestination();
-      if (!destination) {
-        setExportMsg(t("fruits.exportCancelled"));
-        return;
-      }
-      const result = await exportOutputs(destination, names);
-      const details = [
-        `Exported ${result.exported.length}`,
-        result.skipped.length ? `skipped ${result.skipped.length}` : "",
-        result.failed.length ? `failed ${result.failed.length}` : "",
-      ]
-        .filter(Boolean)
-        .join(", ");
-      setExportMsg(`${details}.`);
-    } catch (err) {
-      setExportMsg(err instanceof Error ? err.message : String(err));
-    } finally {
-      setExporting(false);
-    }
+    await runExport(names);
   };
 
   return (
-    <div className="card">
-      <div className="section-head">
-        <h2>
-          {t("fruits.title")} <span className="muted count-note">{t("fruits.count", { n: files.length })}</span>
-        </h2>
-        <div className="export-actions">
-          <button
-            className="ghost"
-            type="button"
-            disabled={exporting || selectedForExport.length === 0}
-            onClick={() => void exportFiles("selected")}
-          >
-            {t("fruits.exportSelected")}
-          </button>
-          <button
-            type="button"
-            disabled={exporting || files.length === 0}
-            onClick={() => void exportFiles("all")}
-          >
-            {t("fruits.exportAll")}
-          </button>
-        </div>
-      </div>
+    <Card>
+      <SectionHeader
+        title={
+          <>
+            {t("fruits.title")}{" "}
+            <span className="muted count-note">{t("fruits.count", { n: files.length })}</span>
+          </>
+        }
+        actions={
+          <div className="export-actions">
+            <button
+              className="ghost"
+              type="button"
+              disabled={exporting || selectedForExport.length === 0}
+              onClick={() => void exportFiles("selected")}
+            >
+              {t("fruits.exportSelected")}
+            </button>
+            <button
+              type="button"
+              disabled={exporting || files.length === 0}
+              onClick={() => void exportFiles("all")}
+            >
+              {t("fruits.exportAll")}
+            </button>
+          </div>
+        }
+      />
       {files.length > 0 && (
         <input
           className="fruit-search"
@@ -105,7 +90,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
           onChange={(event) => setQuery(event.target.value)}
         />
       )}
-      {exportMsg && <p className={exportMsg.includes("failed") ? "errors" : "hint"}>{exportMsg}</p>}
+      {exportMsg && <Message kind={exportOk ? "hint" : "error"}>{exportMsg}</Message>}
       {files.length === 0 ? (
         <p className="muted">{t("fruits.empty")}</p>
       ) : (
@@ -144,7 +129,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
           })}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 

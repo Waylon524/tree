@@ -5,7 +5,6 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import {
-  exportOutputs,
   fetchOutputRaw,
   markLearningNodeRead,
   openLearningNode,
@@ -14,7 +13,8 @@ import {
 import type { RawOutput } from "../api";
 import { useT } from "../i18n";
 import { formatBytes, formatDateTime } from "../lib/format";
-import { chooseExportDestination } from "../lib/export";
+import { useExport } from "../lib/useExport";
+import { Message } from "./ui/Message";
 
 export interface ReaderTarget {
   name: string;
@@ -32,9 +32,7 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
   const t = useT();
   const [output, setOutput] = useState<RawOutput | null>(null);
   const [error, setError] = useState<string>("");
-  const [exporting, setExporting] = useState<boolean>(false);
-  const [exportMsg, setExportMsg] = useState<string>("");
-  const [exportOk, setExportOk] = useState<boolean>(true);
+  const { exporting, message: exportMsg, ok: exportOk, exportFiles } = useExport();
   const [learningMsg, setLearningMsg] = useState<string>("");
   const [learningOk, setLearningOk] = useState<boolean>(true);
   const [feedback, setFeedback] = useState<string>("");
@@ -81,28 +79,7 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
     };
   }, [target.from, target.nodeId, t]);
 
-  const exportCurrent = async (): Promise<void> => {
-    setExporting(true);
-    setExportMsg("");
-    try {
-      const destination = await chooseExportDestination();
-      if (!destination) {
-        setExportOk(false);
-        setExportMsg(t("fruits.exportCancelled"));
-        return;
-      }
-      const result = await exportOutputs(destination, [target.name]);
-      const failed = result.failed.length ? `, failed ${result.failed.length}` : "";
-      const skipped = result.skipped.length ? `, skipped ${result.skipped.length}` : "";
-      setExportOk(result.failed.length === 0);
-      setExportMsg(`Exported ${result.exported.length}${skipped}${failed}.`);
-    } catch (err) {
-      setExportOk(false);
-      setExportMsg(err instanceof Error ? err.message : String(err));
-    } finally {
-      setExporting(false);
-    }
-  };
+  const exportCurrent = (): Promise<void> => exportFiles([target.name]);
 
   const markRead = async (): Promise<void> => {
     if (!target.nodeId) return;
@@ -179,9 +156,9 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
         </div>
       </header>
 
-      {exportMsg && <p className={exportOk ? "ok" : "errors"}>{exportMsg}</p>}
-      {learningMsg && <p className={learningOk ? "ok" : "errors"}>{learningMsg}</p>}
-      {error && <p className="errors">{error}</p>}
+      {exportMsg && <Message kind={exportOk ? "ok" : "error"}>{exportMsg}</Message>}
+      {learningMsg && <Message kind={learningOk ? "ok" : "error"}>{learningMsg}</Message>}
+      {error && <Message kind="error">{error}</Message>}
       {!output && !error && <p className="muted">{t("common.loading")}</p>}
       {target.nodeId && output && feedbackOpen && (
         <section className="reader-feedback" aria-label="Learning feedback">

@@ -17,6 +17,7 @@ import { formatBytes } from "../lib/format";
 import { FruitTreeMark, OrchardScene } from "./illustrations";
 import { ConfirmByName } from "./ui/ConfirmByName";
 import { Menu } from "./ui/Menu";
+import { Message } from "./ui/Message";
 
 interface ProjectLibraryProps {
   bootstrap: AppBootstrap;
@@ -258,8 +259,16 @@ export function ProjectLibrary({
           </button>
         </form>
 
-        {error && <div className="errors project-error">{error}</div>}
-        {message && <div className="success project-error">{message}</div>}
+        {error && (
+          <Message kind="error" className="project-error">
+            {error}
+          </Message>
+        )}
+        {message && (
+          <Message kind="success" className="project-error">
+            {message}
+          </Message>
+        )}
 
         {sortedProjects.length === 0 ? (
           <section className="project-empty">

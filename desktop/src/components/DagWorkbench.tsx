@@ -10,6 +10,8 @@ import { useT } from "../i18n";
 import type { Translate } from "../i18n";
 import { AppleTreeStage } from "./illustrations";
 import type { StageKey } from "./illustrations";
+import { Message } from "./ui/Message";
+import { Toggle } from "./ui/Toggle";
 
 // One unified ripeness lifecycle merges the growing DAG and the read DAG.
 type Ripeness = "set" | "unripe" | "turning" | "almost" | "ripe" | "picked" | "blighted";
@@ -462,17 +464,19 @@ function NodeInspector({
               <button type="button" onClick={() => onRegrow(String(node.id))} disabled={regrowBusy}>
                 {regrowBusy ? t("harvest.regrowing") : t("harvest.regrow")}
               </button>
-              {actionMsg && <p className="hint">{actionMsg}</p>}
+              {actionMsg && <Message kind="hint">{actionMsg}</Message>}
             </div>
           )}
-          <label className="downstream-toggle">
-            <input
-              type="checkbox"
-              checked={showDownstream}
-              onChange={(event) => onToggleDownstream(event.target.checked)}
-            />
-            {t("harvest.downstream")} <b>{downstreamCount}</b>
-          </label>
+          <Toggle
+            className="downstream-toggle"
+            checked={showDownstream}
+            onChange={onToggleDownstream}
+            label={
+              <>
+                {t("harvest.downstream")} <b>{downstreamCount}</b>
+              </>
+            }
+          />
           {unreadAncestors.length > 0 && (
             <div className="dag-inspector-section prereq-reminder">
               <p className="hint">{t("harvest.prereqReminder", { n: unreadAncestors.length })}</p>

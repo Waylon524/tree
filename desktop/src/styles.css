@@ -1704,6 +1704,16 @@ table.stages td {
   color: var(--text);
   font: inherit;
 }
+
+.ui-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.ui-toggle input {
+  margin: 0;
+}
 .seeds-head {
   align-items: center;
 }

@@ -19,6 +19,8 @@ import type {
 } from "../api";
 import { useLang, useT } from "../i18n";
 import { Materials } from "./Materials";
+import { Message } from "./ui/Message";
+import { Toggle } from "./ui/Toggle";
 
 const ROLES: RoleKey[] = ["examiner", "student", "writer", "archivist", "dagger"];
 const PROMPT_GROUPS: PromptKey[] = [
@@ -244,11 +246,6 @@ export function Settings() {
       setFields((prev) => ({ ...prev, [key]: event.target.value }));
     };
 
-  const setAdvancedBool =
-    (key: keyof AdvancedSettings) => (event: ChangeEvent<HTMLInputElement>): void => {
-      setFields((prev) => ({ ...prev, [key]: event.target.checked }));
-    };
-
   const setRole = (key: RoleKey) => (event: ChangeEvent<HTMLInputElement>): void => {
     setFields((prev) => ({
       ...prev,
@@ -464,35 +461,31 @@ export function Settings() {
               <div className="advanced-group" key={group.titleKey}>
                 <h3>{t(group.titleKey)}</h3>
                 <div className="form-grid">
-                  {group.fields.map((field) => (
-                    <label
-                      key={field.key}
-                      className={field.kind === "boolean" ? "toggle-label" : ""}
-                    >
-                      {field.kind === "boolean" ? (
-                        <>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(fields[field.key])}
-                            onChange={setAdvancedBool(field.key)}
-                          />
-                          <span>{t(`settings.advanced.${field.key}`)}</span>
-                        </>
-                      ) : (
-                        <>
-                          {t(`settings.advanced.${field.key}`)}
-                          <input
-                            type="number"
-                            min={field.min}
-                            max={field.max}
-                            step={field.step ?? "1"}
-                            value={String(fields[field.key])}
-                            onChange={setAdvancedText(field.key)}
-                          />
-                        </>
-                      )}
-                    </label>
-                  ))}
+                  {group.fields.map((field) =>
+                    field.kind === "boolean" ? (
+                      <Toggle
+                        key={field.key}
+                        className="toggle-label"
+                        checked={Boolean(fields[field.key])}
+                        onChange={(checked) =>
+                          setFields((prev) => ({ ...prev, [field.key]: checked }))
+                        }
+                        label={<span>{t(`settings.advanced.${field.key}`)}</span>}
+                      />
+                    ) : (
+                      <label key={field.key}>
+                        {t(`settings.advanced.${field.key}`)}
+                        <input
+                          type="number"
+                          min={field.min}
+                          max={field.max}
+                          step={field.step ?? "1"}
+                          value={String(fields[field.key])}
+                          onChange={setAdvancedText(field.key)}
+                        />
+                      </label>
+                    ),
+                  )}
                 </div>
               </div>
             ))}
@@ -502,7 +495,11 @@ export function Settings() {
             <button type="submit" disabled={busy}>
               {busy ? t("common.saving") : t("settings.save")}
             </button>
-            {message && <span className={ok ? "ok" : "errors"}>{message}</span>}
+            {message && (
+              <Message kind={ok ? "ok" : "error"} inline>
+                {message}
+              </Message>
+            )}
           </div>
         </form>
       </section>
@@ -521,7 +518,9 @@ export function Settings() {
               {t("settings.prompts.resetAll")}
             </button>
             {promptMessage && (
-              <span className={promptOk ? "ok" : "errors"}>{promptMessage}</span>
+              <Message kind={promptOk ? "ok" : "error"} inline>
+                {promptMessage}
+              </Message>
             )}
           </div>
           <div className="prompt-list">
