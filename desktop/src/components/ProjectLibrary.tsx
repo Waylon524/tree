@@ -15,6 +15,7 @@ import {
 import { useT } from "../i18n";
 import { formatBytes } from "../lib/format";
 import { FruitTreeMark, OrchardScene } from "./illustrations";
+import { Button } from "./ui/Button";
 import { ConfirmByName } from "./ui/ConfirmByName";
 import { Menu } from "./ui/Menu";
 import { Message } from "./ui/Message";
@@ -224,9 +225,9 @@ export function ProjectLibrary({
       <header className="project-library-bar">
         <span className="brand">T.R.E.E.</span>
         {onBack && (
-          <button className="ghost" type="button" onClick={onBack}>
+          <Button variant="ghost" onClick={onBack}>
             {t("orchard.back")}
-          </button>
+          </Button>
         )}
       </header>
       <main className="project-library-main">
@@ -246,17 +247,16 @@ export function ProjectLibrary({
             placeholder={t("orchard.newName")}
             aria-label={t("orchard.newName")}
           />
-          <button type="submit" disabled={busyId === "create"}>
+          <Button type="submit" disabled={busyId === "create"}>
             {busyId === "create" ? t("orchard.planting") : t("orchard.fromSeeds")}
-          </button>
-          <button
-            className="ghost"
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
             onClick={() => void plantParentTree()}
             disabled={busyId === "import"}
           >
             {busyId === "import" ? t("orchard.planting") : t("orchard.fromParentTree")}
-          </button>
+          </Button>
         </form>
 
         {error && (
@@ -331,12 +331,12 @@ export function ProjectLibrary({
                         />
                       </label>
                       <div className="tree-actions">
-                        <button type="submit" disabled={busyId === `save:${project.id}`}>
+                        <Button type="submit" disabled={busyId === `save:${project.id}`}>
                           {busyId === `save:${project.id}` ? t("common.saving") : t("common.save")}
-                        </button>
-                        <button className="ghost" type="button" onClick={() => setEditingId("")}>
+                        </Button>
+                        <Button variant="ghost" onClick={() => setEditingId("")}>
                           {t("common.back")}
-                        </button>
+                        </Button>
                       </div>
                     </form>
                   ) : transplantId === project.id ? (
@@ -368,15 +368,14 @@ export function ProjectLibrary({
                     />
                   ) : (
                     <div className="tree-actions">
-                      <button
-                        type="button"
+                      <Button
                         onClick={() => void observe(project)}
                         disabled={busyId === `open:${project.id}`}
                       >
                         {busyId === `open:${project.id}`
                           ? t("orchard.observing")
                           : t("orchard.observe")}
-                      </button>
+                      </Button>
                       <Menu
                         label={t("orchard.more")}
                         items={[

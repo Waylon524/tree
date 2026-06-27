@@ -10,6 +10,7 @@ import { useT } from "../i18n";
 import type { Translate } from "../i18n";
 import { AppleTreeStage } from "./illustrations";
 import type { StageKey } from "./illustrations";
+import { Button } from "./ui/Button";
 import { Message } from "./ui/Message";
 import { Toggle } from "./ui/Toggle";
 
@@ -378,15 +379,15 @@ export function DagWorkbench({
           <>
             <div className="dag-canvas-hint">{t("harvest.canvasHint")}</div>
             <div className="dag-view-controls">
-              <button type="button" className="ghost" onClick={fitView}>
+              <Button variant="ghost" onClick={fitView}>
                 {t("harvest.fit")}
-              </button>
-              <button type="button" className="ghost" onClick={resetView}>
+              </Button>
+              <Button variant="ghost" onClick={resetView}>
                 {t("harvest.reset")}
-              </button>
-              <button type="button" className="ghost" onClick={() => void runOpenSvg()}>
+              </Button>
+              <Button variant="ghost" onClick={() => void runOpenSvg()}>
                 {t("harvest.openSvg")}
-              </button>
+              </Button>
             </div>
             {svgMessage && (
               <span className="dag-svg-message" dangerouslySetInnerHTML={{ __html: svgMessage }} />
@@ -461,9 +462,9 @@ function NodeInspector({
           <p className="muted">{t(`ripe.${node.ripeness}.desc`)}</p>
           {node.ripeness === "blighted" && (
             <div className="dag-regrow">
-              <button type="button" onClick={() => onRegrow(String(node.id))} disabled={regrowBusy}>
+              <Button onClick={() => onRegrow(String(node.id))} disabled={regrowBusy}>
                 {regrowBusy ? t("harvest.regrowing") : t("harvest.regrow")}
-              </button>
+              </Button>
               {actionMsg && <Message kind="hint">{actionMsg}</Message>}
             </div>
           )}
@@ -546,20 +547,19 @@ function OutputActions({
     <div className="dag-inspector-section">
       <h3>{t("harvest.outputs")}</h3>
       {disabledMessage ? (
-        <button type="button" className="ghost output-action" disabled>
+        <Button variant="ghost" className="output-action" disabled>
           {disabledMessage}
-        </button>
+        </Button>
       ) : (
         <div className="output-action-list">
           {outputs.map((name, index) => (
-            <button
+            <Button
               key={`${name}-${index}`}
-              type="button"
-              className={index === 0 ? "" : "ghost"}
+              variant={index === 0 ? "primary" : "ghost"}
               onClick={() => onReadOutput?.(name, String(node.id))}
             >
               {outputs.length === 1 ? t("harvest.startLearning") : `${t("harvest.read")} ${name}`}
-            </button>
+            </Button>
           ))}
         </div>
       )}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchOutputs } from "../api";
 import { useT } from "../i18n";
 import { useExport } from "../lib/useExport";
+import { Button } from "./ui/Button";
 import { Card, SectionHeader } from "./ui/Card";
 import { Message } from "./ui/Message";
 
@@ -63,21 +64,19 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
         }
         actions={
           <div className="export-actions">
-            <button
-              className="ghost"
-              type="button"
+            <Button
+              variant="ghost"
               disabled={exporting || selectedForExport.length === 0}
               onClick={() => void exportFiles("selected")}
             >
               {t("fruits.exportSelected")}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               disabled={exporting || files.length === 0}
               onClick={() => void exportFiles("all")}
             >
               {t("fruits.exportAll")}
-            </button>
+            </Button>
           </div>
         }
       />

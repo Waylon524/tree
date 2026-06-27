@@ -19,6 +19,7 @@ import { Outputs } from "./components/Outputs";
 import { Settings } from "./components/Settings";
 import { ProjectLibrary } from "./components/ProjectLibrary";
 import { Seedling } from "./components/illustrations";
+import { Button } from "./components/ui/Button";
 import type { ReaderTarget } from "./components/Reader";
 
 type Page = "grow" | "fruits" | "harvest" | "reader" | "tend";
@@ -113,7 +114,7 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
         onChange={(event: ChangeEvent<HTMLInputElement>) => setValue(event.target.value)}
         placeholder="token"
       />
-      <button
+      <Button
         onClick={() => {
           const trimmed = value.trim();
           if (trimmed) {
@@ -123,7 +124,7 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
         }}
       >
         {t("gate.token.connect")}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -207,11 +208,11 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
               <span className="stage-pct">{progress}%</span>
             </div>
           )}
-          <button onClick={() => void install()} disabled={busy || extension?.status === "installing"}>
+          <Button onClick={() => void install()} disabled={busy || extension?.status === "installing"}>
             {extension?.status === "installing" || busy
               ? t("gate.soil.installing")
               : t("gate.soil.install")}
-          </button>
+          </Button>
         </div>
       </section>
     </div>
@@ -298,12 +299,12 @@ function Dashboard({
               )}
             </div>
             <div className="controls">
-              <button onClick={() => void guard(runPipeline)()} disabled={busy}>
+              <Button onClick={() => void guard(runPipeline)()} disabled={busy}>
                 {t("grow.grow")}
-              </button>
-              <button className="ghost" onClick={() => void guard(stopPipeline)()} disabled={busy}>
+              </Button>
+              <Button variant="ghost" onClick={() => void guard(stopPipeline)()} disabled={busy}>
                 {t("grow.rest")}
-              </button>
+              </Button>
             </div>
             <ProgressPanel status={status} />
           </section>

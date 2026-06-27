@@ -4,6 +4,7 @@ import type { ImportedFile } from "../api";
 import { useT } from "../i18n";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { FruitTreeMark } from "./illustrations";
+import { Button } from "./ui/Button";
 import { Card, SectionHeader } from "./ui/Card";
 
 export function Materials() {
@@ -62,14 +63,9 @@ export function Materials() {
           multiple
           onChange={(event) => void sow(event.target.files)}
         />
-        <button
-          className="ghost"
-          type="button"
-          disabled={sowing}
-          onClick={() => fileRef.current?.click()}
-        >
+        <Button variant="ghost" disabled={sowing} onClick={() => fileRef.current?.click()}>
           {sowing ? t("seeds.sowing") : t("seeds.choose")}
-        </button>
+        </Button>
         {msg && <span className="hint">{msg}</span>}
       </div>
       {items.length === 0 ? (

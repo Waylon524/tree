@@ -14,6 +14,7 @@ import type { RawOutput } from "../api";
 import { useT } from "../i18n";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { useExport } from "../lib/useExport";
+import { Button } from "./ui/Button";
 import { Message } from "./ui/Message";
 
 export interface ReaderTarget {
@@ -129,29 +130,27 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
           )}
         </div>
         <div className="reader-actions">
-          <button
-            className="ghost"
-            type="button"
+          <Button
+            variant="ghost"
             onClick={target.from === "dag" ? onBackToDag : onBackToOutputs}
           >
             {target.from === "dag" ? t("reader.backToHarvest") : t("reader.backToFruits")}
-          </button>
-          <button type="button" onClick={() => void exportCurrent()} disabled={exporting}>
+          </Button>
+          <Button onClick={() => void exportCurrent()} disabled={exporting}>
             {exporting ? t("reader.exporting") : t("reader.export")}
-          </button>
+          </Button>
           {target.nodeId && (
-            <button
-              className={feedbackOpen ? "" : "ghost"}
-              type="button"
+            <Button
+              variant={feedbackOpen ? "primary" : "ghost"}
               onClick={() => setFeedbackOpen((open) => !open)}
             >
               {t("reader.feedback")}
-            </button>
+            </Button>
           )}
           {target.nodeId && (
-            <button type="button" onClick={() => void markRead()} disabled={readBusy}>
+            <Button onClick={() => void markRead()} disabled={readBusy}>
               {readBusy ? t("reader.marking") : t("reader.markRead")}
-            </button>
+            </Button>
           )}
         </div>
       </header>
@@ -170,13 +169,12 @@ export function Reader({ target, onBackToDag, onBackToOutputs }: ReaderProps) {
             rows={4}
           />
           <div className="reader-feedback-actions">
-            <button
-              type="button"
+            <Button
               onClick={() => void submitFeedback()}
               disabled={feedbackBusy || !feedback.trim()}
             >
               {feedbackBusy ? t("reader.revising") : t("reader.submit")}
-            </button>
+            </Button>
           </div>
         </section>
       )}

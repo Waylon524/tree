@@ -19,6 +19,8 @@ import type {
 } from "../api";
 import { useLang, useT } from "../i18n";
 import { Materials } from "./Materials";
+import { Button } from "./ui/Button";
+import { Field } from "./ui/Field";
 import { Message } from "./ui/Message";
 import { Toggle } from "./ui/Toggle";
 
@@ -376,22 +378,26 @@ export function Settings() {
                   placeholder={t("settings.apiKey")}
                 />
               </label>
-              <label>
-                {t("settings.baseUrl")}
-                <input value={fields.llm_base_url} onChange={setText("llm_base_url")} />
-              </label>
-              <label>
-                {t("settings.defaultModel")}
-                <input value={fields.llm_model} onChange={setText("llm_model")} />
-              </label>
+              <Field
+                label={t("settings.baseUrl")}
+                value={fields.llm_base_url}
+                onChange={setText("llm_base_url")}
+              />
+              <Field
+                label={t("settings.defaultModel")}
+                value={fields.llm_model}
+                onChange={setText("llm_model")}
+              />
             </div>
 
             <div className="role-grid">
               {ROLES.map((role) => (
-                <label key={role}>
-                  {t(`role.${role}`)}
-                  <input value={fields.role_models[role]} onChange={setRole(role)} />
-                </label>
+                <Field
+                  key={role}
+                  label={t(`role.${role}`)}
+                  value={fields.role_models[role]}
+                  onChange={setRole(role)}
+                />
               ))}
             </div>
           </fieldset>
@@ -413,14 +419,16 @@ export function Settings() {
                   placeholder={t("settings.apiKey")}
                 />
               </label>
-              <label>
-                {t("settings.paddleUrl")}
-                <input value={fields.paddleocr_api_url} onChange={setText("paddleocr_api_url")} />
-              </label>
-              <label>
-                {t("settings.paddleModel")}
-                <input value={fields.paddleocr_model} onChange={setText("paddleocr_model")} />
-              </label>
+              <Field
+                label={t("settings.paddleUrl")}
+                value={fields.paddleocr_api_url}
+                onChange={setText("paddleocr_api_url")}
+              />
+              <Field
+                label={t("settings.paddleModel")}
+                value={fields.paddleocr_model}
+                onChange={setText("paddleocr_model")}
+              />
             </div>
           </fieldset>
 
@@ -429,28 +437,24 @@ export function Settings() {
               {t("tend.climate")} <small className="legend-note">({t("tend.note.runtime")})</small>
             </legend>
             <div className="form-grid">
-              <label>
-                {t("settings.llamaCtx")}
-                <input
-                  type="number"
-                  min="1024"
-                  max="32768"
-                  step="1"
-                  value={fields.llama_server_ctx}
-                  onChange={setText("llama_server_ctx")}
-                />
-              </label>
-              <label>
-                {t("settings.mtuChunk")}
-                <input
-                  type="number"
-                  min="500"
-                  max="32768"
-                  step="1"
-                  value={fields.source_mtu_chunk_tokens}
-                  onChange={setText("source_mtu_chunk_tokens")}
-                />
-              </label>
+              <Field
+                label={t("settings.llamaCtx")}
+                type="number"
+                min="1024"
+                max="32768"
+                step="1"
+                value={fields.llama_server_ctx}
+                onChange={setText("llama_server_ctx")}
+              />
+              <Field
+                label={t("settings.mtuChunk")}
+                type="number"
+                min="500"
+                max="32768"
+                step="1"
+                value={fields.source_mtu_chunk_tokens}
+                onChange={setText("source_mtu_chunk_tokens")}
+              />
             </div>
           </fieldset>
 
@@ -473,17 +477,16 @@ export function Settings() {
                         label={<span>{t(`settings.advanced.${field.key}`)}</span>}
                       />
                     ) : (
-                      <label key={field.key}>
-                        {t(`settings.advanced.${field.key}`)}
-                        <input
-                          type="number"
-                          min={field.min}
-                          max={field.max}
-                          step={field.step ?? "1"}
-                          value={String(fields[field.key])}
-                          onChange={setAdvancedText(field.key)}
-                        />
-                      </label>
+                      <Field
+                        key={field.key}
+                        label={t(`settings.advanced.${field.key}`)}
+                        type="number"
+                        min={field.min}
+                        max={field.max}
+                        step={field.step ?? "1"}
+                        value={String(fields[field.key])}
+                        onChange={setAdvancedText(field.key)}
+                      />
                     ),
                   )}
                 </div>
@@ -492,9 +495,9 @@ export function Settings() {
           </details>
 
           <div className="form-actions">
-            <button type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? t("common.saving") : t("settings.save")}
-            </button>
+            </Button>
             {message && (
               <Message kind={ok ? "ok" : "error"} inline>
                 {message}
@@ -510,13 +513,9 @@ export function Settings() {
           <p className="hint">{t("settings.prompts.warning")}</p>
           {promptSettings && <span className="hint">{promptSettings.path}</span>}
           <div className="prompt-actions">
-            <button
-              type="button"
-              disabled={promptBusy === "all"}
-              onClick={() => void restoreAllPrompts()}
-            >
+            <Button disabled={promptBusy === "all"} onClick={() => void restoreAllPrompts()}>
               {t("settings.prompts.resetAll")}
-            </button>
+            </Button>
             {promptMessage && (
               <Message kind={promptOk ? "ok" : "error"} inline>
                 {promptMessage}
@@ -537,20 +536,18 @@ export function Settings() {
                       </span>
                     </div>
                     <div className="prompt-editor-actions">
-                      <button
-                        type="button"
+                      <Button
                         disabled={promptBusy === item.key}
                         onClick={() => void savePromptDraft(item.key)}
                       >
                         {promptBusy === item.key ? t("common.saving") : t("common.save")}
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
                         disabled={promptBusy === item.key}
                         onClick={() => void restorePrompt(item.key)}
                       >
                         {t("settings.prompts.reset")}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   <textarea
