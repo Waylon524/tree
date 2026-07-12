@@ -13,7 +13,12 @@ from tree.agents.examiner import ExaminerAgent
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
 from tree.config import DEFAULT_SOURCE_MTU_CHUNK_TOKENS, Settings
-from tree.engine.node_run import NodeRunner, ledger_covered_node_ids, ledger_output_ids
+from tree.engine.node_run import (
+    NodeRunner,
+    ledger_covered_node_ids,
+    ledger_output_ids,
+    reconcile_ledger_generation,
+)
 from tree.engine.ingest_driver import prepare_sources
 from tree.io import paths
 from tree.model.client import LLMClient
@@ -90,6 +95,7 @@ class TreeEngine:
         self.progress.reset()
         _clear_stale_run_logs(self.root)
         await self.prepare_sources()
+        reconcile_ledger_generation(self.root)
         self._prune_state_to_current_dag()
         state = self.state_mgr.retry_failed_node_executions(self.state_mgr.load())
         self.state_mgr.save(state)
@@ -227,7 +233,7 @@ class Retriever:
 
     def source_hits(
         self, query: str, *, collections: list[str], node_ids: list[str], top_k: int
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         filters: dict[str, Any] = {"content_kind": "source"}
         if collections:
             filters["source_collection"] = collections
@@ -235,7 +241,23 @@ class Retriever:
             filters["node_id"] = node_ids
         return self.rag.query(query, top_k=top_k, filters=filters, include_drafts=False)
 
-    def finished_hits(self, query: str, *, allowed_paths: set[str], top_k: int) -> list[dict]:
+    def source_evidence(self, mtu_ids: list[str]) -> list[dict[str, Any]]:
+        """Return at least one deterministic stored chunk for every member MTU."""
+        evidence: list[dict[str, Any]] = []
+        for mtu_id in dict.fromkeys(item for item in mtu_ids if item):
+            hits = self.rag.scroll_chunks(
+                filters={"content_kind": "source", "mtu_id": mtu_id},
+                include_drafts=False,
+            )
+            if not hits:
+                raise RuntimeError(f"Missing required source evidence for MTU {mtu_id}")
+            hits.sort(key=lambda hit: int((hit.get("metadata") or {}).get("chunk_index", 0)))
+            evidence.append(hits[0])
+        return evidence
+
+    def finished_hits(
+        self, query: str, *, allowed_paths: set[str], top_k: int
+    ) -> list[dict[str, Any]]:
         if not allowed_paths:
             return []
         return self.rag.query(

@@ -19,6 +19,7 @@ class _FakeRunner:
 
     async def run_one(self, node_id: str) -> str:
         self.calls.append(node_id)
+        (paths.outputs_root(self.root) / f"{node_id}.A.md").write_text("# A\n", encoding="utf-8")
         write_json_atomic(
             paths.knowledge_ledger_path(self.root),
             {
@@ -122,6 +123,9 @@ async def test_tree_engine_refills_node_pool_after_each_node_completion(tmp_path
             events.append(("start", node_id, engine.progress.load()["stages"]["noderun"]["done"], tuple()))
             if node_id in {"n2", "n3"}:
                 await unblock.wait()
+            (paths.outputs_root(tmp_path) / f"{node_id}.md").write_text(
+                f"# {node_id}\n", encoding="utf-8"
+            )
             state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
             write_json_atomic(
                 paths.knowledge_ledger_path(tmp_path),
@@ -195,6 +199,9 @@ async def test_tree_engine_starts_child_only_after_parent_is_covered(tmp_path, m
     class _PrereqRunner:
         async def run_one(self, node_id: str) -> str:
             calls.append(node_id)
+            (paths.outputs_root(tmp_path) / f"{node_id}.md").write_text(
+                f"# {node_id}\n", encoding="utf-8"
+            )
             state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
             previous = (
                 []

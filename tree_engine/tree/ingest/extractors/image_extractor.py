@@ -22,5 +22,5 @@ def extract(image_path: str | Path) -> str:
     text = engine.ocr_file(image_path)
 
     if not text.strip():
-        logger.warning("OCR API returned empty result for %s", image_path.name)
+        raise RuntimeError(f"OCR API returned empty result for {image_path.name}")
     return text

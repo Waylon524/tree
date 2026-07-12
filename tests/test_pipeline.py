@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
+
+import pytest
 
 from tree.io import paths
 from tree.observability.progress import ProgressTracker
 from tree.planner.mtu import build_mtus
-from tree.planner.pipeline import load_dag, load_nodes, rebuild_planner
+from tree.planner.pipeline import PlannerError, load_dag, load_nodes, rebuild_planner
 
 _SETTINGS = SimpleNamespace(
     dagger_build_timeout_sec=1.0, dagger_repair_attempts=0, dagger_max_nodes_per_call=400
@@ -50,6 +53,11 @@ class _EchoDagger:
                 }
             )
         return {"node_prerequisites": prerequisites}
+
+
+class _EmptyDagger(_EchoDagger):
+    async def build_nodes(self, payload, *, timeout_sec=None):
+        return {"nodes": []}
 
 
 class _RecordingProgress:
@@ -268,3 +276,83 @@ async def test_rebuild_planner_processes_changed_materials_with_configured_concu
             task.cancel()
 
     assert max_active == 5
+
+
+async def test_failed_rebuild_does_not_commit_new_material_manifest(tmp_path):
+    _seed_material(tmp_path)
+    agents = SimpleNamespace(dagger=_EchoDagger())
+    await rebuild_planner(
+        tmp_path,
+        settings=_SETTINGS,
+        agents=agents,
+        mtu_producer=_make_producer({"calls": 0}),
+    )
+    manifest_path = paths.material_manifest_path(tmp_path)
+    committed = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    material = tmp_path / "materials" / "课件" / "ch1.md"
+    material.write_text("changed material content", encoding="utf-8")
+
+    async def fail_producer(root, material):
+        raise RuntimeError("simulated OCR failure")
+
+    with pytest.raises(RuntimeError, match="simulated OCR failure"):
+        await rebuild_planner(
+            tmp_path,
+            settings=_SETTINGS,
+            agents=agents,
+            mtu_producer=fail_producer,
+        )
+
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == committed
+
+
+async def test_archivist_model_change_invalidates_mtu_cache(tmp_path):
+    _seed_material(tmp_path)
+    agents = SimpleNamespace(dagger=_EchoDagger())
+    base = {
+        "dagger_build_timeout_sec": 1.0,
+        "dagger_repair_attempts": 0,
+        "dagger_max_nodes_per_call": 400,
+        "dagger": SimpleNamespace(model="dagger-a", base_url="https://llm.test"),
+    }
+    settings_a = SimpleNamespace(
+        **base,
+        archivist=SimpleNamespace(model="archivist-a", base_url="https://llm.test"),
+    )
+    await rebuild_planner(
+        tmp_path,
+        settings=settings_a,
+        agents=agents,
+        mtu_producer=_make_producer({"calls": 0}),
+    )
+
+    settings_b = SimpleNamespace(
+        **base,
+        archivist=SimpleNamespace(model="archivist-b", base_url="https://llm.test"),
+    )
+    with pytest.raises(PlannerError, match="needs OCR/Archivist rebuild"):
+        await rebuild_planner(
+            tmp_path,
+            settings=settings_b,
+            agents=agents,
+            mtu_producer=None,
+        )
+
+
+async def test_rebuild_rejects_excessive_dagger_singleton_fallback(tmp_path):
+    _seed_material(tmp_path)
+    settings = SimpleNamespace(
+        dagger_build_timeout_sec=1.0,
+        dagger_repair_attempts=0,
+        dagger_max_nodes_per_call=400,
+        dagger_max_unassigned_ratio=0.10,
+    )
+
+    with pytest.raises(PlannerError, match="fallback quality gate failed"):
+        await rebuild_planner(
+            tmp_path,
+            settings=settings,
+            agents=SimpleNamespace(dagger=_EmptyDagger()),
+            mtu_producer=_make_producer({"calls": 0}),
+        )

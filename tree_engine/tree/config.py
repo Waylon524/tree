@@ -83,6 +83,7 @@ class Settings:
     # Archivist (MTU cutting)
     archivist_mtu_cut_timeout_sec: float = 480.0
     archivist_mtu_repair_attempts: int = 8
+    archivist_chunk_concurrency: int = 5
 
     # Dagger (DAG build)
     dagger_build_timeout_sec: float = 480.0
@@ -95,6 +96,7 @@ class Settings:
     dagger_cluster_max_size: int = 8
     dagger_cluster_auto_accept_singleton: bool = True
     dagger_cluster_auto_accept_same_collection: bool = False
+    dagger_max_unassigned_ratio: float = 0.10
 
     # NodeRun loop
     max_active_node_runs: int = 5
@@ -149,6 +151,7 @@ class Settings:
             ),
             archivist_mtu_cut_timeout_sec=_env_float("ARCHIVIST_MTU_CUT_TIMEOUT_SEC", 480.0),
             archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 8),
+            archivist_chunk_concurrency=max(1, _env_int("ARCHIVIST_CHUNK_CONCURRENCY", 5)),
             dagger_build_timeout_sec=_env_float("DAGGER_BUILD_TIMEOUT_SEC", 480.0),
             dagger_repair_attempts=_env_int("DAGGER_REPAIR_ATTEMPTS", 3),
             dagger_prerequisite_concurrency=max(1, _env_int("DAGGER_PREREQUISITE_CONCURRENCY", 5)),
@@ -159,6 +162,7 @@ class Settings:
             dagger_cluster_max_size=_env_int("DAGGER_CLUSTER_MAX_SIZE", 8),
             dagger_cluster_auto_accept_singleton=_env_bool("DAGGER_CLUSTER_AUTO_ACCEPT_SINGLETON", True),
             dagger_cluster_auto_accept_same_collection=_env_bool("DAGGER_CLUSTER_AUTO_ACCEPT_SAME_COLLECTION", False),
+            dagger_max_unassigned_ratio=_env_float("DAGGER_MAX_UNASSIGNED_RATIO", 0.10),
             max_active_node_runs=_env_int("MAX_ACTIVE_NODE_RUNS", 5),
             max_examiner_span_nodes=_env_int("MAX_EXAMINER_SPAN_NODES", 3),
             project_root=root,

@@ -20,21 +20,25 @@ import { Settings } from "./components/Settings";
 import { ProjectLibrary } from "./components/ProjectLibrary";
 import { Seedling } from "./components/illustrations";
 import { Button } from "./components/ui/Button";
+import { Message } from "./components/ui/Message";
 import type { ReaderTarget } from "./components/Reader";
+import { getGrowBlockReason } from "./lib/grow";
 
 type Page = "grow" | "fruits" | "harvest" | "reader" | "tend";
 
-const LazyDagWorkbench = lazy(() =>
+const loadDagWorkbench = () =>
   import("./components/DagWorkbench").then((module) => ({
     default: module.DagWorkbench,
-  })),
-);
+  }));
 
-const LazyReader = lazy(() =>
+const LazyDagWorkbench = lazy(loadDagWorkbench);
+
+const loadReader = () =>
   import("./components/Reader").then((module) => ({
     default: module.Reader,
-  })),
-);
+  }));
+
+const LazyReader = lazy(loadReader);
 
 const NAV: Array<{ key: Page; labelKey: string }> = [
   { key: "grow", labelKey: "nav.grow" },
@@ -45,6 +49,19 @@ const NAV: Array<{ key: Page; labelKey: string }> = [
 
 const ENGINE_STATES = ["running", "stopped", "starting"];
 const PHASE_STATES = ["idle", "running", "blocked", "complete", "failed"];
+const EXTENSION_PHASE_KEYS: Record<string, string> = {
+  checking: "gate.soil.phase.checking",
+  missing: "gate.soil.phase.missing",
+  preparing: "gate.soil.phase.preparing",
+  "downloading-runtime": "gate.soil.phase.runtime",
+  "downloading-model": "gate.soil.phase.model",
+  failed: "gate.soil.phase.failed",
+};
+
+interface ExtensionGateState {
+  extension: ExtensionState | null;
+  openSetup: () => void;
+}
 
 export function App({ initialBootstrap }: { initialBootstrap: AppBootstrap | null }) {
   const [bootstrap, setBootstrap] = useState<AppBootstrap | null>(initialBootstrap);
@@ -93,11 +110,15 @@ export function App({ initialBootstrap }: { initialBootstrap: AppBootstrap | nul
   if (!token) return <TokenGate onToken={setTokenValue} />;
   return (
     <ExtensionGate token={token}>
-      <Dashboard
-        token={token}
-        project={bootstrap?.current_project ?? null}
-        onSwitchProject={isDesktop ? () => setShowProjects(true) : undefined}
-      />
+      {({ extension, openSetup }) => (
+        <Dashboard
+          token={token}
+          project={bootstrap?.current_project ?? null}
+          extension={extension}
+          onPrepareExtension={openSetup}
+          onSwitchProject={isDesktop ? () => setShowProjects(true) : undefined}
+        />
+      )}
     </ExtensionGate>
   );
 }
@@ -129,11 +150,18 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
   );
 }
 
-function ExtensionGate({ token, children }: { token: string; children: JSX.Element }) {
+function ExtensionGate({
+  token,
+  children,
+}: {
+  token: string;
+  children: (state: ExtensionGateState) => JSX.Element;
+}) {
   const t = useT();
   const [extension, setExtension] = useState<ExtensionState | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
+  const [browsing, setBrowsing] = useState<boolean>(false);
   const failures = useRef<number>(0);
   const shouldPoll = !extension || extension.status === "installing" || Boolean(error);
 
@@ -182,11 +210,14 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
     }
   };
 
-  if (extension?.installed) return children;
+  if (extension?.installed || browsing) {
+    return children({ extension, openSetup: () => setBrowsing(false) });
+  }
 
   const progress = extension?.progress ?? 0;
   const phase = extension?.phase ?? "checking";
-  const message = error || extension?.message || t("gate.soil.checking");
+  const phaseKey = EXTENSION_PHASE_KEYS[phase] ?? "gate.soil.phase.checking";
+  const message = error || t(phaseKey);
 
   return (
     <div className="gate extension-gate">
@@ -196,9 +227,18 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
         <div>
           <h2>{t("gate.soil.title")}</h2>
           <p className="muted">{t("gate.soil.desc")}</p>
+          <p className="hint">{t("gate.soil.downloadNote")}</p>
           <div className="extension-status">
-            <span className={`pill phase-${phase}`}>{phase}</span>
+            <span className={`pill phase-${phase}`}>{t(phaseKey)}</span>
             <span className={error ? "errors" : "hint"}>{message}</span>
+          </div>
+          <div className="extension-requirements" aria-label={t("gate.soil.requirements")}>
+            <span>
+              {t("gate.soil.model")}: {extension?.model === "cached" ? t("common.ready") : t("common.required")}
+            </span>
+            <span>
+              {t("gate.soil.runtime")}: {extension?.runtime && extension.runtime !== "missing" ? t("common.ready") : t("common.required")}
+            </span>
           </div>
           {(extension?.status === "installing" || busy) && (
             <div className="progress-row">
@@ -208,11 +248,18 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
               <span className="stage-pct">{progress}%</span>
             </div>
           )}
-          <Button onClick={() => void install()} disabled={busy || extension?.status === "installing"}>
-            {extension?.status === "installing" || busy
-              ? t("gate.soil.installing")
-              : t("gate.soil.install")}
-          </Button>
+          <div className="gate-actions">
+            <Button onClick={() => void install()} disabled={busy || extension?.status === "installing"}>
+              {extension?.status === "installing" || busy
+                ? t("gate.soil.installing")
+                : extension?.status === "failed"
+                  ? t("common.retry")
+                  : t("gate.soil.install")}
+            </Button>
+            <Button variant="ghost" onClick={() => setBrowsing(true)} disabled={busy}>
+              {t("gate.soil.browse")}
+            </Button>
+          </div>
         </div>
       </section>
     </div>
@@ -222,10 +269,14 @@ function ExtensionGate({ token, children }: { token: string; children: JSX.Eleme
 function Dashboard({
   token,
   project,
+  extension,
+  onPrepareExtension,
   onSwitchProject,
 }: {
   token: string;
   project: ProjectSummary | null;
+  extension: ExtensionState | null;
+  onPrepareExtension: () => void;
   onSwitchProject?: () => void;
 }) {
   const t = useT();
@@ -234,11 +285,17 @@ function Dashboard({
   const [readerTarget, setReaderTarget] = useState<ReaderTarget | null>(null);
   const [selectedDagNodeId, setSelectedDagNodeId] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [actionError, setActionError] = useState<string>("");
+  const growBlockReason = getGrowBlockReason(status, extension);
+  const engineActive = status?.engine === "running" || status?.engine === "starting";
 
-  const guard = (action: () => Promise<void>) => async (): Promise<void> => {
+  const runAction = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
+    setActionError("");
     try {
       await action();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -254,12 +311,14 @@ function Dashboard({
     <div className="app">
       <header className="bar">
         <span className="brand">T.R.E.E.</span>
-        <nav className="tabs" aria-label="Primary">
+        <nav className="tabs" aria-label={t("nav.primary")}>
           {NAV.map((item) => (
             <button
               key={item.key}
               className={`tab ${page === item.key ? "active" : ""}`}
               onClick={() => setPage(item.key)}
+              onFocus={item.key === "harvest" ? () => void loadDagWorkbench() : undefined}
+              onMouseEnter={item.key === "harvest" ? () => void loadDagWorkbench() : undefined}
               type="button"
             >
               {t(item.labelKey)}
@@ -299,18 +358,45 @@ function Dashboard({
               )}
             </div>
             <div className="controls">
-              <Button onClick={() => void guard(runPipeline)()} disabled={busy}>
+              <Button
+                onClick={() => void runAction(runPipeline)}
+                disabled={busy || Boolean(growBlockReason) || engineActive}
+              >
                 {t("grow.grow")}
               </Button>
-              <Button variant="ghost" onClick={() => void guard(stopPipeline)()} disabled={busy}>
+              <Button
+                variant="ghost"
+                onClick={() => void runAction(stopPipeline)}
+                disabled={busy || !engineActive}
+              >
                 {t("grow.rest")}
               </Button>
             </div>
+            {growBlockReason === "extension" && (
+              <div className="grow-readiness">
+                <Message kind="hint">{t("grow.needsExtension")}</Message>
+                <Button variant="ghost" onClick={onPrepareExtension}>
+                  {t("gate.soil.install")}
+                </Button>
+              </div>
+            )}
+            {growBlockReason === "materials" && (
+              <div className="grow-readiness">
+                <Message kind="hint">{t("grow.needsMaterials")}</Message>
+                <Button variant="ghost" onClick={() => setPage("tend")}>
+                  {t("grow.goTend")}
+                </Button>
+              </div>
+            )}
+            {actionError && <Message kind="error">{actionError}</Message>}
             <ProgressPanel status={status} />
           </section>
         )}
         {page === "fruits" && (
-          <Outputs onReadOutput={(name) => openReader({ name, from: "outputs" })} />
+          <Outputs
+            onReadOutput={(name) => openReader({ name, from: "outputs" })}
+            onPrepare={() => setPage("tend")}
+          />
         )}
         {page === "harvest" && (
           <Suspense fallback={<DagLoading />}>
@@ -340,7 +426,7 @@ function Dashboard({
 function DagLoading() {
   const t = useT();
   return (
-    <section className="dag-loading" aria-label="Loading knowledge graph">
+    <section className="dag-loading" aria-label={t("harvest.loading")}>
       <span className="pill">{t("common.loading")}</span>
     </section>
   );
@@ -349,7 +435,7 @@ function DagLoading() {
 function ReaderLoading() {
   const t = useT();
   return (
-    <section className="card" aria-label="Loading reader">
+    <section className="card" aria-label={t("reader.loading")}>
       <span className="pill">{t("common.loading")}</span>
     </section>
   );

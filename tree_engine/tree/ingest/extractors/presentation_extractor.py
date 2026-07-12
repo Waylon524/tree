@@ -88,6 +88,7 @@ def _table_to_markdown(table) -> str:
 
 def _extract_pptx_images(pptx_path: Path) -> list[str]:
     results: list[str] = []
+    failures: list[str] = []
     engine = get_engine()
     try:
         with zipfile.ZipFile(pptx_path) as archive:
@@ -107,16 +108,24 @@ def _extract_pptx_images(pptx_path: Path) -> list[str]:
                     text = engine.ocr_file(tmp_path)
                     if text.strip():
                         results.append(text)
-                except Exception:
+                    else:
+                        failures.append(f"image #{index}: empty OCR result")
+                except Exception as exc:
                     logger.exception("Failed to OCR embedded presentation image #%d", index)
+                    failures.append(f"image #{index}: {type(exc).__name__}: {exc}")
                 finally:
                     if tmp_path is not None:
                         try:
                             tmp_path.unlink()
                         except Exception:
                             pass
-    except zipfile.BadZipFile:
-        logger.warning("Invalid PPTX zip container: %s", pptx_path)
+    except zipfile.BadZipFile as exc:
+        raise RuntimeError(f"Invalid PPTX zip container: {pptx_path}") from exc
+    if failures:
+        raise RuntimeError(
+            f"PPTX embedded image extraction incomplete for {pptx_path.name}: "
+            + "; ".join(failures)
+        )
     return results
 
 

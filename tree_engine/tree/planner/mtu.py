@@ -83,6 +83,8 @@ def build_mtus(
     *,
     collection: str,
     source_file: str,
+    source_id: str = "",
+    source_sha256: str = "",
     order_offset: int = 0,
 ) -> list[MTU]:
     units = _merge_auxiliary_units(units)
@@ -92,9 +94,14 @@ def build_mtus(
         start, end = unit["start_line"], unit["end_line"]
         mtus.append(
             MTU(
-                mtu_id=prefixed_id("mtu", [collection, source_file, start, end]),
+                mtu_id=prefixed_id(
+                    "mtu",
+                    [source_id or f"{collection}/{source_file}", source_sha256, start, end],
+                ),
                 collection=collection,
                 source_file=source_file,
+                source_id=source_id,
+                source_sha256=source_sha256,
                 line_range=(start, end),
                 title=unit["title"],
                 defines=unit.get("defines", []),

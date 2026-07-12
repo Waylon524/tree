@@ -11,6 +11,10 @@ class MTU(BaseModel):
     mtu_id: str
     collection: str
     source_file: str
+    # Workspace-relative material identity and content lineage. Defaults keep
+    # older planner artifacts readable; current ingest always populates both.
+    source_id: str = ""
+    source_sha256: str = ""
     line_range: tuple[int, int]
     title: str
     defines: list[str] = Field(default_factory=list)
@@ -47,4 +51,3 @@ class DagEdge(BaseModel):
 class KnowledgeDag(BaseModel):
     nodes: list[KnowledgeNode] = Field(default_factory=list)
     edges: list[DagEdge] = Field(default_factory=list)
-

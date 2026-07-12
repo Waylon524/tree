@@ -25,9 +25,11 @@ jobs:
       # No [local-embed]: the test suite mocks the embedding server, so we skip
       # llama-cpp-python (its native build is the unreliable bit on Windows).
       - name: Install
-        run: python -m pip install -e ".[rag,gui,dev]"
+        run: python -m pip install -c packaging/release-constraints.txt -e ".[rag,gui,dev]"
       - name: Ruff
         run: python -m ruff check tree_engine tests
+      - name: Mypy regression ratchet
+        run: python packaging/check_mypy_baseline.py
       - name: Pytest
         run: python -m pytest -q
 
@@ -38,10 +40,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Install
         working-directory: desktop
         run: npm ci
       - name: Build
         working-directory: desktop
         run: npm run build
+      - name: Test
+        working-directory: desktop
+        run: npm test
+
+  desktop-shell:
+    name: desktop shell
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format
+        working-directory: desktop/src-tauri
+        run: cargo fmt --check
+      - name: Test
+        working-directory: desktop/src-tauri
+        run: cargo test --locked

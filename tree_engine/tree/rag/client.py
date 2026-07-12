@@ -78,28 +78,16 @@ class RAGClient:
         path: str = "",
         doc_id: str | None = None,
         extra_payload: dict[str, Any] | None = None,
-        chunks: list[dict] | None = None,
+        chunks: list[dict[str, Any]] | None = None,
     ) -> int:
-        """Chunk (unless `chunks` provided), embed, and upsert a document.
-
-        Deletes any existing vectors for this doc_id first. Returns chunk count.
-        """
+        """Chunk, validate embeddings, then replace a document without a delete gap."""
         doc_id = doc_id or self.make_doc_id(content_kind, source_collection, path or filename)
-        self._client.delete(
-            collection_name=self.collection_name,
-            points_selector=models.FilterSelector(
-                filter=models.Filter(
-                    must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
-                )
-            ),
-        )
-
         if chunks is None:
             chunks = chunk_markdown(
                 file_seq, text, source_collection=source_collection, is_draft=is_draft
             )
         if not chunks:
-            return 0
+            raise ValueError(f"Refusing to replace {doc_id} with an empty document")
 
         chunk_texts = [c["text"] for c in chunks]
         try:
@@ -113,8 +101,26 @@ class RAGClient:
                 f"{doc_id} (kind={content_kind}, chunks={len(chunks)}, max_chars={max_chars}, "
                 f"model={model}, endpoint={endpoint}): {exc}"
             ) from exc
+        if len(vectors) != len(chunks):
+            raise RuntimeError(
+                f"Embedding response count mismatch for {doc_id}: "
+                f"expected {len(chunks)}, received {len(vectors)}"
+            )
+        for index, vector in enumerate(vectors):
+            if len(vector) < self.dimensions:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch for {doc_id} chunk {index}: "
+                    f"expected at least {self.dimensions}, received {len(vector)}"
+                )
+            if not all(math.isfinite(float(value)) for value in vector[: self.dimensions]):
+                raise RuntimeError(f"Embedding contains non-finite values for {doc_id} chunk {index}")
+
+        document_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        embedding_model = str(getattr(self.embedder, "model", ""))
         points = []
-        for chunk, vector in zip(chunks, vectors):
+        new_point_ids: set[Any] = set()
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            point_id = self._make_point_id(doc_id, chunk["chunk_id"])
             payload = {
                 **chunk,
                 "content_kind": content_kind,
@@ -122,17 +128,35 @@ class RAGClient:
                 "filename": filename,
                 "path": path,
                 "doc_id": doc_id,
+                "document_sha256": document_sha256,
+                "embedding_model": embedding_model,
+                "document_chunk_count": len(chunks),
             }
             if extra_payload:
                 payload.update(extra_payload)
             points.append(
                 models.PointStruct(
-                    id=self._make_point_id(doc_id, chunk["chunk_id"]),
+                    id=point_id,
                     vector=vector[: self.dimensions],
                     payload=payload,
                 )
             )
+            new_point_ids.add(point_id)
+
+        existing = self._scroll_records(
+            limit=10000,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+            ),
+        )
+        stale_point_ids = [record.id for record in existing if record.id not in new_point_ids]
         self._client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        if stale_point_ids:
+            self._client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.PointIdsList(points=stale_point_ids),
+                wait=True,
+            )
         logger.info("Indexed %d chunks for %s (kind=%s)", len(points), doc_id, content_kind)
         return len(points)
 
@@ -227,16 +251,27 @@ class RAGClient:
             )
 
     def document_indexed(self, doc_id: str) -> bool:
-        records, _ = self._client.scroll(
-            collection_name=self.collection_name,
-            limit=1,
+        records = self._scroll_records(
+            limit=10000,
             scroll_filter=models.Filter(
                 must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
             ),
-            with_payload=False,
-            with_vectors=False,
         )
-        return bool(records)
+        if not records:
+            return False
+        payloads = [record.payload or {} for record in records]
+        expected_counts = {payload.get("document_chunk_count") for payload in payloads}
+        hashes = {payload.get("document_sha256") for payload in payloads}
+        models_used = {payload.get("embedding_model") for payload in payloads}
+        current_model = str(getattr(self.embedder, "model", ""))
+        return (
+            len(expected_counts) == 1
+            and next(iter(expected_counts), None) == len(records)
+            and len(hashes) == 1
+            and None not in hashes
+            and len(models_used) == 1
+            and (not current_model or models_used == {current_model})
+        )
 
     def delete_document(self, doc_id: str) -> None:
         self._client.delete(

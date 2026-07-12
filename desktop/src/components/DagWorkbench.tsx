@@ -8,6 +8,7 @@ import type { DagEdge, DagNode, DagPayload } from "../api";
 import type { Status } from "../types";
 import { useT } from "../i18n";
 import type { Translate } from "../i18n";
+import { formatDateTime } from "../lib/format";
 import { AppleTreeStage } from "./illustrations";
 import type { StageKey } from "./illustrations";
 import { Button } from "./ui/Button";
@@ -280,8 +281,8 @@ export function DagWorkbench({
   };
 
   return (
-    <section className="dag-workbench" aria-label="Knowledge graph">
-      <aside className="dag-rail" aria-label="Knowledge graph filters">
+    <section className="dag-workbench" aria-label={t("harvest.aria.graph")}>
+      <aside className="dag-rail" aria-label={t("harvest.aria.filters")}>
         <div>
           <h2>{t("harvest.title")}</h2>
           <p className="muted">{t("harvest.subtitle")}</p>
@@ -326,7 +327,7 @@ export function DagWorkbench({
         </div>
         {dag?.updated_at && (
           <p className="muted">
-            {t("common.updated")} {dag.updated_at}
+            {t("common.updated")} {formatDateTime(dag.updated_at)}
           </p>
         )}
       </aside>
@@ -389,9 +390,7 @@ export function DagWorkbench({
                 {t("harvest.openSvg")}
               </Button>
             </div>
-            {svgMessage && (
-              <span className="dag-svg-message" dangerouslySetInnerHTML={{ __html: svgMessage }} />
-            )}
+            {svgMessage && <span className="dag-svg-message">{svgMessage}</span>}
           </>
         )}
       </div>
@@ -451,7 +450,7 @@ function NodeInspector({
   const downstreamCount = node ? descendantsOf(node.id, graph.byId).size - 1 : 0;
 
   return (
-    <aside className="dag-inspector" aria-label="Selected DAG node">
+    <aside className="dag-inspector" aria-label={t("harvest.aria.inspector")}>
       {node ? (
         <>
           <div className="inspector-head">

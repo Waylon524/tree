@@ -22,5 +22,5 @@ def extract(pdf_path: str | Path) -> str:
     text = engine.ocr_file(pdf_path)
 
     if not text.strip():
-        logger.warning("PaddleOCR returned empty result for %s", pdf_path.name)
+        raise RuntimeError(f"PaddleOCR returned empty result for {pdf_path.name}")
     return text

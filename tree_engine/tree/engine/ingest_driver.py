@@ -8,6 +8,7 @@ is embedded and the cleaned Markdown is removed.
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 from pathlib import Path
 from typing import Any
@@ -15,15 +16,15 @@ from typing import Any
 from tree.ingest.pipeline import extract_text
 from tree.io import file_ops, paths
 from tree.planner.manifest import scan_materials
+from tree.planner.ids import prefixed_id
 from tree.planner.mtu import mtu_text
 from tree.planner.models import MTU
-from tree.planner.pipeline import load_nodes, rebuild_planner
-from tree.planner.store import read_envelope_data, read_json, write_json_atomic
+from tree.planner.pipeline import load_nodes, planner_generation_id, rebuild_planner
+from tree.planner.store import artifact_hash, read_envelope_data, read_json
 
 LONG_DOCUMENT_CHAR_THRESHOLD = 100_000
 CLEAN_CHUNK_MIN_CHARS = 70_000
 CLEAN_CHUNK_MAX_CHARS = 100_000
-MAX_ARCHIVIST_CHUNK_CONCURRENCY = 5
 
 
 async def prepare_sources(engine: object) -> dict[str, Any]:
@@ -37,7 +38,7 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
         await _ensure_mtus_embedded(engine, mtus, backfill_node_ids=False)
 
     try:
-        if _can_resume_existing_planner(root):
+        if _can_resume_existing_planner(root, engine.settings):
             _set_stage(engine, "ocr", total=0, done=0, status="complete", message="No changed materials")
             _set_stage(engine, "clean", total=0, done=0, status="complete", message="Cleaning complete")
             _set_stage(engine, "cut", total=0, done=0, status="complete", message="Cutting complete")
@@ -77,7 +78,7 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
         _install_ocr_progress_callback(None)
 
 
-def _can_resume_existing_planner(root: Path) -> bool:
+def _can_resume_existing_planner(root: Path, settings: Any) -> bool:
     manifest_path = paths.material_manifest_path(root)
     previous = read_json(manifest_path) if manifest_path.exists() else None
     manifest = scan_materials(root, previous=previous)
@@ -85,20 +86,44 @@ def _can_resume_existing_planner(root: Path) -> bool:
         return False
     if any(material.get("status") != "unchanged" for material in manifest.get("materials", [])):
         return False
-    if not _planner_artifacts_ready(root):
+    if not _planner_artifacts_ready(root, settings):
         return False
-    write_json_atomic(manifest_path, manifest)
     return True
 
 
-def _planner_artifacts_ready(root: Path) -> bool:
+def _planner_artifacts_ready(root: Path, settings: Any) -> bool:
     try:
-        mtus = read_envelope_data(paths.mtus_path(root)).get("mtus")
-        nodes = read_envelope_data(paths.knowledge_nodes_path(root)).get("knowledge_nodes")
-        dag = read_envelope_data(paths.knowledge_dag_path(root))
+        manifest = read_json(paths.material_manifest_path(root))
+        mtus_env = read_json(paths.mtus_path(root))
+        nodes_env = read_json(paths.knowledge_nodes_path(root))
+        dag_env = read_json(paths.knowledge_dag_path(root))
     except Exception:
         return False
+    generation_id = planner_generation_id(manifest, settings)
+    if manifest.get("generation_id") != generation_id:
+        return False
+    envelopes = (
+        (mtus_env, "tree.mtus"),
+        (nodes_env, "tree.knowledge-nodes"),
+        (dag_env, "tree.knowledge-dag"),
+    )
+    if any(env.get("schema") != schema or env.get("generation_id") != generation_id for env, schema in envelopes):
+        return False
+    if not _input_hash_matches(mtus_env, artifact_hash(manifest)):
+        return False
+    if not _input_hash_matches(nodes_env, artifact_hash(mtus_env)):
+        return False
+    if not _input_hash_matches(dag_env, artifact_hash(nodes_env)):
+        return False
+    mtus = mtus_env.get("data", {}).get("mtus")
+    nodes = nodes_env.get("data", {}).get("knowledge_nodes")
+    dag = dag_env.get("data", {})
     return isinstance(mtus, list) and isinstance(nodes, list) and isinstance(dag.get("nodes"), list)
+
+
+def _input_hash_matches(envelope_data: dict[str, Any], expected: str) -> bool:
+    inputs = envelope_data.get("inputs")
+    return bool(isinstance(inputs, list) and inputs and inputs[0].get("hash") == expected)
 
 
 def _existing_planner_summary(root: Path) -> dict[str, Any]:
@@ -150,22 +175,43 @@ async def _ensure_mtus_embedded(
         message="Embedding source MTUs" if not backfill_node_ids else "Backfilling MTU node ids",
     )
     indexed = 0
-    for mtu in mtus:
+    concurrency = max(1, int(getattr(engine.settings, "source_embedding_concurrency", 1)))
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def embed_one(mtu: MTU) -> int:
         if hasattr(indexer, "is_mtu_indexed") and indexer.is_mtu_indexed(mtu.mtu_id):
             _advance_stage(engine, "embed", message=f"Already indexed {mtu.title}")
-            continue
-        source_path = source_markdown_path(root, mtu.collection, mtu.source_file)
+            return 0
+        source_path = source_markdown_path(
+            root,
+            mtu.collection,
+            mtu.source_file,
+            source_id=mtu.source_id,
+        )
         if not source_path.exists():
             raise RuntimeError(f"Missing cleaned source Markdown for {mtu.mtu_id}: {source_path}")
         text = mtu_text(source_path.read_text(encoding="utf-8"), mtu.line_range)
         _set_stage(engine, "embed", status="running", active=mtu.title, message=f"Embedding {mtu.title}")
-        indexed += await asyncio.to_thread(
-            indexer.index_mtu,
-            mtu,
-            text,
-            node_id=mtu_to_node.get(mtu.mtu_id, ""),
-        )
+        async with semaphore:
+            count = await asyncio.to_thread(
+                indexer.index_mtu,
+                mtu,
+                text,
+                node_id=mtu_to_node.get(mtu.mtu_id, ""),
+            )
         _advance_stage(engine, "embed", message=f"Embedded {mtu.title}")
+        return int(count)
+
+    tasks = [asyncio.create_task(embed_one(mtu)) for mtu in mtus]
+    try:
+        for task in tasks:
+            indexed += await task
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
     if backfill_node_ids and mtu_to_node and hasattr(indexer, "update_mtu_node_ids"):
         indexer.update_mtu_node_ids(mtu_to_node)
@@ -185,12 +231,16 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
     material_label = str(material.get("path") or material_path.name)
     collection = material["collection"]
     source_file = material["source_file"]
+    source_id = str(material.get("source_id") or material["path"])
     fingerprint = str(material.get("fingerprint") or "")
-    ocr_path = paths.ocr_markdown_path(root, collection, source_file)
+    checkpoint_fingerprint = artifact_hash(
+        [fingerprint, str(material.get("ocr_signature") or "")]
+    )
+    ocr_path = paths.ocr_markdown_source_path(root, source_id)
     ocr_done = False
     clean_cut_started = False
     try:
-        cached = _reuse_ocr_checkpoint(ocr_path, fingerprint)
+        cached = _reuse_ocr_checkpoint(ocr_path, checkpoint_fingerprint)
         if cached is not None:
             _set_stage(engine, "ocr", status="running", active=material_label,
                        message=f"Reusing OCR checkpoint {material_label}")
@@ -198,18 +248,22 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
         else:
             _set_stage(engine, "ocr", status="running", active=material_label,
                        message=f"Extracting {material_label}")
-            raw = remove_ocr_image_html(await asyncio.to_thread(extract_text, material_path))
-            persist_ocr_markdown(root, collection, source_file, raw)
-            _write_ocr_fingerprint(ocr_path, fingerprint)
+            # Preserve the vendor/structural extractor output byte-for-byte. Any
+            # image cleanup or HTML normalization belongs to the derived input,
+            # never to the only auditable OCR checkpoint.
+            raw = await asyncio.to_thread(extract_text, material_path)
+            persist_ocr_markdown(root, collection, source_file, raw, source_id=source_id)
+            _write_ocr_fingerprint(ocr_path, checkpoint_fingerprint)
         _advance_stage(engine, "ocr", message=f"Extracted {material_label}", active=[])
         ocr_done = True
         _record_ocr_checkpoint(engine, root, ocr_path, raw)
 
-        checkpoint_raw = ocr_path.read_text(encoding="utf-8")
+        checkpoint_raw = remove_ocr_image_html(ocr_path.read_text(encoding="utf-8"))
         if not checkpoint_raw.strip():
-            _advance_stage(engine, "clean", message=f"Skipped empty OCR output {material_label}", active=[])
-            _advance_stage(engine, "cut", message=f"Skipped empty OCR output {material_label}", active=[])
-            return []
+            raise RuntimeError(
+                f"Extraction produced no usable text for {material_label}; "
+                "the material was not marked complete."
+            )
         raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
         _set_stage(engine, "clean", status="running", active=material_label,
                    message=f"Cleaning {material_label}")
@@ -217,6 +271,11 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
                    message=f"Cutting {material_label}")
         clean_cut_started = True
         mtus = await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
+        if not mtus:
+            raise RuntimeError(
+                f"Archivist produced no teachable units for {material_label}; "
+                "the material was not marked complete."
+            )
         _advance_stage(engine, "clean", active=[])
         _advance_stage(engine, "cut", active=[])
         return mtus
@@ -229,9 +288,15 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
         raise
 
 
-def source_markdown_path(root: Path, collection: str, source_file: str) -> Path:
+def source_markdown_path(
+    root: Path,
+    collection: str,
+    source_file: str,
+    *,
+    source_id: str = "",
+) -> Path:
     """Path for a cleaned intermediate Markdown file."""
-    return paths.source_markdown_root(root) / collection / f"{source_file}.md"
+    return paths.source_markdown_source_path(root, source_id or f"{collection}/{source_file}")
 
 
 async def _clean_and_cut_chunk(
@@ -241,6 +306,8 @@ async def _clean_and_cut_chunk(
     *,
     collection: str,
     source_file: str,
+    source_id: str,
+    source_sha256: str,
     order_offset: int,
 ) -> list[MTU]:
     archivist = engine.archivist
@@ -257,7 +324,12 @@ async def _clean_and_cut_chunk(
         _set_stage(engine, "cut", message=f"Skipped empty cleaned chunk {source_file}")
         return []
 
-    source_path = source_markdown_path(root, collection, source_file)
+    source_path = source_markdown_path(
+        root,
+        collection,
+        source_file,
+        source_id=source_id,
+    )
     file_ops.write_text(source_path, cleaned)
     _set_stage(engine, "cut", status="running", active=source_file, message=f"Cutting {source_file}")
     mtus = await archivist.cut_mtus(
@@ -268,6 +340,13 @@ async def _clean_and_cut_chunk(
         timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
         repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
     )
+    for mtu in mtus:
+        mtu.source_id = source_id
+        mtu.source_sha256 = source_sha256
+        mtu.mtu_id = prefixed_id(
+            "mtu",
+            [source_id, source_sha256, mtu.line_range[0], mtu.line_range[1]],
+        )
     _set_stage(engine, "cut", message=f"Cut {source_file}")
     return mtus
 
@@ -285,15 +364,25 @@ async def _clean_and_cut_chunks(
     running: dict[asyncio.Task[list[MTU]], int] = {}
     retry_counts: dict[int, int] = {}
     max_retries = max(0, int(getattr(engine.settings, "max_retries", 3)))
+    chunk_concurrency = max(
+        1,
+        int(getattr(engine.settings, "archivist_chunk_concurrency", 5)),
+    )
     wait_for_success_before_retry = False
 
     def start_available() -> None:
         nonlocal wait_for_success_before_retry
         if wait_for_success_before_retry:
             return
-        while pending and len(running) < MAX_ARCHIVIST_CHUNK_CONCURRENCY:
+        while pending and len(running) < chunk_concurrency:
             index = pending.pop(0)
             source_file = chunk_source_file_name(material["source_file"], index=index + 1, total=total)
+            material_source_id = str(material.get("source_id") or material["path"])
+            source_id = (
+                material_source_id
+                if total == 1
+                else f"{material_source_id}.part-{index + 1:03d}"
+            )
             task = asyncio.create_task(
                 _clean_and_cut_chunk(
                     engine,
@@ -301,6 +390,8 @@ async def _clean_and_cut_chunks(
                     raw_chunks[index],
                     collection=material["collection"],
                     source_file=source_file,
+                    source_id=source_id,
+                    source_sha256=str(material.get("fingerprint") or ""),
                     order_offset=0,
                 )
             )
@@ -322,6 +413,9 @@ async def _clean_and_cut_chunks(
                 saw_success = True
             except Exception as exc:
                 if not _is_api_concurrency_error(exc):
+                    for sibling in running:
+                        sibling.cancel()
+                    await asyncio.gather(*running, return_exceptions=True)
                     raise
                 retry_counts[index] = retry_counts.get(index, 0) + 1
                 if retry_counts[index] > max_retries:
@@ -392,10 +486,10 @@ def split_raw_markdown_for_cleaning(raw_markdown: str) -> list[str]:
 
 
 def remove_ocr_image_html(raw_markdown: str) -> str:
-    """Remove OCR-emitted HTML image/table blocks before chunking or LLM cleanup."""
+    """Remove image artifacts while retaining OCR table cell contents."""
     text = re.sub(
         r"<table\b.*?</table>",
-        "",
+        _html_table_to_text,
         raw_markdown,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -407,6 +501,20 @@ def remove_ocr_image_html(raw_markdown: str) -> str:
     )
     text = re.sub(r"<img\b[^>]*>", "", text, flags=re.IGNORECASE | re.DOTALL)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _html_table_to_text(match: re.Match[str]) -> str:
+    table = match.group(0)
+    table = re.sub(r"</(?:td|th)\s*>", "\t", table, flags=re.IGNORECASE)
+    table = re.sub(r"</tr\s*>", "\n", table, flags=re.IGNORECASE)
+    table = re.sub(r"<br\s*/?>", "\n", table, flags=re.IGNORECASE)
+    table = re.sub(r"<[^>]+>", "", table)
+    rows = []
+    for row in html.unescape(table).splitlines():
+        cells = [cell.strip() for cell in row.split("\t") if cell.strip()]
+        if cells:
+            rows.append(" | ".join(cells))
+    return "\n" + "\n".join(rows) + "\n"
 
 
 def chunk_source_file_name(source_file: str, *, index: int, total: int) -> str:
@@ -437,9 +545,16 @@ def _find_heading_in_region(raw_markdown: str, start: int, end: int, level: int)
     return None
 
 
-def persist_ocr_markdown(root: Path, collection: str, source_file: str, raw_markdown: str) -> Path:
+def persist_ocr_markdown(
+    root: Path,
+    collection: str,
+    source_file: str,
+    raw_markdown: str,
+    *,
+    source_id: str = "",
+) -> Path:
     """Persist raw OCR Markdown before Archivist cleanup for inspection and retries."""
-    path = paths.ocr_markdown_path(root, collection, source_file)
+    path = paths.ocr_markdown_source_path(root, source_id or f"{collection}/{source_file}")
     file_ops.write_text(path, raw_markdown)
     return path
 
@@ -519,12 +634,15 @@ def _root(engine: object) -> Path:
 
 def _install_ocr_progress_callback(engine: object | None) -> None:
     try:
-        from tree.ingest.ocr_engine import set_progress_callback
+        from tree.ingest.ocr_engine import set_job_store_root, set_progress_callback
     except Exception:
         return
     if engine is None:
         set_progress_callback(None)
+        set_job_store_root(None)
         return
+
+    set_job_store_root(paths.ocr_jobs_root(_root(engine)))
 
     def callback(event: dict[str, Any]) -> None:
         current = event.get("current_file") or event.get("current_chunk") or event.get("job_id") or ""

@@ -55,6 +55,9 @@ function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> })
   const stageKey = isStageKey(key) ? key : null;
   const label = stageKey ? t(`stage.${stageKey}`) : row.label;
   const tip = stageKey ? t(`stage.${stageKey}.tip`) : "";
+  const badgeKey = ["done", "running", "failed", "wait"].includes(row.badge)
+    ? `badge.${row.badge}`
+    : "";
   return (
     <tr>
       <td className="stage-name">
@@ -77,7 +80,9 @@ function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> })
         {row.done}/{row.total}
       </td>
       <td>
-        <span className={`badge badge-${row.badge}`}>{row.badge}</span>
+        <span className={`badge badge-${row.badge}`}>
+          {badgeKey ? t(badgeKey) : row.badge}
+        </span>
       </td>
       <td className="stage-current" title={row.current}>
         {row.current}

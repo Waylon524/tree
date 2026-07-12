@@ -8,7 +8,9 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
 ## Locked decisions
 - **Windows:** ship **unsigned** for now; document the SmartScreen "More info → Run
   anyway" workaround. Revisit a code-signing cert later.
-- **macOS:** **sign + notarize** in CI (Apple Developer account available).
+- **macOS:** build, sign, notarize, staple, and validate on the local release Mac;
+  `notarytool` reads credentials from a Keychain profile. GitHub Actions never
+  receives the Developer ID or App Store Connect private key.
 - **Embedding model:** **download on first run** with in-app progress (not bundled
   in the installer — it's ~600 MB). Reuses the M2 llama-server + Qwen3 GGUF
   auto-download.
@@ -20,8 +22,8 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
   and talks to it over loopback HTTP + WebSocket with a per-launch token.
 - On first run the sidecar downloads the llama-server binary + Qwen3 GGUF and starts
   the embedding server (M2 path), surfaced with progress in the UI.
-- **Distribution:** GitHub Actions matrix builds the sidecar + installer per OS and
-  uploads to a GitHub Release on tag.
+- **Distribution:** GitHub Actions builds the unsigned Windows installers; the
+  validated local macOS DMG is uploaded to the same draft release.
 
 ## Current state (done)
 - React SPA over the FastAPI: run/stop, live progress (WebSocket), DAG (open in
@@ -86,25 +88,20 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
       compile-verified so far.
 - **Acceptance:** `cargo tauri dev` opens a native window that does the full flow.
 
-### Phase 4 — CI + installers + Releases — in progress
-- [x] `.github/workflows/release.yml`: matrix (macOS arm64 + Intel, Linux, Windows) builds
-      the PyInstaller sidecar, then `tauri-apps/tauri-action` runs `tauri build` and (on a
-      `v*` tag) attaches installers to a draft GitHub Release; `workflow_dispatch` builds
-      without releasing to validate the pipeline.
-- [x] macOS signing/notarization wired via optional `APPLE_*` secrets (unsigned if unset).
+### Phase 4 — CI + installers + Releases — ready for 0.3.7 validation
+- [x] `.github/workflows/release.yml` runs release-doctor plus Python, frontend,
+      and Rust tests before building Windows installers and attaching them to a
+      draft GitHub Release.
+- [x] Direct Python/PyInstaller release dependencies are constrained in
+      `packaging/release-constraints.txt`; npm and Cargo use their lock files.
+- [x] Windows release assets include SHA-256 checksums and a Python dependency inventory.
+- [x] `packaging/release_macos.sh` builds from an exact clean tag, signs nested
+      sidecar code, submits with a Keychain notary profile, staples, and validates
+      the DMG before optional upload.
 - [x] Windows unsigned (release notes document the SmartScreen workaround).
-- [ ] First real run (tag or dispatch) — NOT yet run. Known risk: macOS **notarization of the
-      nested PyInstaller binaries/dylibs** inside the .app Resources needs hardened-runtime
-      signing; unsigned builds work, notarized may need extra sidecar-signing steps.
-- [ ] Add `APPLE_*` repo secrets (Apple Developer account) to enable notarization.
-
-### Phase 4 — CI + installers + Releases
-- [ ] GitHub Actions matrix (macos / windows / ubuntu): build React → PyInstaller
-      sidecar → `tauri build` → installers (.dmg / .msi|.exe / .AppImage|.deb).
-- [ ] macOS: sign + notarize (Apple ID / Team ID / app-specific password as secrets).
-- [ ] Windows: unsigned; document SmartScreen workaround.
-- [ ] On git tag `v*`, upload installers to a GitHub Release.
-- **Acceptance:** pushing a tag produces downloadable installers for all three OSes.
+- [ ] Run the first 0.3.7 release candidate from an exact tag and retain its
+      release-doctor, checksum, codesign, stapler, Gatekeeper, and DMG verification evidence.
+- **Acceptance:** one tested tag produces validated macOS and Windows installers.
 
 ### Phase 5 — Distribution polish
 - [ ] README "Download & install" section (per-OS), incl. Windows unsigned note.
@@ -116,7 +113,8 @@ function previously done via the `tre` CLI is available in-app. **No terminal, e
   Phase 1 confirms or surfaces the wall early.
 - Sidecar and Tauri bundles must be built **on each OS** (no cross-compile).
 - First-run model download size/time; offer the `hf-mirror.com` endpoint.
-- macOS notarization secrets handling in CI.
+- macOS notarization is intentionally local; keep the Keychain profile and Developer ID
+  identity available only on the designated release Mac.
 
 ## Progress log
 - 2026-06-18: Plan created. Decisions locked (Win unsigned / macOS notarize / model on

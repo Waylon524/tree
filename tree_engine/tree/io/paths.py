@@ -80,8 +80,30 @@ def ocr_markdown_root(root: Path) -> Path:
     return runtime_root(root) / "ocr"
 
 
+def ocr_jobs_root(root: Path) -> Path:
+    """Durable remote OCR job and per-chunk result checkpoints."""
+    return runtime_root(root) / "ocr-jobs"
+
+
 def ocr_markdown_path(root: Path, collection: str, source_file: str) -> Path:
     return ocr_markdown_root(root) / collection / f"{source_file}.md"
+
+
+def ocr_markdown_source_path(root: Path, source_id: str) -> Path:
+    """OCR checkpoint keyed by the full workspace-relative material path."""
+    return _safe_source_artifact_path(ocr_markdown_root(root), source_id)
+
+
+def source_markdown_source_path(root: Path, source_id: str) -> Path:
+    """Cleaned Markdown keyed by full source identity (including chunk suffix)."""
+    return _safe_source_artifact_path(source_markdown_root(root), source_id)
+
+
+def _safe_source_artifact_path(base: Path, source_id: str) -> Path:
+    rel = Path(source_id.replace("\\", "/"))
+    if rel.is_absolute() or not rel.parts or any(part in {"", ".", ".."} for part in rel.parts):
+        raise ValueError(f"Invalid material source id: {source_id!r}")
+    return base.joinpath(*rel.parts).with_name(rel.name + ".md")
 
 
 def drafts_root(root: Path) -> Path:
@@ -106,6 +128,14 @@ def progress_path(root: Path) -> Path:
 
 def knowledge_ledger_path(root: Path) -> Path:
     return runtime_root(root) / "knowledge-ledger.json"
+
+
+def output_transactions_root(root: Path) -> Path:
+    return runtime_root(root) / "output-transactions"
+
+
+def output_archive_root(root: Path) -> Path:
+    return runtime_root(root) / "output-archive"
 
 
 def learning_state_path(root: Path) -> Path:
@@ -179,8 +209,11 @@ def ensure_workspace_dirs(root: Path) -> None:
         runtime_root(root),
         prompts_root(root),
         ocr_markdown_root(root),
+        ocr_jobs_root(root),
         source_markdown_root(root),
         drafts_root(root),
+        output_transactions_root(root),
+        output_archive_root(root),
         learning_revisions_root(root),
         planner_root(root),
         pipeline_temp_root(root),

@@ -351,7 +351,7 @@ export async function exportOutputs(destination: string, files: string[]): Promi
 
 export async function openDag(): Promise<string> {
   const resp = await expectOk(await fetch(url("/api/open-dag"), { method: "POST" }));
-  return resp.text();
+  return ((await resp.json()) as { message: string }).message;
 }
 
 export type DagNodeStatus = "locked" | "ready" | "running" | "complete" | "failed";

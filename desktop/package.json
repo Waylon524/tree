@@ -1,15 +1,19 @@
 {
   "name": "tree-desktop",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.3.7",
   "type": "module",
   "description": "React + Vite frontend for TREE (browser now; Tauri shell later).",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/lib/*.test.ts"
   },
   "dependencies": {
     "katex": "^0.17.0",
@@ -20,7 +24,8 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "three-render-objects": "1.41.0"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.11.1",
@@ -29,8 +34,8 @@
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react": "^6.0.3",
     "typescript": "^5.5.4",
-    "vite": "^5.4.2"
+    "vite": "^8.1.4"
   }
 }

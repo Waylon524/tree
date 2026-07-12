@@ -149,6 +149,7 @@ def test_dag_payload_labels_edges_and_statuses(workspace):
         paths.knowledge_ledger_path(workspace),
         {"records": [{"node_id": "n1", "node_ids": ["n1"], "output_path": "outputs/001.Root.md"}]},
     )
+    (paths.outputs_root(workspace) / "001.Root.md").write_text("# Root\n", encoding="utf-8")
     StateManager(paths.pipeline_state_path(workspace)).save(
         PipelineState(
             node_executions=[
@@ -232,6 +233,8 @@ def test_learning_state_marks_read_and_recommends_next_node(workspace):
             ]
         },
     )
+    (paths.outputs_root(workspace) / "001.Root.md").write_text("# Root\n", encoding="utf-8")
+    (paths.outputs_root(workspace) / "002.Next.md").write_text("# Next\n", encoding="utf-8")
     client = _authed_client(workspace)
 
     initial = client.get("/api/dag").json()
@@ -804,7 +807,7 @@ def test_open_dag_opens_existing_svg(workspace, monkeypatch):
     resp = client.post("/api/open-dag")
 
     assert resp.status_code == 200
-    assert "Opened" in resp.text
+    assert "Opened" in resp.json()["message"]
     assert opened == [svg]
 
 
@@ -816,7 +819,7 @@ def test_open_dag_when_not_generated(workspace, monkeypatch):
     resp = client.post("/api/open-dag")
 
     assert resp.status_code == 200
-    assert "not generated" in resp.text
+    assert "not generated" in resp.json()["message"]
     assert opened == []
 
 

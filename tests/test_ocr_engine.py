@@ -8,16 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from tree.ingest.ocr_engine import OCREngine
+from tree.ingest.ocr_engine import OCREngine, set_job_store_root
 
 
 @pytest.fixture(autouse=True)
 def reset_ocr_engine_singleton():
     OCREngine._instance = None
+    set_job_store_root(None)
     yield
     if OCREngine._instance is not None:
         OCREngine._instance.close()
     OCREngine._instance = None
+    set_job_store_root(None)
 
 
 def test_pdf_chunks_are_ocrd_with_max_five_concurrent_files(tmp_path, monkeypatch):
@@ -188,3 +190,53 @@ def test_failed_init_does_not_cache_broken_singleton(monkeypatch):
 def test_close_without_client_is_safe():
     bare = object.__new__(OCREngine)
     bare.close()  # must not raise AttributeError: '_client'
+
+
+def test_pdf_chunks_reject_empty_partial_result(tmp_path, monkeypatch):
+    engine = OCREngine(token="test")
+    chunks = [tmp_path / "one.pdf", tmp_path / "two.pdf"]
+    for chunk in chunks:
+        chunk.write_bytes(b"pdf")
+
+    monkeypatch.setattr(
+        engine,
+        "_ocr_single_local",
+        lambda path, context=None: "complete" if Path(path).name == "one.pdf" else "",
+    )
+
+    with pytest.raises(RuntimeError, match=r"missing PDF chunks: \[2\]"):
+        engine._ocr_pdf_chunks([(chunks[0], {}), (chunks[1], {})])
+
+
+def test_remote_job_id_is_resumed_after_poll_timeout(tmp_path, monkeypatch):
+    engine = OCREngine(token="test")
+    source = tmp_path / "page.png"
+    source.write_bytes(b"image bytes")
+    set_job_store_root(tmp_path / "ocr-jobs")
+    calls = {"submit": 0, "poll": 0, "download": 0}
+
+    def submit(path):
+        calls["submit"] += 1
+        return "job-123"
+
+    def poll(job_id, context):
+        calls["poll"] += 1
+        assert job_id == "job-123"
+        if calls["poll"] == 1:
+            raise TimeoutError("temporary timeout")
+        return "https://result.test/job.jsonl"
+
+    def download(url, context):
+        calls["download"] += 1
+        return "recovered OCR text"
+
+    monkeypatch.setattr(engine, "_submit_local", submit)
+    monkeypatch.setattr(engine, "_poll", poll)
+    monkeypatch.setattr(engine, "_download_result", download)
+
+    with pytest.raises(TimeoutError):
+        engine._ocr_single_local_unlocked(source)
+    assert engine._ocr_single_local_unlocked(source) == "recovered OCR text"
+    # A third attempt uses the persisted chunk result without network work.
+    assert engine._ocr_single_local_unlocked(source) == "recovered OCR text"
+    assert calls == {"submit": 1, "poll": 2, "download": 1}

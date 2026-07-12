@@ -8,18 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from tree.io import paths
 from tree.planner.dag import build_dag
-from tree.planner.manifest import scan_materials
+from tree.planner.manifest import manifest_generation_id, scan_materials
 from tree.planner.models import MTU
 from tree.planner.store import (
     artifact_hash,
     envelope,
-    read_envelope_data,
     read_json,
     write_json_atomic,
 )
@@ -34,6 +32,10 @@ PreDagHook = Callable[[list[MTU]], Awaitable[None] | None]
 
 class PlannerError(RuntimeError):
     pass
+
+
+ARCHIVIST_ALGORITHM_VERSION = "v2-content-lineage"
+DAGGER_ALGORITHM_VERSION = "v2-generation-validated"
 
 
 class HasDagger(Protocol):
@@ -55,7 +57,12 @@ async def rebuild_planner(
     manifest_path = paths.material_manifest_path(root)
     previous = read_json(manifest_path) if manifest_path.exists() else None
     manifest = scan_materials(root, previous=previous)
-    write_json_atomic(manifest_path, manifest)
+    producer_signature = planner_producer_signature(settings)
+    generation_id = planner_generation_id(manifest, settings)
+    manifest["generation_id"] = generation_id
+    for material in manifest["materials"]:
+        material["producer_signature"] = producer_signature
+        material["ocr_signature"] = planner_ocr_signature(settings)
 
     changed = [m for m in manifest["materials"] if m["status"] != "unchanged"]
     _set_stage(
@@ -74,10 +81,6 @@ async def rebuild_planner(
     _set_stage(progress, "cut", total=len(changed), done=0,
                status="running" if changed else "complete")
 
-    needs_build = any(m["status"] != "unchanged" for m in manifest["materials"])
-    if needs_build and mtu_producer is None:
-        raise PlannerError("Materials are new/changed but no mtu_producer was supplied.")
-
     mtus = await _collect_mtus(root, manifest, producer=mtu_producer, settings=settings)
     # All changed materials are ingested once _collect_mtus returns; clamp the
     # ingest stages to complete regardless of per-material advance timing.
@@ -87,7 +90,8 @@ async def rebuild_planner(
         schema="tree.mtus",
         data={"mtus": [m.model_dump(mode="json") for m in mtus]},
         inputs=[{"path": str(manifest_path), "hash": artifact_hash(manifest)}],
-        algorithm_versions={"archivist": "v1"},
+        algorithm_versions={"archivist": ARCHIVIST_ALGORITHM_VERSION},
+        generation_id=generation_id,
     )
     write_json_atomic(paths.mtus_path(root), mtus_env)
 
@@ -112,12 +116,14 @@ async def rebuild_planner(
         vector_provider=vector_provider,
         progress=progress,
     )
+    _validate_dagger_fallback_rate(dag, mtus, settings)
     nodes_env = envelope(
         schema="tree.knowledge-nodes",
         data={"knowledge_nodes": dag["nodes"]},
         inputs=[{"path": str(paths.mtus_path(root)), "hash": artifact_hash(mtus_env)}],
         diagnostics=dag.get("diagnostics", []),
-        algorithm_versions={"dagger": "v1"},
+        algorithm_versions={"dagger": DAGGER_ALGORITHM_VERSION},
+        generation_id=generation_id,
     )
     write_json_atomic(paths.knowledge_nodes_path(root), nodes_env)
 
@@ -126,10 +132,16 @@ async def rebuild_planner(
         data={"nodes": dag["nodes"], "edges": dag["edges"], "roots": dag["roots"]},
         inputs=[{"path": str(paths.knowledge_nodes_path(root)), "hash": artifact_hash(nodes_env)}],
         diagnostics=dag.get("diagnostics", []),
-        algorithm_versions={"dagger": "v1"},
+        algorithm_versions={"dagger": DAGGER_ALGORITHM_VERSION},
+        generation_id=generation_id,
     )
     write_json_atomic(paths.knowledge_dag_path(root), dag_env)
     dag_svg_path = write_dag_svg(root, dag_env["data"])
+
+    # The manifest is the commit pointer for a planner generation. Writing it
+    # last means an interrupted rebuild can never make partial new artifacts
+    # look compatible with the last successful material snapshot.
+    write_json_atomic(manifest_path, manifest)
 
     edges = dag["edges"]
     return {
@@ -162,14 +174,30 @@ async def _collect_mtus(
         return mtus
 
     for material in manifest["materials"]:
-        key = (material["collection"], material["source_file"])
-        if material["status"] == "unchanged" and key in cache:
-            collected.extend(cache[key])
+        source_id = str(material.get("source_id") or material["path"])
+        cached = cache.get(source_id)
+        if (
+            cached is not None
+            and cached["fingerprint"] == material.get("fingerprint", "")
+            and cached["producer_signature"] == material.get("producer_signature", "")
+        ):
+            collected.extend(cached["mtus"])
         elif producer is not None:
             produce_tasks.append(asyncio.create_task(produce(material)))
+        else:
+            raise PlannerError(
+                f"Material {source_id} needs OCR/Archivist rebuild but no mtu_producer was supplied."
+            )
 
-    for task in produce_tasks:
-        collected.extend(await task)
+    try:
+        for task in produce_tasks:
+            collected.extend(await task)
+    except BaseException:
+        for task in produce_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*produce_tasks, return_exceptions=True)
+        raise
 
     # Deterministic global ordering used for source-order edges.
     collected.sort(key=lambda m: (m.collection, m.source_file, m.line_range[0]))
@@ -182,36 +210,33 @@ def _material_cache_root(root: Path) -> Path:
     return paths.planner_root(root) / "mtu-cache"
 
 
-def _material_cache_path(root: Path, collection: str, source_file: str) -> Path:
-    return _material_cache_root(root) / collection / f"{source_file}.json"
+def _material_cache_path(root: Path, source_id: str) -> Path:
+    return _material_cache_root(root) / f"{source_id}.json"
 
 
 def _save_material_cache(root: Path, material: dict[str, Any], mtus: list[MTU]) -> None:
     """Write one material's MTUs to its own cache file (crash-safe, incremental)."""
-    path = _material_cache_path(root, material["collection"], material["source_file"])
+    source_id = str(material.get("source_id") or material["path"])
+    path = _material_cache_path(root, source_id)
     write_json_atomic(
         path,
         {
             "fingerprint": material.get("fingerprint", ""),
+            "source_id": source_id,
+            "producer_signature": material.get("producer_signature", ""),
             "mtus": [m.model_dump(mode="json") for m in mtus],
         },
     )
 
 
-def _add_to_cache(cache: dict[tuple[str, str], list[MTU]], mtu: MTU) -> None:
-    cache.setdefault((mtu.collection, mtu.source_file), []).append(mtu)
-    if original_source_file := _chunk_original_source_file(mtu.source_file):
-        cache.setdefault((mtu.collection, original_source_file), []).append(mtu)
-
-
-def _load_mtu_cache(root: Path) -> dict[tuple[str, str], list[MTU]]:
+def _load_mtu_cache(root: Path) -> dict[str, dict[str, Any]]:
     """Reuse cache for unchanged materials.
 
     Prefer the per-material cache files (written incrementally, so they survive a
     crash mid-run); fall back to the assembled mtus.json for workspaces created
     before per-material caches existed.
     """
-    cache: dict[tuple[str, str], list[MTU]] = {}
+    cache: dict[str, dict[str, Any]] = {}
     cache_root = _material_cache_root(root)
     cache_files = sorted(cache_root.rglob("*.json")) if cache_root.exists() else []
     if cache_files:
@@ -220,31 +245,129 @@ def _load_mtu_cache(root: Path) -> dict[tuple[str, str], list[MTU]]:
                 data = read_json(path)
             except (OSError, ValueError):
                 continue
-            for raw in data.get("mtus", []):
-                _add_to_cache(cache, MTU.model_validate(raw))
+            mtus = [MTU.model_validate(raw) for raw in data.get("mtus", [])]
+            source_id = str(data.get("source_id") or _legacy_cache_source_id(path, cache_root, mtus))
+            if source_id:
+                cache[source_id] = {
+                    "fingerprint": str(data.get("fingerprint", "")),
+                    "producer_signature": str(data.get("producer_signature", "")),
+                    "mtus": mtus,
+                }
         return cache
 
-    for raw in read_envelope_data(paths.mtus_path(root)).get("mtus", []):
-        _add_to_cache(cache, MTU.model_validate(raw))
+    # Legacy assembled artifacts lack a trustworthy per-material fingerprint,
+    # so they must not be reused as proof that current source content matches.
     return cache
 
 
-def _chunk_original_source_file(source_file: str) -> str:
-    match = re.match(r"^(.+)\.part-\d{3}$", source_file)
-    return match.group(1) if match else ""
+def _legacy_cache_source_id(path: Path, cache_root: Path, mtus: list[MTU]) -> str:
+    try:
+        rel = str(path.relative_to(cache_root))
+        if rel.endswith(".json"):
+            return rel[:-5]
+    except ValueError:
+        pass
+    if mtus:
+        mtu = mtus[0]
+        return mtu.source_id or f"{mtu.collection}/{mtu.source_file}"
+    return ""
+
+
+def planner_producer_signature(settings: Any) -> str:
+    archivist = getattr(settings, "archivist", None)
+    return artifact_hash(
+        {
+            "algorithm": ARCHIVIST_ALGORITHM_VERSION,
+            "ocr": planner_ocr_signature(settings),
+            "archivist_model": getattr(archivist, "model", ""),
+            "archivist_base_url": getattr(archivist, "base_url", ""),
+            "long_document_threshold": 100_000,
+        }
+    )
+
+
+def planner_ocr_signature(settings: Any) -> str:
+    return artifact_hash(
+        {
+            "model": getattr(settings, "paddleocr_model", "PaddleOCR-VL-1.6"),
+            "endpoint": getattr(settings, "paddleocr_api_url", ""),
+            "orientation": True,
+            "unwarping": True,
+            "chart_recognition": True,
+        }
+    )
+
+
+def planner_generation_id(manifest: dict[str, Any], settings: Any) -> str:
+    dagger = getattr(settings, "dagger", None)
+    return "gen:" + artifact_hash(
+        {
+            "materials": manifest_generation_id(manifest),
+            "producer": planner_producer_signature(settings),
+            "dagger_algorithm": DAGGER_ALGORITHM_VERSION,
+            "dagger_model": getattr(dagger, "model", ""),
+            "dagger_base_url": getattr(dagger, "base_url", ""),
+            "embed_cluster_enabled": getattr(settings, "dagger_embed_cluster_enabled", True),
+            "cluster_similarity_threshold": getattr(
+                settings, "dagger_cluster_similarity_threshold", 0.80
+            ),
+            "cluster_top_k": getattr(settings, "dagger_cluster_top_k", 5),
+            "cluster_max_size": getattr(settings, "dagger_cluster_max_size", 8),
+            "max_unassigned_ratio": getattr(settings, "dagger_max_unassigned_ratio", 0.10),
+        }
+    )[:24]
+
+
+def _validate_dagger_fallback_rate(dag: dict[str, Any], mtus: list[MTU], settings: Any) -> None:
+    if not mtus:
+        return
+    unassigned = {
+        str(item.get("mtu_id") or "")
+        for item in dag.get("diagnostics", [])
+        if item.get("reason_code") == "mtu_unassigned"
+    }
+    ratio = len(unassigned) / len(mtus)
+    maximum = max(0.0, float(getattr(settings, "dagger_max_unassigned_ratio", 0.10)))
+    if ratio > maximum:
+        raise PlannerError(
+            "Dagger fallback quality gate failed: "
+            f"{len(unassigned)}/{len(mtus)} MTUs were unassigned ({ratio:.1%}); "
+            f"maximum allowed is {maximum:.1%}."
+        )
 
 
 # --- artifact loaders (used by engine / cli) --------------------------------
 
 def load_dag(root: Path) -> dict[str, Any]:
-    data = read_envelope_data(paths.knowledge_dag_path(root))
+    data = _read_current_envelope_data(root, paths.knowledge_dag_path(root))
     return {"nodes": data.get("nodes", []), "edges": data.get("edges", []), "roots": data.get("roots", [])}
 
 
 
 
 def load_nodes(root: Path) -> list[dict[str, Any]]:
-    return read_envelope_data(paths.knowledge_nodes_path(root)).get("knowledge_nodes", [])
+    nodes = _read_current_envelope_data(root, paths.knowledge_nodes_path(root)).get(
+        "knowledge_nodes", []
+    )
+    return nodes if isinstance(nodes, list) else []
+
+
+def _read_current_envelope_data(root: Path, artifact_path: Path) -> dict[str, Any]:
+    """Hide artifacts from an interrupted, not-yet-committed generation."""
+    if not artifact_path.exists():
+        return {}
+    loaded = read_json(artifact_path)
+    manifest_path = paths.material_manifest_path(root)
+    if manifest_path.exists():
+        manifest = read_json(manifest_path)
+        committed_generation = str(manifest.get("generation_id") or "")
+        artifact_generation = str(loaded.get("generation_id") or "")
+        if committed_generation and artifact_generation != committed_generation:
+            return {}
+    data = loaded.get("data") if isinstance(loaded, dict) else None
+    if isinstance(data, dict):
+        return data
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _set_stage(progress: Any | None, stage: str, **kwargs: Any) -> None:

@@ -235,7 +235,7 @@ def test_remove_ocr_image_html_removes_centered_img_div_blocks():
     assert "pplines-online" not in cleaned
 
 
-def test_remove_ocr_image_html_removes_ocr_html_tables():
+def test_remove_ocr_image_html_preserves_ocr_table_contents_as_text():
     raw = (
         "before\n"
         "<table border=1 style='margin: auto; width: max-content;'> "
@@ -252,10 +252,11 @@ def test_remove_ocr_image_html_removes_ocr_html_tables():
     assert "before" in cleaned
     assert "after" in cleaned
     assert "<table" not in cleaned
-    assert "过阻尼" not in cleaned
+    assert "t | 过阻尼" in cleaned
+    assert "0 | 0.0" in cleaned
 
 
-async def test_prepare_sources_persists_ocr_checkpoint_after_removing_image_html(tmp_path, monkeypatch):
+async def test_prepare_sources_preserves_raw_ocr_checkpoint_and_cleans_archivist_input(tmp_path, monkeypatch):
     material = tmp_path / "materials" / "课件" / "ch1.md"
     material.parent.mkdir(parents=True)
     raw = (
@@ -287,9 +288,11 @@ async def test_prepare_sources_persists_ocr_checkpoint_after_removing_image_html
 
     checkpoint = paths.ocr_markdown_path(tmp_path, "课件", "ch1.md")
     checkpoint_text = checkpoint.read_text(encoding="utf-8")
-    assert "<img" not in checkpoint_text
-    assert "pplines-online" not in checkpoint_text
-    assert archivist.clean_inputs == [checkpoint_text]
+    assert "<img" in checkpoint_text
+    assert "pplines-online" in checkpoint_text
+    assert len(archivist.clean_inputs) == 1
+    assert "<img" not in archivist.clean_inputs[0]
+    assert "pplines-online" not in archivist.clean_inputs[0]
 
 
 def test_split_raw_markdown_prefers_nearest_level_one_heading_in_window():

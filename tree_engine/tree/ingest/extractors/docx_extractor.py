@@ -37,6 +37,7 @@ def _extract_tables(doc: Document) -> list[str]:
 
 def _extract_images(doc: Document, docx_path: Path) -> list[str]:
     results = []
+    failures: list[str] = []
     engine = get_engine()
 
     for i, rel in enumerate(doc.part.rels.values()):
@@ -54,8 +55,11 @@ def _extract_images(doc: Document, docx_path: Path) -> list[str]:
             text = engine.ocr_file(tmp_path)
             if text.strip():
                 results.append(text)
-        except Exception:
+            else:
+                failures.append(f"image #{i + 1}: empty OCR result")
+        except Exception as exc:
             logger.exception("Failed to OCR embedded image #%d", i + 1)
+            failures.append(f"image #{i + 1}: {type(exc).__name__}: {exc}")
         finally:
             if tmp_path is not None:
                 try:
@@ -63,6 +67,11 @@ def _extract_images(doc: Document, docx_path: Path) -> list[str]:
                 except Exception:
                     pass
 
+    if failures:
+        raise RuntimeError(
+            f"DOCX embedded image extraction incomplete for {docx_path.name}: "
+            + "; ".join(failures)
+        )
     return results
 
 

@@ -23,12 +23,13 @@ export function useExport() {
       }
       const result = await exportOutputs(destination, names);
       setOk(result.failed.length === 0);
-      const parts = [
-        `Exported ${result.exported.length}`,
-        result.skipped.length ? `skipped ${result.skipped.length}` : "",
-        result.failed.length ? `failed ${result.failed.length}` : "",
-      ].filter(Boolean);
-      setMessage(`${parts.join(", ")}.`);
+      setMessage(
+        t("fruits.exportResult", {
+          exported: result.exported.length,
+          skipped: result.skipped.length,
+          failed: result.failed.length,
+        }),
+      );
     } catch (err) {
       setOk(false);
       setMessage(err instanceof Error ? err.message : String(err));

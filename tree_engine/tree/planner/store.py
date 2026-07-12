@@ -39,6 +39,7 @@ def envelope(
     inputs: list[dict[str, Any]] | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
     algorithm_versions: dict[str, str] | None = None,
+    generation_id: str = "",
 ) -> dict[str, Any]:
     return {
         "schema": schema,
@@ -46,6 +47,7 @@ def envelope(
         "diagnostics": diagnostics or [],
         "data": data,
         "algorithm_versions": algorithm_versions or {},
+        "generation_id": generation_id,
     }
 
 

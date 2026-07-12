@@ -18,7 +18,8 @@ base/token through `app_bootstrap()`.
    # TREE GUI ready: http://127.0.0.1:8799/?token=XXXXXXXX
    ```
 
-2. Start the frontend dev server (point it at the backend if the port differs):
+2. Use Node.js 20.19+ (or 22.12+) and start the frontend dev server (point it at
+   the backend if the port differs):
 
    ```bash
    cd desktop
@@ -44,6 +45,7 @@ delete, and importing an existing TREE workspace by copying its `materials/`,
 
 - `npm run dev` — Vite dev server (HMR)
 - `npm run build` — typecheck (`tsc --noEmit`) + production build to `dist/`
+- `npm test` — run frontend readiness-guard tests
 - `npm run preview` — serve the built `dist/`
 
 ## Notes

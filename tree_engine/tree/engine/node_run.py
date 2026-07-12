@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Protocol
@@ -11,7 +12,7 @@ from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
 from tree.io import file_ops, paths
 from tree.observability.limiter import IterationLimitExceeded, IterationLimiter
-from tree.planner.store import read_json, write_json_atomic
+from tree.planner.store import read_envelope_data, read_json, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditExamDefectKind,
@@ -27,8 +28,10 @@ class Retriever(Protocol):
 
     def source_hits(
         self, query: str, *, collections: list[str], node_ids: list[str], top_k: int
-    ) -> list[dict]: ...
-    def finished_hits(self, query: str, *, allowed_paths: set[str], top_k: int) -> list[dict]: ...
+    ) -> list[dict[str, Any]]: ...
+    def finished_hits(
+        self, query: str, *, allowed_paths: set[str], top_k: int
+    ) -> list[dict[str, Any]]: ...
     def index_finished(self, node_id: str, path: Path) -> int: ...
 
 
@@ -68,8 +71,9 @@ class NodeRunner:
         if node is None:
             raise RuntimeError(f"Node {node_id} not found in knowledge DAG")
 
+        self._recover_output_transaction(node_id, execution.node_run_id)
         ledger = self._load_ledger()
-        if node_id in _ledger_covered_node_ids(ledger):
+        if node_id in ledger_covered_node_ids(self.root):
             self._complete_node(node_id, execution.node_run_id)
             return "node_complete"
 
@@ -87,7 +91,7 @@ class NodeRunner:
                 next_seq=file_seq,
                 prior_paths=prior_paths,
                 prior_contents=[],
-                retrieved=self.retriever.source_hits(compose_query, collections=collections, node_ids=[node_id], top_k=5)
+                retrieved=self._source_evidence_hits(node, compose_query, collections, top_k=5)
                 + self.retriever.finished_hits(compose_query, allowed_paths=allowed_paths, top_k=8),
                 node_context=node_context,
             )
@@ -177,7 +181,9 @@ class NodeRunner:
                 prior_contents=[],
                 previous_bottleneck=previous_bottleneck,
                 retrieved=self.retriever.finished_hits(aq, allowed_paths=allowed_paths, top_k=6)
-                + self.retriever.source_hits(aq, collections=collections, node_ids=[node_id], top_k=5),
+                + self._source_evidence_hits(
+                    self._node_for_id(node_id), aq, collections, top_k=5
+                ),
                 node_context=node_context,
             )
 
@@ -219,7 +225,9 @@ class NodeRunner:
                 draft_text=draft_text,
                 previous_bottleneck=previous_bottleneck,
                 writer_instructions=exam.writer_instructions,
-                retrieved=self.retriever.source_hits(wq, collections=collections, node_ids=[node_id], top_k=5)
+                retrieved=self._source_evidence_hits(
+                    self._node_for_id(node_id), wq, collections, top_k=5
+                )
                 + self.retriever.finished_hits(wq, allowed_paths=allowed_paths, top_k=8),
                 node_context=node_context,
             )
@@ -321,7 +329,8 @@ class NodeRunner:
             or not hasattr(self.examiner, "reconcile_exam")
         ):
             return False
-        has_draft = iter_state.draft_path is not None and iter_state.draft_path.exists()
+        draft_path = iter_state.draft_path
+        has_draft = draft_path is not None and draft_path.exists()
         if require_draft and not has_draft:
             return False
         if require_bottleneck and not bottleneck_report:
@@ -331,7 +340,7 @@ class NodeRunner:
         if repair_count > 0:
             return False
 
-        draft_text = iter_state.draft_path.read_text(encoding="utf-8") if has_draft else "尚未创建"
+        draft_text = draft_path.read_text(encoding="utf-8") if draft_path is not None else "尚未创建"
         query = f"{exam.knowledge_point}\n{bottleneck_report}\nexam answer key reconciliation"
         result = await self.examiner.reconcile_exam(
             exam_paper=exam.blind_exam,
@@ -401,27 +410,84 @@ class NodeRunner:
 
     def _handle_pass(self, iter_state: IterationState, execution: Any, exam: ExamSections) -> None:
         node_id = iter_state.covered_node_ids[0]
-        filename = _output_filename(iter_state.file_seq, exam.knowledge_point, node_id, paths.outputs_root(self.root))
+        draft_path = iter_state.draft_path
+        if draft_path is None or not draft_path.exists():
+            raise RuntimeError(f"Cannot publish {node_id}: persisted draft is missing")
+        transaction_path = _output_transaction_path(self.root, node_id)
+        existing_transaction = _read_optional_json(transaction_path)
+        filename = str(existing_transaction.get("filename") or "")
+        if not filename:
+            filename = _output_filename(
+                iter_state.file_seq,
+                exam.knowledge_point,
+                node_id,
+                paths.outputs_root(self.root),
+            )
         dst = paths.outputs_root(self.root) / filename
-        formatted = self._format_node_draft(node_id, iter_state.file_seq, exam.knowledge_point, iter_state.draft_path.read_text(encoding="utf-8"))  # type: ignore[union-attr]
-        file_ops.write_text(iter_state.draft_path, formatted)  # type: ignore[arg-type]
-        file_ops.move(iter_state.draft_path, dst)  # type: ignore[arg-type]
-
-        self.retriever.index_finished(node_id, dst)
-        self._append_ledger_record(
-            {
-                "node_id": node_id,
-                "node_ids": [node_id],
-                "output_path": file_ops.relative_to(self.root, dst),
-                "title": _clean_title(exam.knowledge_point),
-                "file_seq": iter_state.file_seq,
-            }
+        formatted = self._format_node_draft(
+            node_id,
+            iter_state.file_seq,
+            exam.knowledge_point,
+            draft_path.read_text(encoding="utf-8"),
         )
+        output_sha256 = _text_sha256(formatted)
+        record = {
+            "node_id": node_id,
+            "node_ids": [node_id],
+            "output_path": file_ops.relative_to(self.root, dst),
+            "title": _clean_title(exam.knowledge_point),
+            "file_seq": iter_state.file_seq,
+            "generation_id": _current_generation_id(self.root),
+            "output_sha256": output_sha256,
+        }
+        write_json_atomic(
+            transaction_path,
+            {
+                "schema_version": 1,
+                "status": "prepared",
+                "node_id": node_id,
+                "filename": filename,
+                "output_sha256": output_sha256,
+                "ledger_record": record,
+            },
+        )
+        file_ops.write_text(draft_path, formatted)
+        file_ops.move(draft_path, dst)
+        _update_output_transaction(transaction_path, status="file_published")
+        self.retriever.index_finished(node_id, dst)
+        _update_output_transaction(transaction_path, status="indexed")
+        self._append_ledger_record(record)
+        _update_output_transaction(transaction_path, status="ledger_committed")
         state = self.state_mgr.load()
         state = self.state_mgr.add_output_completed(state, node_id, filename)
         if execution.node_run_id:
             state = self.state_mgr.add_node_run_file_completed(state, execution.node_run_id, filename)
         self.state_mgr.save(state)
+        transaction_path.unlink(missing_ok=True)
+
+    def _recover_output_transaction(self, node_id: str, run_id: str | None) -> None:
+        transaction_path = _output_transaction_path(self.root, node_id)
+        transaction = _read_optional_json(transaction_path)
+        if not transaction:
+            return
+        record = transaction.get("ledger_record")
+        filename = str(transaction.get("filename") or "")
+        if not isinstance(record, dict) or not filename:
+            transaction_path.unlink(missing_ok=True)
+            return
+        dst = paths.outputs_root(self.root) / filename
+        if not dst.exists():
+            # The transaction was prepared before the atomic draft move. The
+            # normal NodeRun can safely regenerate from its persisted state.
+            transaction_path.unlink(missing_ok=True)
+            return
+        expected_hash = str(transaction.get("output_sha256") or "")
+        if expected_hash and _file_sha256(dst) != expected_hash:
+            raise RuntimeError(f"Pending output transaction has modified content: {dst}")
+        self.retriever.index_finished(node_id, dst)
+        self._append_ledger_record(record)
+        self._complete_node(node_id, run_id)
+        transaction_path.unlink(missing_ok=True)
 
     def _complete_node_if_covered(self, node_id: str, run_id: str | None) -> None:
         if node_id in ledger_covered_node_ids(self.root):
@@ -464,6 +530,7 @@ class NodeRunner:
         body = _strip_existing_program_preamble(_strip_front_matter(content))
         body = _strip_first_h1(body)
         body = _normalize_learning_section(body)
+        body = _strip_source_trace(body)
         preamble = _node_draft_preamble(
             node_id=node_id,
             file_seq=file_seq,
@@ -472,7 +539,60 @@ class NodeRunner:
             nodes_by_id=nodes_by_id,
             ledger=self._load_ledger(),
         )
-        return f"{preamble}\n\n{body.strip()}\n"
+        source_trace = self._source_trace(node_id)
+        formatted = f"{preamble}\n\n{body.strip()}\n"
+        if source_trace:
+            formatted += f"\n{source_trace}\n"
+        return formatted
+
+    def _node_for_id(self, node_id: str) -> dict[str, Any]:
+        return next(
+            (node for node in self._load_dag().get("nodes", []) if node.get("node_id") == node_id),
+            {"node_id": node_id},
+        )
+
+    def _source_evidence_hits(
+        self,
+        node: dict[str, Any],
+        query: str,
+        collections: list[str],
+        *,
+        top_k: int,
+    ) -> list[dict]:
+        semantic = self.retriever.source_hits(
+            query,
+            collections=collections,
+            node_ids=[str(node.get("node_id") or "")],
+            top_k=max(top_k, len(node.get("member_mtu_ids") or [])),
+        )
+        evidence_fn = getattr(self.retriever, "source_evidence", None)
+        required = evidence_fn(list(node.get("member_mtu_ids") or [])) if callable(evidence_fn) else []
+        return _dedupe_hits([*required, *semantic])
+
+    def _source_trace(self, node_id: str) -> str:
+        node = self._node_for_id(node_id)
+        member_ids = list(node.get("member_mtu_ids") or [])
+        if not member_ids:
+            return ""
+        mtus = {
+            str(raw.get("mtu_id")): raw
+            for raw in read_envelope_data(paths.mtus_path(self.root)).get("mtus", [])
+            if raw.get("mtu_id")
+        }
+        lines = ["## 来源追溯", ""]
+        missing: list[str] = []
+        for mtu_id in member_ids:
+            mtu = mtus.get(mtu_id)
+            if mtu is None:
+                missing.append(mtu_id)
+                continue
+            source = str(mtu.get("source_id") or f"{mtu.get('collection', '')}/{mtu.get('source_file', '')}")
+            span = mtu.get("line_range") or []
+            range_text = f"第 {span[0]}–{span[1]} 行" if len(span) == 2 else "行范围未知"
+            lines.append(f"- `{source}`，{range_text}（`{mtu_id}`）")
+        if missing:
+            raise RuntimeError(f"Knowledge node {node_id} references missing MTUs: {missing}")
+        return "\n".join(lines)
 
     def _load_dag(self) -> dict[str, Any]:
         from tree.planner.pipeline import load_dag
@@ -483,11 +603,7 @@ class NodeRunner:
         return _load_ledger(self.root)
 
     def _append_ledger_record(self, record: dict[str, Any]) -> None:
-        ledger = self._load_ledger()
-        records = ledger.setdefault("records", [])
-        records[:] = [r for r in records if not ({record["node_id"]} & set(r.get("node_ids", [])))]
-        records.append(record)
-        write_json_atomic(paths.knowledge_ledger_path(self.root), ledger)
+        _write_ledger_record(self.root, record)
 
 
 def _load_ledger(root: Path) -> dict[str, Any]:
@@ -498,6 +614,87 @@ def _load_ledger(root: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {"records": []}
 
 
+def _write_ledger_record(root: Path, record: dict[str, Any]) -> None:
+    ledger = _load_ledger(root)
+    records = ledger.setdefault("records", [])
+    records[:] = [
+        existing
+        for existing in records
+        if not ({record["node_id"]} & set(existing.get("node_ids", [])))
+    ]
+    records.append(record)
+    write_json_atomic(paths.knowledge_ledger_path(root), ledger)
+
+
+def stage_output_reindex(root: Path, node_id: str, output_path: Path) -> dict[str, Any]:
+    """Stage an edited output so a failed RAG refresh is recoverable by NodeRunner."""
+    ledger = _load_ledger(root)
+    existing = next(
+        (
+            record
+            for record in ledger.get("records", [])
+            if node_id in set(record.get("node_ids") or [record.get("node_id")])
+        ),
+        None,
+    )
+    if not isinstance(existing, dict):
+        raise RuntimeError(f"No ledger record found for revised node {node_id}")
+    record = {
+        **existing,
+        "generation_id": _current_generation_id(root),
+        "output_sha256": _file_sha256(output_path),
+    }
+    transaction_path = _output_transaction_path(root, node_id)
+    write_json_atomic(
+        transaction_path,
+        {
+            "schema_version": 1,
+            "status": "file_published",
+            "node_id": node_id,
+            "filename": output_path.name,
+            "output_sha256": record["output_sha256"],
+            "ledger_record": record,
+        },
+    )
+    return record
+
+
+def commit_output_reindex(root: Path, node_id: str, record: dict[str, Any]) -> None:
+    _write_ledger_record(root, record)
+    _output_transaction_path(root, node_id).unlink(missing_ok=True)
+
+
+def reconcile_ledger_generation(root: Path) -> int:
+    """Archive outputs that do not belong to the committed planner generation."""
+    generation_id = _current_generation_id(root)
+    if not generation_id:
+        return 0
+    ledger = _load_ledger(root)
+    current: list[dict[str, Any]] = []
+    archived = 0
+    for record in ledger.get("records", []):
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("generation_id") or "") == generation_id:
+            current.append(record)
+            continue
+        rel = str(record.get("output_path") or "")
+        output = root / rel if rel else None
+        if output is not None and output.is_file() and output.parent == paths.outputs_root(root):
+            old_generation = _exec_slug(str(record.get("generation_id") or "legacy"))
+            archive_dir = paths.output_archive_root(root) / old_generation
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            target = archive_dir / output.name
+            if target.exists():
+                target = archive_dir / f"{output.stem}--{_node_short(str(record.get('node_id') or 'node'))}{output.suffix}"
+            output.replace(target)
+            archived += 1
+    if current != ledger.get("records", []):
+        ledger["records"] = current
+        write_json_atomic(paths.knowledge_ledger_path(root), ledger)
+    return archived
+
+
 def _existing_draft_path(path: Path | None) -> Path | None:
     if path is None:
         return None
@@ -506,7 +703,7 @@ def _existing_draft_path(path: Path | None) -> Path | None:
 
 
 def ledger_covered_node_ids(root: Path) -> set[str]:
-    return _ledger_covered_node_ids(_load_ledger(root))
+    return _ledger_covered_node_ids({"records": _valid_ledger_records(root)})
 
 
 def _ledger_covered_node_ids(ledger: dict[str, Any]) -> set[str]:
@@ -519,7 +716,69 @@ def _ledger_covered_node_ids(ledger: dict[str, Any]) -> set[str]:
 
 
 def ledger_output_ids(root: Path) -> list[str]:
-    return [r.get("output_path", "") for r in _load_ledger(root).get("records", [])]
+    return [r.get("output_path", "") for r in _valid_ledger_records(root)]
+
+
+def _valid_ledger_records(root: Path) -> list[dict[str, Any]]:
+    generation_id = _current_generation_id(root)
+    valid: list[dict[str, Any]] = []
+    for record in _load_ledger(root).get("records", []):
+        if not isinstance(record, dict):
+            continue
+        record_generation = str(record.get("generation_id") or "")
+        if record_generation and generation_id and record_generation != generation_id:
+            continue
+        rel = str(record.get("output_path") or "")
+        if not rel:
+            continue
+        output = root / rel
+        if not output.is_file():
+            continue
+        expected_hash = str(record.get("output_sha256") or "")
+        if expected_hash and _file_sha256(output) != expected_hash:
+            continue
+        valid.append(record)
+    return valid
+
+
+def _current_generation_id(root: Path) -> str:
+    try:
+        loaded = read_json(paths.material_manifest_path(root))
+    except (OSError, ValueError):
+        return ""
+    return str(loaded.get("generation_id") or "") if isinstance(loaded, dict) else ""
+
+
+def _output_transaction_path(root: Path, node_id: str) -> Path:
+    return paths.output_transactions_root(root) / f"{_exec_slug(node_id)}.json"
+
+
+def _read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        loaded = read_json(path)
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _update_output_transaction(path: Path, **changes: Any) -> None:
+    transaction = _read_optional_json(path)
+    transaction.update(changes)
+    write_json_atomic(path, transaction)
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _node_context(node_id: str, dag: dict[str, Any], nodes_by_id: dict[str, dict], snapshot: Any) -> str:
@@ -699,6 +958,29 @@ def _normalize_learning_section(text: str) -> str:
     body = _keep_learning_goal_text(match.group("body").strip())
     replacement = f"## 学习目标\n\n{body.strip()}\n\n" if body.strip() else ""
     return (replacement + text[match.end():].lstrip()).strip()
+
+
+def _strip_source_trace(text: str) -> str:
+    """Remove a prior generated provenance section before reformatting."""
+    return re.sub(
+        r"\n*##\s+来源追溯\s*\n.*\Z",
+        "",
+        text.strip(),
+        flags=re.MULTILINE | re.DOTALL,
+    ).strip()
+
+
+def _dedupe_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for hit in hits:
+        metadata = hit.get("metadata") or {}
+        key = str(metadata.get("chunk_id") or metadata.get("mtu_id") or hit.get("text") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(hit)
+    return result
 
 
 def _keep_learning_goal_text(section_body: str) -> str:

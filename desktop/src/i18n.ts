@@ -20,12 +20,15 @@ const zh: Dict = {
   "common.connecting": "连接中…",
   "common.switch": "切换",
   "common.updated": "更新于",
+  "common.ready": "已就绪",
+  "common.required": "需要准备",
 
   // nav
   "nav.grow": "生长",
   "nav.fruits": "果实",
   "nav.harvest": "收获",
   "nav.tend": "照料",
+  "nav.primary": "主要页面",
 
   // engine / phase chips
   "engine.label": "生长状态",
@@ -52,6 +55,14 @@ const zh: Dict = {
   "grow.active": "进行中",
   "grow.embed": "向量服务",
   "grow.errors": "异常",
+  "grow.needsExtension": "本地 embedding 尚未准备。你可以先浏览和配置，但生长前需要准备苗床。",
+  "grow.needsMaterials": "还没有种子。请先在照料页导入课程资料。",
+  "grow.goTend": "去照料",
+
+  "badge.done": "完成",
+  "badge.running": "进行中",
+  "badge.failed": "失败",
+  "badge.wait": "等待",
 
   // stage metaphors (keyed by backend stage key)
   "stage.ocr": "采集",
@@ -79,6 +90,10 @@ const zh: Dict = {
   "fruits.exportCancelled": "已取消导出。",
   "fruits.search": "搜索果实…",
   "fruits.count": "{n} 颗果实",
+  "fruits.goTend": "去照料并开始生长",
+  "fruits.loadFailed": "无法读取果实：{detail}",
+  "fruits.pickForExport": "选择导出",
+  "fruits.exportResult": "已导出 {exported} 个，跳过 {skipped} 个，失败 {failed} 个。",
 
   // harvest page (DAG)
   "harvest.title": "收获",
@@ -111,6 +126,9 @@ const zh: Dict = {
   "harvest.regrowQueued": "已安排重新生长,枯果会从头出卷。",
   "harvest.unreadPrereqs": "未读先修",
   "harvest.prereqReminder": "还有 {n} 个先修果实未读,建议先读它们。",
+  "harvest.aria.graph": "知识图谱",
+  "harvest.aria.filters": "知识图谱筛选",
+  "harvest.aria.inspector": "所选知识点",
 
   // ripeness labels
   "ripe.set": "小果实",
@@ -164,6 +182,10 @@ const zh: Dict = {
   "settings.save": "保存设置",
   "settings.saved": "已保存全局设置。",
   "settings.restartHint": "保存后通常在下一次休眠/生长或重启服务后生效。",
+  "settings.privacyNotice": "TREE 会把必要的材料内容发送到你配置的 LLM 与 OCR 服务。请确认所选服务符合你的资料隐私要求。",
+  "settings.showSecret": "显示",
+  "settings.hideSecret": "隐藏",
+  "settings.storageDetails": "配置存储位置",
   "settings.advanced.title": "高级运行参数",
   "settings.advanced.nodeRun": "NodeRun",
   "settings.advanced.llm": "LLM 行为",
@@ -234,6 +256,7 @@ const zh: Dict = {
   "seeds.sizeUnknown": "大小未知",
   "seeds.list": "已播种子 ({n})",
   "seeds.sowing": "播种中…",
+  "seeds.loadFailed": "无法读取种子：{detail}",
 
   // orchard (project library)
   "orchard.title": "果园",
@@ -289,6 +312,19 @@ const zh: Dict = {
   "gate.soil.checking": "正在检查苗床…",
   "gate.soil.starting": "正在启动本地 TREE 服务,重试中…",
   "gate.soil.failed": "无法连接本地 TREE 服务。",
+  "gate.soil.downloadNote": "首次准备需要联网下载 embedding 模型和运行组件，并占用额外磁盘空间；中断后可以重试。",
+  "gate.soil.requirements": "苗床准备项目",
+  "gate.soil.model": "Embedding 模型",
+  "gate.soil.runtime": "本地运行组件",
+  "gate.soil.browse": "稍后准备，先浏览",
+  "gate.soil.phase.checking": "检查中",
+  "gate.soil.phase.missing": "尚未准备",
+  "gate.soil.phase.preparing": "正在准备",
+  "gate.soil.phase.runtime": "下载运行组件",
+  "gate.soil.phase.model": "下载模型",
+  "gate.soil.phase.failed": "准备失败",
+  "harvest.loading": "正在加载知识图谱",
+  "reader.loading": "正在加载阅读器",
   "gate.token.desc": "粘贴 tre gui 链接里 ?token= 后面的 token。",
   "gate.token.connect": "连接",
 
@@ -320,11 +356,14 @@ const en: Dict = {
   "common.connecting": "connecting…",
   "common.switch": "Switch",
   "common.updated": "Updated",
+  "common.ready": "Ready",
+  "common.required": "Required",
 
   "nav.grow": "Grow",
   "nav.fruits": "Fruits",
   "nav.harvest": "Harvest",
   "nav.tend": "Tend",
+  "nav.primary": "Primary pages",
 
   "engine.label": "Growth",
   "engine.running": "Growing",
@@ -349,6 +388,14 @@ const en: Dict = {
   "grow.active": "active",
   "grow.embed": "embed",
   "grow.errors": "Errors",
+  "grow.needsExtension": "The local embedding extension is not ready. You can browse and configure TREE now, but must prepare the bed before growing.",
+  "grow.needsMaterials": "There are no seeds yet. Import course materials from Tend first.",
+  "grow.goTend": "Go to Tend",
+
+  "badge.done": "Done",
+  "badge.running": "Running",
+  "badge.failed": "Failed",
+  "badge.wait": "Waiting",
 
   "stage.ocr": "Gather",
   "stage.clean": "Sift",
@@ -374,6 +421,10 @@ const en: Dict = {
   "fruits.exportCancelled": "Export cancelled.",
   "fruits.search": "Search fruits…",
   "fruits.count": "{n} fruit",
+  "fruits.goTend": "Go to Tend and start growing",
+  "fruits.loadFailed": "Could not load fruit: {detail}",
+  "fruits.pickForExport": "Select for export",
+  "fruits.exportResult": "Exported {exported}, skipped {skipped}, failed {failed}.",
 
   "harvest.title": "Harvest",
   "harvest.subtitle": "A tree heavy with knowledge",
@@ -405,6 +456,9 @@ const en: Dict = {
   "harvest.regrowQueued": "Regrow queued — this blighted fruit restarts from a fresh exam.",
   "harvest.unreadPrereqs": "Unread prerequisites",
   "harvest.prereqReminder": "{n} prerequisite fruit still unread — read them first.",
+  "harvest.aria.graph": "Knowledge graph",
+  "harvest.aria.filters": "Knowledge graph filters",
+  "harvest.aria.inspector": "Selected knowledge node",
 
   "ripe.set": "Set",
   "ripe.unripe": "Unripe",
@@ -454,6 +508,10 @@ const en: Dict = {
   "settings.save": "Save settings",
   "settings.saved": "Saved global settings.",
   "settings.restartHint": "Changes usually take effect after the next Stop/Run or service restart.",
+  "settings.privacyNotice": "TREE sends the necessary material content to the LLM and OCR services you configure. Make sure those services meet your privacy requirements.",
+  "settings.showSecret": "Show",
+  "settings.hideSecret": "Hide",
+  "settings.storageDetails": "Configuration storage location",
   "settings.advanced.title": "Advanced runtime parameters",
   "settings.advanced.nodeRun": "NodeRun",
   "settings.advanced.llm": "LLM behavior",
@@ -523,6 +581,7 @@ const en: Dict = {
   "seeds.sizeUnknown": "Size unknown",
   "seeds.list": "Sown seeds ({n})",
   "seeds.sowing": "Sowing…",
+  "seeds.loadFailed": "Could not load seeds: {detail}",
 
   "orchard.title": "Orchard",
   "orchard.subtitle": "Each project is a knowledge tree; seeds, fruit, and harvest state stay separate.",
@@ -576,6 +635,19 @@ const en: Dict = {
   "gate.soil.checking": "Checking the seedbed…",
   "gate.soil.starting": "Starting local TREE service. Retrying…",
   "gate.soil.failed": "Could not connect to the local TREE service.",
+  "gate.soil.downloadNote": "First-time setup downloads the embedding model and runtime components, requires network access, and uses additional disk space. You can retry after an interruption.",
+  "gate.soil.requirements": "Seedbed requirements",
+  "gate.soil.model": "Embedding model",
+  "gate.soil.runtime": "Local runtime",
+  "gate.soil.browse": "Browse now, prepare later",
+  "gate.soil.phase.checking": "Checking",
+  "gate.soil.phase.missing": "Not prepared",
+  "gate.soil.phase.preparing": "Preparing",
+  "gate.soil.phase.runtime": "Downloading runtime",
+  "gate.soil.phase.model": "Downloading model",
+  "gate.soil.phase.failed": "Setup failed",
+  "harvest.loading": "Loading knowledge graph",
+  "reader.loading": "Loading reader",
   "gate.token.desc": "Paste the token after ?token= from the tre gui URL.",
   "gate.token.connect": "Connect",
 

@@ -9,7 +9,10 @@ Configuration via environment variables (or .env):
   - PADDLEOCR_MODEL:     Model name (default: PaddleOCR-VL-1.6)
 """
 
+from __future__ import annotations
+
 import json
+import hashlib
 import logging
 import os
 import re
@@ -18,18 +21,20 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import httpx
 
 logger = logging.getLogger(__name__)
 _progress_callback: Callable[[dict[str, Any]], None] | None = None
+_job_store_root: Path | None = None
 
 _DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 _DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 _POLL_INTERVAL = 5
 _POLL_TIMEOUT = 600
 _OCR_CONCURRENCY = 5
+_OCR_UPLOAD_INTERVAL_SEC = 5.0
 _PDF_MAX_PAGES_PER_JOB = 99
 _HTTP_RETRY_ATTEMPTS = 5
 _HTTP_RETRY_INITIAL_DELAY = 2.0
@@ -60,10 +65,29 @@ _IMAGE_LIST_ITEM_RE = re.compile(
 class OCREngine:
     """Async-job client for Baidu AI Studio PaddleOCR-VL."""
 
-    _instance = None
-    _ocr_semaphore = threading.BoundedSemaphore(_OCR_CONCURRENCY)
+    _instance: ClassVar[OCREngine | None] = None
+    _ocr_semaphore: ClassVar[threading.BoundedSemaphore] = threading.BoundedSemaphore(
+        _OCR_CONCURRENCY
+    )
+    _upload_lock: ClassVar[threading.Lock] = threading.Lock()
+    _last_upload_at: ClassVar[float] = 0.0
+    _job_url: str
+    _token: str
+    _model: str
+    _poll_interval: float
+    _poll_timeout: float
+    _pdf_max_pages_per_job: int
+    _ocr_concurrency: int
+    _upload_interval: float
+    _options: dict[str, Any]
+    _client: httpx.Client
 
-    def __new__(cls, job_url: str | None = None, token: str | None = None, **kwargs):
+    def __new__(
+        cls,
+        job_url: str | None = None,
+        token: str | None = None,
+        **kwargs: Any,
+    ) -> OCREngine:
         if cls._instance is None:
             instance = super().__new__(cls)
             instance._job_url = (job_url or os.environ.get("PADDLEOCR_API_URL", _DEFAULT_JOB_URL)).rstrip("/")
@@ -77,6 +101,18 @@ class OCREngine:
             )
             instance._ocr_concurrency = max(
                 1, kwargs.pop("ocr_concurrency", int(os.environ.get("SOURCE_OCR_CONCURRENCY", _OCR_CONCURRENCY)))
+            )
+            instance._upload_interval = max(
+                0.0,
+                float(
+                    kwargs.pop(
+                        "upload_interval_sec",
+                        os.environ.get(
+                            "SOURCE_OCR_UPLOAD_INTERVAL_SEC",
+                            str(_OCR_UPLOAD_INTERVAL_SEC),
+                        ),
+                    )
+                ),
             )
             instance._options = {**_DEFAULT_OPTIONS, **kwargs.pop("options", {})}
             instance._client = httpx.Client(timeout=kwargs.pop("timeout", 30.0))
@@ -92,9 +128,10 @@ class OCREngine:
         elif "ocr_concurrency" in kwargs:
             cls._instance._ocr_concurrency = max(1, kwargs["ocr_concurrency"])
             cls._ocr_semaphore = threading.BoundedSemaphore(cls._instance._ocr_concurrency)
+        assert cls._instance is not None
         return cls._instance
 
-    def _headers(self, content_type: str | None = None) -> dict:
+    def _headers(self, content_type: str | None = None) -> dict[str, str]:
         h = {"Authorization": f"bearer {self._token}"}
         if content_type:
             h["Content-Type"] = content_type
@@ -126,6 +163,7 @@ class OCREngine:
     def _ocr_local_pdf(self, pdf_path: Path) -> str:
         """OCR a local PDF, splitting files over the API page limit."""
         page_count = self._pdf_page_count(pdf_path)
+        source_sha256 = _file_sha256(pdf_path)
         max_pages = self._pdf_max_pages_per_job
         if page_count <= max_pages:
             return self._ocr_single_local(
@@ -136,6 +174,7 @@ class OCREngine:
                     "chunk_index": 1,
                     "chunks_total": 1,
                     "file_pages_total": page_count,
+                    "source_sha256": source_sha256,
                 },
             )
 
@@ -161,6 +200,7 @@ class OCREngine:
                             "file_pages_total": page_count,
                             "chunk_pages_total": chunk_pages,
                             "pdf_max_pages_per_job": max_pages,
+                            "source_sha256": source_sha256,
                         },
                     )
                 )
@@ -221,7 +261,10 @@ class OCREngine:
                     wait_for_success_before_retry = False
                 submit_available(executor)
 
-        return [text for text in results if text and text.strip()]
+        missing = [index + 1 for index, text in enumerate(results) if not text or not text.strip()]
+        if missing:
+            raise RuntimeError(f"OCR returned empty or missing PDF chunks: {missing}")
+        return [str(text) for text in results]
 
     def _ocr_single_local(self, path: Path, context: dict[str, Any] | None = None) -> str:
         """OCR one local file without additional splitting."""
@@ -237,11 +280,102 @@ class OCREngine:
             "chunks_total": 1,
             **(context or {}),
         }
-        job_id = self._submit_local(str(path))
-        _emit_progress({"state": "submitted", "job_id": job_id, **context})
-        logger.info("Job submitted: %s", job_id)
-        jsonl_url = self._poll(job_id, context)
-        return self._download_result(jsonl_url, context)
+        context.setdefault("source_sha256", _file_sha256(path))
+        checkpoint = self._load_job_checkpoint(context)
+        result_path = self._job_result_path(context)
+        if checkpoint.get("status") == "downloaded" and result_path and result_path.exists():
+            text = result_path.read_text(encoding="utf-8")
+            if text.strip() and _text_sha256(text) == checkpoint.get("result_sha256"):
+                _emit_progress({"state": "reused_result", **context})
+                return text
+
+        job_id = str(checkpoint.get("job_id") or "")
+        jsonl_url = str(checkpoint.get("result_url") or "")
+        if not job_id or checkpoint.get("status") == "failed":
+            job_id = self._submit_local(str(path))
+            self._save_job_checkpoint(context, status="submitted", job_id=job_id)
+            _emit_progress({"state": "submitted", "job_id": job_id, **context})
+            logger.info("Job submitted: %s", job_id)
+        if not jsonl_url:
+            try:
+                jsonl_url = self._poll(job_id, context)
+            except Exception as exc:
+                # A remote terminal failure is safe to resubmit next run; a
+                # timeout/network interruption retains the job id for polling.
+                self._save_job_checkpoint(
+                    context,
+                    status="failed" if isinstance(exc, RuntimeError) else "submitted",
+                    job_id=job_id,
+                )
+                raise
+            self._save_job_checkpoint(
+                context,
+                status="result_ready",
+                job_id=job_id,
+                result_url=jsonl_url,
+            )
+        text = self._download_result(jsonl_url, context)
+        if result_path is not None:
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(text, encoding="utf-8")
+        self._save_job_checkpoint(
+            context,
+            status="downloaded",
+            job_id=job_id,
+            result_url=jsonl_url,
+            result_sha256=_text_sha256(text),
+        )
+        return text
+
+    def _job_checkpoint_path(self, context: dict[str, Any]) -> Path | None:
+        if _job_store_root is None:
+            return None
+        source_sha256 = str(context.get("source_sha256") or "").removeprefix("sha256:")
+        if not source_sha256:
+            return None
+        options_hash = hashlib.sha256(
+            json.dumps(
+                {"endpoint": self._job_url, "model": self._model, "options": self._options},
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+        chunk_index = int(context.get("chunk_index") or 1)
+        return _job_store_root / source_sha256 / f"chunk-{chunk_index:04d}-{options_hash}.json"
+
+    def _job_result_path(self, context: dict[str, Any]) -> Path | None:
+        checkpoint = self._job_checkpoint_path(context)
+        return checkpoint.with_suffix(".md") if checkpoint is not None else None
+
+    def _load_job_checkpoint(self, context: dict[str, Any]) -> dict[str, Any]:
+        path = self._job_checkpoint_path(context)
+        if path is None or not path.exists():
+            return {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _save_job_checkpoint(self, context: dict[str, Any], **changes: Any) -> None:
+        path = self._job_checkpoint_path(context)
+        if path is None:
+            return
+        from tree.planner.store import write_json_atomic
+
+        data = self._load_job_checkpoint(context)
+        data.update(
+            {
+                "schema_version": 1,
+                "source_sha256": context.get("source_sha256", ""),
+                "chunk_index": int(context.get("chunk_index") or 1),
+                "chunks_total": int(context.get("chunks_total") or 1),
+                "chunk_pages_total": context.get("chunk_pages_total"),
+                "model": self._model,
+                **changes,
+            }
+        )
+        write_json_atomic(path, data)
 
     @staticmethod
     def _pdf_page_count(pdf_path: Path) -> int:
@@ -302,8 +436,18 @@ class OCREngine:
                 files = {"file": (Path(file_path).name, f)}
                 return self._client.post(self._job_url, headers=self._headers(), data=data, files=files)
 
+        self._wait_for_upload_slot()
         resp = self._request_with_retries("submit local OCR job", post_file, check_api_code=True)
         return _api_data(resp)["jobId"]
+
+    def _wait_for_upload_slot(self) -> None:
+        if self._upload_interval <= 0:
+            return
+        with self._upload_lock:
+            remaining = self._upload_interval - (time.monotonic() - self._last_upload_at)
+            if remaining > 0:
+                time.sleep(remaining)
+            type(self)._last_upload_at = time.monotonic()
 
     def _poll(self, job_id: str, context: dict[str, Any] | None = None) -> str:
         """Poll job status until done, return JSONL result URL."""
@@ -394,6 +538,18 @@ class OCREngine:
                 if text:
                     parts.append(text)
         text = clean_ocr_markdown_text("\n\n".join(parts))
+        expected_pages = _int_or_none(
+            context.get("chunk_pages_total") or context.get("file_pages_total")
+        )
+        if expected_pages is not None and page_count != expected_pages:
+            raise RuntimeError(
+                f"OCR result is incomplete for {context.get('current_chunk', 'document')}: "
+                f"expected {expected_pages} pages, received {page_count}"
+            )
+        if not text.strip():
+            raise RuntimeError(
+                f"OCR result contained no usable text for {context.get('current_chunk', 'document')}"
+            )
         _emit_progress(
             {
                 **context,
@@ -405,7 +561,7 @@ class OCREngine:
         )
         return text
 
-    def close(self):
+    def close(self) -> None:
         client = getattr(self, "_client", None)
         if client is not None:
             client.close()
@@ -457,14 +613,18 @@ class OCREngine:
         assert last_error is not None
         raise last_error
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
             self.close()
         except Exception:
             pass
 
 
-def get_engine(job_url: str | None = None, token: str | None = None, **kwargs) -> OCREngine:
+def get_engine(
+    job_url: str | None = None,
+    token: str | None = None,
+    **kwargs: Any,
+) -> OCREngine:
     """Get or create the singleton OCR engine."""
     return OCREngine(job_url=job_url, token=token, **kwargs)
 
@@ -472,6 +632,14 @@ def get_engine(job_url: str | None = None, token: str | None = None, **kwargs) -
 def set_progress_callback(callback: Callable[[dict[str, Any]], None] | None) -> None:
     global _progress_callback
     _progress_callback = callback
+
+
+def set_job_store_root(root: Path | None) -> None:
+    """Configure durable OCR job checkpoints for the active workspace."""
+    global _job_store_root
+    _job_store_root = Path(root) if root is not None else None
+    if _job_store_root is not None:
+        _job_store_root.mkdir(parents=True, exist_ok=True)
 
 
 def clean_ocr_markdown_text(text: str) -> str:
@@ -607,6 +775,18 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _progress_pages(

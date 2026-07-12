@@ -6,11 +6,18 @@ import { Button } from "./ui/Button";
 import { Card, SectionHeader } from "./ui/Card";
 import { Message } from "./ui/Message";
 
-export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => void }) {
+export function Outputs({
+  onReadOutput,
+  onPrepare,
+}: {
+  onReadOutput?: (name: string) => void;
+  onPrepare?: () => void;
+}) {
   const t = useT();
   const [files, setFiles] = useState<string[]>([]);
   const [selectedForExport, setSelectedForExport] = useState<string[]>([]);
   const [query, setQuery] = useState<string>("");
+  const [loadError, setLoadError] = useState<string>("");
   const { exporting, message: exportMsg, ok: exportOk, exportFiles: runExport, reportEmpty } = useExport();
 
   useEffect(() => {
@@ -20,9 +27,12 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
         .then((list) => {
           if (!active) return;
           setFiles(list);
+          setLoadError("");
           setSelectedForExport((current) => current.filter((name) => list.includes(name)));
         })
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          if (active) setLoadError(err instanceof Error ? err.message : String(err));
+        });
     };
     load();
     const timer = window.setInterval(load, 5000);
@@ -90,8 +100,17 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
         />
       )}
       {exportMsg && <Message kind={exportOk ? "hint" : "error"}>{exportMsg}</Message>}
-      {files.length === 0 ? (
-        <p className="muted">{t("fruits.empty")}</p>
+      {loadError ? (
+        <Message kind="error">{t("fruits.loadFailed", { detail: loadError })}</Message>
+      ) : files.length === 0 ? (
+        <div className="empty-action">
+          <p className="muted">{t("fruits.empty")}</p>
+          {onPrepare && (
+            <Button variant="ghost" onClick={onPrepare}>
+              {t("fruits.goTend")}
+            </Button>
+          )}
+        </div>
       ) : (
         <div className="fruit-grid">
           {filtered.map((name) => {
@@ -115,7 +134,7 @@ export function Outputs({ onReadOutput }: { onReadOutput?: (name: string) => voi
                   <span className="fruit-seq">{seq || "·"}</span>
                   <span className="fruit-title">{title}</span>
                 </div>
-                <label className="fruit-pick" title="export">
+                <label className="fruit-pick" title={t("fruits.pickForExport")}>
                   <input
                     type="checkbox"
                     checked={picked}

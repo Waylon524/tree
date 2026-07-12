@@ -101,10 +101,43 @@ def test_index_file_adds_document_context_to_embedding_errors(tmp_path):
         rag.close()
 
 
+def test_partial_embedding_response_does_not_delete_previous_document(tmp_path):
+    class PartialOnSecondCall:
+        model = "stable-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def embed(self, texts):
+            self.calls += 1
+            if self.calls == 1:
+                return [[1.0, 0.0] for _ in texts]
+            return [[0.0, 1.0]]
+
+    embedder = PartialOnSecondCall()
+    rag = RAGClient(store_path=tmp_path / "rag", dimensions=2, embedder=embedder)
+    chunks = [
+        {"chunk_id": "a", "chunk_index": 0, "text": "left"},
+        {"chunk_id": "b", "chunk_index": 1, "text": "right"},
+    ]
+    try:
+        rag.index_file("1", "x.md", "old", doc_id="doc", chunks=chunks)
+
+        with pytest.raises(RuntimeError, match="response count mismatch"):
+            rag.index_file("1", "x.md", "new", doc_id="doc", chunks=chunks)
+
+        hits = rag.scroll_chunks(filters={"doc_id": "doc"})
+        assert {hit["text"] for hit in hits} == {"left", "right"}
+        assert rag.document_indexed("doc") is True
+    finally:
+        rag.close()
+
+
 def test_embedding_client_includes_http_error_body(monkeypatch):
     import urllib.error
 
-    def fake_urlopen(req):
+    def fake_urlopen(req, timeout=None):
+        assert timeout == 60
         raise urllib.error.HTTPError(
             req.full_url,
             400,

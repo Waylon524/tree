@@ -6,21 +6,31 @@ import { formatBytes, formatDateTime } from "../lib/format";
 import { FruitTreeMark } from "./illustrations";
 import { Button } from "./ui/Button";
 import { Card, SectionHeader } from "./ui/Card";
+import { Message } from "./ui/Message";
 
 export function Materials() {
   const t = useT();
   const [items, setItems] = useState<ImportedFile[]>([]);
   const [msg, setMsg] = useState<string>("");
+  const [error, setError] = useState<string>("");
   const [sowing, setSowing] = useState<boolean>(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = (): void => {
     fetchImportedFiles()
-      .then(setItems)
+      .then((files) => {
+        setItems(files);
+        setError("");
+      })
       .catch(() => {
         listMaterials()
-          .then((names) => setItems(names.map(importedFileFromLegacyName)))
-          .catch(() => undefined);
+          .then((names) => {
+            setItems(names.map(importedFileFromLegacyName));
+            setError("");
+          })
+          .catch((err: unknown) =>
+            setError(t("seeds.loadFailed", { detail: err instanceof Error ? err.message : String(err) })),
+          );
       });
   };
 
@@ -35,13 +45,14 @@ export function Materials() {
     if (!files || files.length === 0) return;
     setSowing(true);
     setMsg("");
+    setError("");
     try {
       const res = await uploadMaterials("default", files);
       const skipped = res.skipped.length ? t("seeds.skipped", { n: res.skipped.length }) : "";
       setMsg(t("seeds.imported", { n: res.saved.length, skipped }));
       refresh();
     } catch (err) {
-      setMsg(String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSowing(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -61,12 +72,15 @@ export function Materials() {
           className="visually-hidden"
           type="file"
           multiple
+          aria-hidden="true"
+          tabIndex={-1}
           onChange={(event) => void sow(event.target.files)}
         />
         <Button variant="ghost" disabled={sowing} onClick={() => fileRef.current?.click()}>
           {sowing ? t("seeds.sowing") : t("seeds.choose")}
         </Button>
-        {msg && <span className="hint">{msg}</span>}
+        {msg && <Message kind="success" inline>{msg}</Message>}
+        {error && <Message kind="error" inline>{error}</Message>}
       </div>
       {items.length === 0 ? (
         <p className="muted">{t("seeds.empty")}</p>

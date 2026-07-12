@@ -290,19 +290,17 @@ def create_app(root: Path, *, token: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="DAG not generated yet.")
         return Response(svg_path.read_text(encoding="utf-8"), media_type="image/svg+xml")
 
-    @app.post("/api/open-dag", response_class=HTMLResponse)
-    def api_open_dag(request: Request) -> HTMLResponse:
+    @app.post("/api/open-dag")
+    def api_open_dag(request: Request) -> dict[str, str]:
         _require(request)
         svg_path = _ensure_dag_svg(root)
         if svg_path is None:
-            return HTMLResponse(
-                '<span class="muted">DAG not generated yet — run the pipeline first.</span>'
-            )
+            return {"message": "DAG not generated yet — run the pipeline first."}
         try:
             _open_in_default_app(svg_path)
         except Exception as exc:  # noqa: BLE001
-            return HTMLResponse(f'<span class="muted">Could not open: {exc}</span>')
-        return HTMLResponse(f'<span class="ok">Opened {svg_path.name} in your default viewer.</span>')
+            return {"message": f"Could not open the DAG in the default viewer: {exc}"}
+        return {"message": f"Opened {svg_path.name} in your default viewer."}
 
     @app.get("/partials/outputs", response_class=HTMLResponse)
     def outputs_partial(request: Request) -> HTMLResponse:

@@ -420,8 +420,9 @@ fn start_project_sidecar(
     state: &AppState,
     project: &ProjectSummary,
 ) -> Result<ApiConfig, String> {
-    let binary = sidecar_binary(app)
-        .ok_or_else(|| "TREE sidecar binary was not found. Rebuild the desktop package.".to_string())?;
+    let binary = sidecar_binary(app).ok_or_else(|| {
+        "TREE sidecar binary was not found. Rebuild the desktop package.".to_string()
+    })?;
     let port = free_port();
     let token = uuid::Uuid::new_v4().as_simple().to_string();
     let root = PathBuf::from(&project.path);
@@ -447,11 +448,7 @@ fn start_project_sidecar(
 }
 
 fn stop_managed_sidecar(state: &AppState, notify: bool) {
-    let child = state
-        .sidecar
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.take());
+    let child = state.sidecar.lock().ok().and_then(|mut guard| guard.take());
     let api = if child.is_some() {
         state.api.lock().ok().and_then(|guard| guard.clone())
     } else {
@@ -515,12 +512,18 @@ fn remove_project_from_index_and_disk(
     state: &AppState,
     project: &ProjectSummary,
 ) -> Result<(), String> {
-    let Some(position) = index.projects.iter().position(|candidate| candidate.id == project.id) else {
+    let Some(position) = index
+        .projects
+        .iter()
+        .position(|candidate| candidate.id == project.id)
+    else {
         return Err("Project not found".to_string());
     };
     let project_path = PathBuf::from(&project.path);
     if !is_managed_project_path(&project_path) {
-        return Err("Only managed TREE projects can be deleted from the project library".to_string());
+        return Err(
+            "Only managed TREE projects can be deleted from the project library".to_string(),
+        );
     }
 
     let was_current = index.current_project_id.as_deref() == Some(project.id.as_str());
@@ -549,7 +552,10 @@ fn ensure_project_switching_allowed() -> Result<(), String> {
 }
 
 fn external_api_config() -> Option<ApiConfig> {
-    match (std::env::var("TREE_API_BASE"), std::env::var("TREE_API_TOKEN")) {
+    match (
+        std::env::var("TREE_API_BASE"),
+        std::env::var("TREE_API_TOKEN"),
+    ) {
         (Ok(base), Ok(token)) => Some(ApiConfig { base, token }),
         _ => None,
     }
@@ -631,8 +637,10 @@ fn load_index() -> Result<ProjectIndex, String> {
     if !path.exists() {
         return Ok(ProjectIndex::default());
     }
-    let bytes = fs::read(&path).map_err(|error| format!("Failed to read project index: {error}"))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("Failed to parse project index: {error}"))
+    let bytes =
+        fs::read(&path).map_err(|error| format!("Failed to read project index: {error}"))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Failed to parse project index: {error}"))
 }
 
 fn save_index(index: &ProjectIndex) -> Result<(), String> {
@@ -657,10 +665,7 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
         .parent()
         .ok_or_else(|| format!("Invalid path: {}", path.display()))?;
     fs::create_dir_all(parent).map_err(|error| format!("Failed to create directory: {error}"))?;
-    let tmp = parent.join(format!(
-        ".{}.tmp",
-        uuid::Uuid::new_v4().as_simple()
-    ));
+    let tmp = parent.join(format!(".{}.tmp", uuid::Uuid::new_v4().as_simple()));
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("Failed to serialize JSON: {error}"))?;
     fs::write(&tmp, bytes).map_err(|error| format!("Failed to write JSON: {error}"))?;
@@ -776,10 +781,7 @@ fn dir_size(path: impl AsRef<Path>) -> u64 {
     let Ok(entries) = fs::read_dir(path) else {
         return 0;
     };
-    entries
-        .flatten()
-        .map(|entry| dir_size(entry.path()))
-        .sum()
+    entries.flatten().map(|entry| dir_size(entry.path())).sum()
 }
 
 fn is_managed_project_path(path: &Path) -> bool {
@@ -849,7 +851,9 @@ fn validate_workspace_root(source: &Path) -> Result<(), String> {
         || source.join("outputs").is_dir()
         || source.join(".tree").join("runtime").is_dir();
     if !looks_like_workspace {
-        return Err("Choose a TREE workspace containing materials, outputs, or .tree/runtime".to_string());
+        return Err(
+            "Choose a TREE workspace containing materials, outputs, or .tree/runtime".to_string(),
+        );
     }
     Ok(())
 }
@@ -863,7 +867,9 @@ fn copy_workspace_roots(source: &Path, target: &Path) -> Result<(), String> {
             continue;
         }
         if !source_child.is_dir() {
-            return Err(format!("Cannot import workspace because {name} is not a directory"));
+            return Err(format!(
+                "Cannot import workspace because {name} is not a directory"
+            ));
         }
         copy_dir_contents(&source_child, &target.join(name))?;
     }
@@ -1132,12 +1138,17 @@ fn rewrite_runtime_json_paths(root: &Path, old_root: &str, new_root: &str) -> Re
     rewrite_runtime_json_paths_inner(&runtime, old_root, new_root)
 }
 
-fn rewrite_runtime_json_paths_inner(path: &Path, old_root: &str, new_root: &str) -> Result<(), String> {
+fn rewrite_runtime_json_paths_inner(
+    path: &Path,
+    old_root: &str,
+    new_root: &str,
+) -> Result<(), String> {
     if path.is_dir() {
         for entry in fs::read_dir(path)
             .map_err(|error| format!("Failed to read runtime JSON directory: {error}"))?
         {
-            let entry = entry.map_err(|error| format!("Failed to read runtime JSON entry: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Failed to read runtime JSON entry: {error}"))?;
             rewrite_runtime_json_paths_inner(&entry.path(), old_root, new_root)?;
         }
         return Ok(());
@@ -1188,8 +1199,8 @@ fn rewrite_json_value_paths(value: &mut serde_json::Value, old_root: &str, new_r
 fn copy_dir_contents(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target)
         .map_err(|error| format!("Failed to create import directory: {error}"))?;
-    let entries = fs::read_dir(source)
-        .map_err(|error| format!("Failed to read import source: {error}"))?;
+    let entries =
+        fs::read_dir(source).map_err(|error| format!("Failed to read import source: {error}"))?;
     for entry in entries {
         let entry = entry.map_err(|error| format!("Failed to read import entry: {error}"))?;
         let source_path = entry.path();
@@ -1223,8 +1234,8 @@ struct StoredZipEntry {
 
 impl StoredZipWriter {
     fn create(path: &Path) -> Result<Self, String> {
-        let file = File::create(path)
-            .map_err(|error| format!("Failed to create archive: {error}"))?;
+        let file =
+            File::create(path).map_err(|error| format!("Failed to create archive: {error}"))?;
         Ok(Self {
             file,
             entries: Vec::new(),
@@ -1241,8 +1252,8 @@ impl StoredZipWriter {
         let name_bytes = name.as_bytes();
         let name_len = u16::try_from(name_bytes.len())
             .map_err(|_| format!("Archive path too long: {name}"))?;
-        let size = u32::try_from(data.len())
-            .map_err(|_| format!("Archive entry too large: {name}"))?;
+        let size =
+            u32::try_from(data.len()).map_err(|_| format!("Archive entry too large: {name}"))?;
         let offset = u32::try_from(zip_position(&mut self.file)?)
             .map_err(|_| "Archive exceeds ZIP32 size limit".to_string())?;
         let crc32 = crc32fast::hash(data);
@@ -1444,12 +1455,7 @@ fn sidecar_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
     dev.is_file().then_some(dev)
 }
 
-fn spawn_sidecar(
-    binary: PathBuf,
-    root: &Path,
-    port: u16,
-    token: &str,
-) -> Result<Child, String> {
+fn spawn_sidecar(binary: PathBuf, root: &Path, port: u16, token: &str) -> Result<Child, String> {
     let root_arg = path_to_string(root);
     Command::new(binary)
         .args([
@@ -1537,7 +1543,10 @@ mod tests {
 
     #[test]
     fn project_name_validation_trims_and_rejects_empty() {
-        assert_eq!(validate_project_name("  Final Review  ").unwrap(), "Final Review");
+        assert_eq!(
+            validate_project_name("  Final Review  ").unwrap(),
+            "Final Review"
+        );
         assert!(validate_project_name("   ").is_err());
     }
 
@@ -1595,7 +1604,11 @@ mod tests {
             storage_bytes: 0,
         });
 
-        assert!(!has_project_name_except(&index, "biology notes", "proj_one"));
+        assert!(!has_project_name_except(
+            &index,
+            "biology notes",
+            "proj_one"
+        ));
         assert!(has_project_name_except(&index, "biology notes", "proj_two"));
     }
 
@@ -1626,9 +1639,17 @@ mod tests {
         fs::create_dir_all(source.join("materials").join("default")).unwrap();
         fs::create_dir_all(source.join("outputs")).unwrap();
         fs::create_dir_all(source.join(".tree").join("runtime")).unwrap();
-        fs::write(source.join("materials").join("default").join("lecture.md"), "source").unwrap();
+        fs::write(
+            source.join("materials").join("default").join("lecture.md"),
+            "source",
+        )
+        .unwrap();
         fs::write(source.join("outputs").join("001.md"), "output").unwrap();
-        fs::write(source.join(".tree").join("runtime").join("state.json"), "{}").unwrap();
+        fs::write(
+            source.join(".tree").join("runtime").join("state.json"),
+            "{}",
+        )
+        .unwrap();
 
         copy_workspace_roots(&source, &target).unwrap();
 
@@ -1637,10 +1658,12 @@ mod tests {
                 .unwrap(),
             "source"
         );
-        assert_eq!(fs::read_to_string(target.join("outputs").join("001.md")).unwrap(), "output");
         assert_eq!(
-            fs::read_to_string(target.join(".tree").join("runtime").join("state.json"))
-                .unwrap(),
+            fs::read_to_string(target.join("outputs").join("001.md")).unwrap(),
+            "output"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join(".tree").join("runtime").join("state.json")).unwrap(),
             "{}"
         );
 
@@ -1656,14 +1679,39 @@ mod tests {
         fs::create_dir_all(root.join(".tree").join("prompts")).unwrap();
         fs::create_dir_all(root.join(".tree").join("runtime").join("services")).unwrap();
         fs::write(root.join("project.json"), "{}").unwrap();
-        fs::write(root.join("materials").join("default").join("lecture.md"), "seed").unwrap();
+        fs::write(
+            root.join("materials").join("default").join("lecture.md"),
+            "seed",
+        )
+        .unwrap();
         fs::write(root.join("outputs").join("001.Root.md"), "fruit").unwrap();
         fs::write(root.join(".tree").join(".gitignore"), "*\n").unwrap();
-        fs::write(root.join(".tree").join("prompts").join("overrides.json"), "{}").unwrap();
-        fs::write(root.join(".tree").join("runtime").join("learning-state.json"), "{}").unwrap();
+        fs::write(
+            root.join(".tree").join("prompts").join("overrides.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".tree")
+                .join("runtime")
+                .join("learning-state.json"),
+            "{}",
+        )
+        .unwrap();
         fs::write(root.join(".env"), "LLM_API_KEY=secret").unwrap();
-        fs::write(root.join(".tree").join("config.env"), "PADDLEOCR_API_TOKEN=secret").unwrap();
-        fs::write(root.join(".tree").join("runtime").join("services").join("engine.log"), "log").unwrap();
+        fs::write(
+            root.join(".tree").join("config.env"),
+            "PADDLEOCR_API_TOKEN=secret",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".tree")
+                .join("runtime")
+                .join("services")
+                .join("engine.log"),
+            "log",
+        )
+        .unwrap();
         let project = ProjectSummary {
             id: "proj_archive".to_string(),
             name: "Archive Tree".to_string(),
@@ -1711,7 +1759,10 @@ mod tests {
         fs::write(source.join("materials").join("lecture.md"), "seed").unwrap();
         fs::write(source.join("outputs").join("001.Root.md"), "fruit").unwrap();
         fs::write(
-            source.join(".tree").join("runtime").join("pipeline-state.json"),
+            source
+                .join(".tree")
+                .join("runtime")
+                .join("pipeline-state.json"),
             serde_json::json!({
                 "node_runs": [{"draft_path": source.join(".tree/runtime/drafts/n1.md")}],
                 "other": [source.join("outputs/001.Root.md")]
@@ -1743,7 +1794,10 @@ mod tests {
         assert!(restored_root.join("materials").join("lecture.md").is_file());
         assert!(restored_root.join("outputs").join("001.Root.md").is_file());
         let state_text = fs::read_to_string(
-            restored_root.join(".tree").join("runtime").join("pipeline-state.json"),
+            restored_root
+                .join(".tree")
+                .join("runtime")
+                .join("pipeline-state.json"),
         )
         .unwrap();
         assert!(state_text.contains(&path_to_string(&restored_root)));
@@ -1774,10 +1828,8 @@ mod tests {
     }
 
     fn temp_test_dir(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "tree-{label}-{}",
-            uuid::Uuid::new_v4().as_simple()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("tree-{label}-{}", uuid::Uuid::new_v4().as_simple()));
         fs::create_dir_all(&path).unwrap();
         path
     }

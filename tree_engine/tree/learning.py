@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from tree.agents.writer import WriterAgent
 from tree.config import DEFAULT_SOURCE_MTU_CHUNK_TOKENS, Settings
+from tree.engine.node_run import commit_output_reindex, stage_output_reindex
 from tree.io import paths
 from tree.model.client import LLMClient
 from tree.planner.pipeline import load_dag
@@ -195,10 +196,14 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
 
         backup = _backup_output(root, output_path)
         output_path.write_text(revised + "\n", encoding="utf-8")
+        ledger_record = stage_output_reindex(root, node_id, output_path)
+        indexing_error: Exception | None = None
         try:
             indexer.index_finished_file(root, node_id, output_path)
-        except Exception:
-            pass  # embedding may be down; the revised output is already saved
+        except Exception as exc:  # noqa: BLE001
+            indexing_error = exc
+        else:
+            commit_output_reindex(root, node_id, ledger_record)
 
         state = load_learning_state(root)
         node_state = state.nodes.setdefault(node_id, LearningNodeState())
@@ -206,14 +211,25 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
         node_state.read_at = None
         node_state.affected_by_feedback = False
         node_state.last_revised_at = _utc_now()
-        node_state.last_feedback_error = None
+        node_state.last_feedback_error = (
+            f"Index pending: {type(indexing_error).__name__}: {indexing_error}"
+            if indexing_error is not None
+            else None
+        )
         _mark_descendants_affected(state, children, node_id)
-        _finish_feedback_record(node_state, record.submitted_at, status="complete", backup_path=backup)
+        feedback_status = "index_pending" if indexing_error is not None else "complete"
+        _finish_feedback_record(
+            node_state,
+            record.submitted_at,
+            status=feedback_status,
+            backup_path=backup,
+            error=node_state.last_feedback_error,
+        )
         save_learning_state(root, state)
         return {
             "node_id": node_id,
             "output": output_path.name,
-            "status": "complete",
+            "status": feedback_status,
             "backup_path": backup,
             "revised_at": node_state.last_revised_at,
         }
@@ -330,7 +346,7 @@ def _finish_feedback_record(
     for item in reversed(node_state.feedback_history):
         if item.submitted_at == submitted_at:
             item.status = status
-            item.revised_at = _utc_now() if status == "complete" else None
+            item.revised_at = _utc_now() if status in {"complete", "index_pending"} else None
             item.backup_path = backup_path
             item.error = error
             return

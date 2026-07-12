@@ -48,3 +48,30 @@ def test_scan_default_collection_for_top_level_file(tmp_path):
 def test_scan_ignores_unsupported_files(tmp_path):
     _write(tmp_path, "课件/notes.xyz", "x")
     assert scan_materials(tmp_path)["materials"] == []
+
+
+def test_scan_detects_same_size_content_change_even_when_mtime_is_restored(tmp_path):
+    path = _write(tmp_path, "课件/ch1.md", "AAAA")
+    first = scan_materials(tmp_path)
+    original_mtime = path.stat().st_mtime
+
+    path.write_text("BBBB", encoding="utf-8")
+    import os
+
+    os.utime(path, (original_mtime, original_mtime))
+    second = scan_materials(tmp_path, previous=first)
+
+    assert second["materials"][0]["status"] == "changed"
+    assert second["materials"][0]["fingerprint"].startswith("sha256:")
+
+
+def test_scan_uses_full_relative_path_as_source_identity(tmp_path):
+    _write(tmp_path, "课件/week1/lecture.md", "one")
+    _write(tmp_path, "课件/week2/lecture.md", "two")
+
+    materials = scan_materials(tmp_path)["materials"]
+
+    assert {item["source_id"] for item in materials} == {
+        "课件/week1/lecture.md",
+        "课件/week2/lecture.md",
+    }

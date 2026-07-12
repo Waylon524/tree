@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from tree.engine.node_run import NodeRunner, ledger_covered_node_ids
+from tree.engine.node_run import NodeRunner, ledger_covered_node_ids, reconcile_ledger_generation
 from tree.io import paths
 from tree.observability.limiter import IterationLimitExceeded
 from tree.planner.store import envelope, write_json_atomic
@@ -240,6 +242,153 @@ async def test_node_run_fail_then_pass_records_single_node_output(tmp_path):
     assert execution.outputs_completed == ["002.化学平衡.md"]
     assert state.node_runs[0].status == "complete"
 
+
+async def test_node_run_recovers_output_transaction_after_index_failure(tmp_path):
+    _seed(tmp_path)
+
+    class FailingOnceRetriever(_FakeRetriever):
+        def index_finished(self, node_id, path):
+            if not self.indexed:
+                self.indexed.append(("failed", path))
+                raise RuntimeError("simulated index outage")
+            return super().index_finished(node_id, path)
+
+    retriever = FailingOnceRetriever()
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=_FakeExaminer(fail_then_pass=1),
+        student=_FakeStudent(),
+        writer=_FakeWriter(),
+        retriever=retriever,
+        state_mgr=state_mgr,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated index outage"):
+        await runner.run_one("n1")
+
+    output = paths.outputs_root(tmp_path) / "002.化学平衡.md"
+    assert output.exists()
+    assert list(paths.output_transactions_root(tmp_path).glob("*.json"))
+
+    # Recovery republishes the existing file and never invokes the LLM loop.
+    examiner = _FakeExaminer()
+    writer = _FakeWriter()
+    recovered = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=retriever,
+        state_mgr=state_mgr,
+    )
+    assert await recovered.run_one("n1") == "node_complete"
+    assert examiner.compose_kwargs == []
+    assert writer.calls == 0
+    assert ledger_covered_node_ids(tmp_path) == {"n0", "n1"}
+    assert not list(paths.output_transactions_root(tmp_path).glob("*.json"))
+
+
+async def test_node_run_includes_every_member_mtu_evidence_and_source_trace(tmp_path):
+    _seed(tmp_path)
+    dag_envelope = json.loads(paths.knowledge_dag_path(tmp_path).read_text(encoding="utf-8"))
+    target = next(node for node in dag_envelope["data"]["nodes"] if node["node_id"] == "n1")
+    target["member_mtu_ids"] = ["mtu:a", "mtu:b"]
+    write_json_atomic(paths.knowledge_dag_path(tmp_path), dag_envelope)
+    write_json_atomic(
+        paths.mtus_path(tmp_path),
+        envelope(
+            schema="tree.mtus",
+            data={
+                "mtus": [
+                    {
+                        "mtu_id": "mtu:a",
+                        "source_id": "课件/week1.md",
+                        "line_range": [1, 31],
+                    },
+                    {
+                        "mtu_id": "mtu:b",
+                        "source_id": "课件/week2.md",
+                        "line_range": [32, 62],
+                    },
+                ]
+            },
+        ),
+    )
+
+    class EvidenceRetriever(_FakeRetriever):
+        def __init__(self):
+            super().__init__()
+            self.required_mtu_calls = []
+
+        def source_evidence(self, mtu_ids):
+            self.required_mtu_calls.append(list(mtu_ids))
+            return [
+                {"text": f"evidence {mtu_id}", "metadata": {"mtu_id": mtu_id}}
+                for mtu_id in mtu_ids
+            ]
+
+    retriever = EvidenceRetriever()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=_FakeExaminer(fail_then_pass=1),
+        student=_FakeStudent(),
+        writer=_FakeWriter(),
+        retriever=retriever,
+        state_mgr=StateManager(paths.pipeline_state_path(tmp_path)),
+    )
+
+    assert await runner.run_one("n1") == "node_complete"
+    assert retriever.required_mtu_calls
+    assert all(call == ["mtu:a", "mtu:b"] for call in retriever.required_mtu_calls)
+    output = (paths.outputs_root(tmp_path) / "002.化学平衡.md").read_text(encoding="utf-8")
+    assert "## 来源追溯" in output
+    assert "`课件/week1.md`，第 1–31 行（`mtu:a`）" in output
+    assert "`课件/week2.md`，第 32–62 行（`mtu:b`）" in output
+
+
+def test_ledger_rejects_missing_or_modified_output(tmp_path):
+    _seed(tmp_path)
+    output = paths.outputs_root(tmp_path) / "001.前置.md"
+    original = output.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    write_json_atomic(
+        paths.knowledge_ledger_path(tmp_path),
+        {
+            "records": [
+                {
+                    "node_id": "n0",
+                    "node_ids": ["n0"],
+                    "output_path": "outputs/001.前置.md",
+                    "output_sha256": digest,
+                }
+            ]
+        },
+    )
+    assert ledger_covered_node_ids(tmp_path) == {"n0"}
+
+    output.write_text("modified", encoding="utf-8")
+    assert ledger_covered_node_ids(tmp_path) == set()
+
+    output.unlink()
+    assert ledger_covered_node_ids(tmp_path) == set()
+
+
+def test_generation_reconciliation_archives_stale_output(tmp_path):
+    _seed(tmp_path)
+    write_json_atomic(
+        paths.material_manifest_path(tmp_path),
+        {"generation_id": "gen:new", "materials": [], "active_materials": [], "inactive_materials": []},
+    )
+    output = paths.outputs_root(tmp_path) / "001.前置.md"
+
+    assert reconcile_ledger_generation(tmp_path) == 1
+    assert not output.exists()
+    assert (paths.output_archive_root(tmp_path) / "legacy" / "001.前置.md").exists()
+    assert ledger_covered_node_ids(tmp_path) == set()
 
 async def test_node_run_skips_when_already_covered(tmp_path):
     _seed(tmp_path)

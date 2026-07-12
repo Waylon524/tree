@@ -107,6 +107,43 @@ interface AdvancedGroup {
   fields: AdvancedField[];
 }
 
+function SecretField({
+  label,
+  configured,
+  value,
+  onChange,
+}: {
+  label: string;
+  configured: boolean;
+  value: string;
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+}) {
+  const t = useT();
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <div className="full secret-field">
+      <span className="label-row">
+        <span>{label}</span>
+        {configured && <b>{t("settings.configured")}</b>}
+      </span>
+      <span className="secret-input-row">
+        <input
+          aria-label={label}
+          type={revealed ? "text" : "password"}
+          value={value}
+          onChange={onChange}
+          placeholder={label}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <Button variant="ghost" onClick={() => setRevealed((current) => !current)}>
+          {revealed ? t("settings.hideSecret") : t("settings.showSecret")}
+        </Button>
+      </span>
+    </div>
+  );
+}
+
 const ADVANCED_GROUPS: AdvancedGroup[] = [
   {
     titleKey: "settings.advanced.nodeRun",
@@ -358,7 +395,7 @@ export function Settings() {
             </button>
           </div>
         </div>
-        {settings && <span className="hint">{settings.config_path}</span>}
+        <Message kind="hint">{t("settings.privacyNotice")}</Message>
 
         <form className="settings-form" onSubmit={(event) => void submit(event)}>
           <fieldset>
@@ -366,18 +403,12 @@ export function Settings() {
               {t("tend.fertilizer")} <small className="legend-note">({t("tend.note.llm")})</small>
             </legend>
             <div className="form-grid">
-              <label className="full">
-                <span className="label-row">
-                  <span>{t("settings.apiKey")}</span>
-                  {settings?.llm_api_key_configured && <b>{t("settings.configured")}</b>}
-                </span>
-                <input
-                  type="text"
-                  value={fields.llm_api_key}
-                  onChange={setText("llm_api_key")}
-                  placeholder={t("settings.apiKey")}
-                />
-              </label>
+              <SecretField
+                label={t("settings.apiKey")}
+                configured={Boolean(settings?.llm_api_key_configured)}
+                value={fields.llm_api_key}
+                onChange={setText("llm_api_key")}
+              />
               <Field
                 label={t("settings.baseUrl")}
                 value={fields.llm_base_url}
@@ -407,18 +438,12 @@ export function Settings() {
               {t("tend.gather")} <small className="legend-note">({t("tend.note.ocr")})</small>
             </legend>
             <div className="form-grid">
-              <label className="full">
-                <span className="label-row">
-                  <span>{t("settings.paddleKey")}</span>
-                  {settings?.paddleocr_api_token_configured && <b>{t("settings.configured")}</b>}
-                </span>
-                <input
-                  type="text"
-                  value={fields.paddleocr_api_token}
-                  onChange={setText("paddleocr_api_token")}
-                  placeholder={t("settings.apiKey")}
-                />
-              </label>
+              <SecretField
+                label={t("settings.paddleKey")}
+                configured={Boolean(settings?.paddleocr_api_token_configured)}
+                value={fields.paddleocr_api_token}
+                onChange={setText("paddleocr_api_token")}
+              />
               <Field
                 label={t("settings.paddleUrl")}
                 value={fields.paddleocr_api_url}
@@ -493,6 +518,13 @@ export function Settings() {
               </div>
             ))}
           </details>
+
+          {settings && (
+            <details className="settings-details settings-storage">
+              <summary>{t("settings.storageDetails")}</summary>
+              <code className="hint">{settings.config_path}</code>
+            </details>
+          )}
 
           <div className="form-actions">
             <Button type="submit" disabled={busy}>

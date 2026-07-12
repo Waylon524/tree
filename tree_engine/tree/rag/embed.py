@@ -9,6 +9,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +18,15 @@ _DEFAULT_MODEL = "Qwen3-Embedding-0.6B-Q8_0"
 
 
 class EmbeddingClient:
-    def __init__(self, base_url: str | None = None, model: str | None = None):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout_sec: float | None = None,
+    ):
         self.base_url = (base_url or os.environ.get("EMBED_API_URL", _DEFAULT_URL)).rstrip("/")
         self.model = model or os.environ.get("EMBED_MODEL", _DEFAULT_MODEL)
+        self.timeout_sec = float(timeout_sec or os.environ.get("EMBED_REQUEST_TIMEOUT_SEC", "60"))
         self._dims: int | None = None
 
     def embed(self, texts: str | list[str]) -> list[list[float]]:
@@ -33,7 +40,7 @@ class EmbeddingClient:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             body = exc.read(2048).decode("utf-8", errors="replace")
@@ -53,7 +60,7 @@ class EmbeddingClient:
             self._dims = len(self.embed(["test"])[0])
         return self._dims
 
-    def health_check(self) -> dict:
+    def health_check(self) -> dict[str, Any]:
         try:
             vec = self.embed(["health check"])[0]
             return {"ok": True, "model": self.model, "dimensions": len(vec)}

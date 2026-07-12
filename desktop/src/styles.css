@@ -535,7 +535,8 @@ table.stages td {
   margin-top: 12px;
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
-.settings-form label {
+.settings-form label,
+.settings-form .secret-field {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -543,7 +544,8 @@ table.stages td {
   color: var(--muted);
   font-size: 12px;
 }
-.settings-form label.full {
+.settings-form label.full,
+.settings-form .secret-field.full {
   grid-column: 1 / -1;
 }
 .settings-form input {
@@ -554,6 +556,20 @@ table.stages td {
   border-radius: 6px;
   background: var(--bg);
   color: var(--text);
+}
+.secret-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.secret-input-row button {
+  min-width: 62px;
+}
+.settings-storage code {
+  display: block;
+  margin-top: 8px;
+  white-space: normal;
 }
 .settings-details {
   border: 1px solid var(--border);
@@ -665,13 +681,43 @@ table.stages td {
   color: var(--text);
 }
 .extension-gate {
-  max-width: 520px;
+  max-width: 620px;
 }
 .extension-status {
   display: flex;
   align-items: center;
   gap: 10px;
   margin: 12px 0;
+}
+.extension-requirements {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.extension-requirements span {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--muted);
+  background: var(--bg);
+  font-size: 12px;
+}
+.gate-actions,
+.grow-readiness,
+.empty-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.grow-readiness,
+.empty-action {
+  margin: 4px 0 14px;
+}
+.grow-readiness p,
+.empty-action p {
+  margin: 0;
 }
 .progress-row {
   display: grid;
@@ -1006,6 +1052,7 @@ table.stages td {
 .dag-workbench {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 310px;
+  grid-template-areas: "rail stage inspector";
   min-height: 100%;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0)),
@@ -1032,10 +1079,12 @@ table.stages td {
 }
 
 .dag-rail {
+  grid-area: rail;
   border-right: 1px solid var(--border);
 }
 
 .dag-inspector {
+  grid-area: inspector;
   border-left: 1px solid var(--border);
 }
 
@@ -1195,6 +1244,7 @@ table.stages td {
 }
 
 .dag-stage {
+  grid-area: stage;
   position: relative;
   min-width: 0;
   min-height: 100%;
@@ -1553,7 +1603,12 @@ table.stages td {
 
   .dag-workbench {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "stage"
+      "rail"
+      "inspector";
     min-height: calc(100vh - 57px);
+    overflow: visible;
   }
 
   .dag-rail,
@@ -1564,12 +1619,20 @@ table.stages td {
   }
 
   .dag-stage {
-    min-height: 68vh;
-    order: 2;
+    min-height: max(420px, calc(100vh - 57px));
   }
 
-  .dag-inspector {
-    order: 3;
+  .dag-filter-list {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .dag-rail {
+    overflow: visible;
+  }
+
+  .dag-filter {
+    min-width: 0;
   }
 
   .reader-toolbar {
@@ -1582,6 +1645,13 @@ table.stages td {
 
   .reader-markdown {
     padding: 16px;
+  }
+}
+
+@media (max-width: 560px) {
+  .extension-requirements,
+  .dag-filter-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1641,6 +1711,10 @@ table.stages td {
   display: flex;
   gap: 18px;
   align-items: center;
+}
+.soil-card > div {
+  min-width: 0;
+  flex: 1;
 }
 .soil-card h2 {
   margin: 0 0 6px;
