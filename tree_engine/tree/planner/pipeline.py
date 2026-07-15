@@ -60,26 +60,36 @@ async def rebuild_planner(
     producer_signature = planner_producer_signature(settings)
     generation_id = planner_generation_id(manifest, settings)
     manifest["generation_id"] = generation_id
+    if progress is not None and hasattr(progress, "set_generation_id"):
+        progress.set_generation_id(generation_id)
     for material in manifest["materials"]:
         material["producer_signature"] = producer_signature
         material["ocr_signature"] = planner_ocr_signature(settings)
 
-    changed = [m for m in manifest["materials"] if m["status"] != "unchanged"]
+    cache = _load_mtu_cache(root)
+    completed_materials = sum(
+        1
+        for material in manifest["materials"]
+        if (cached := cache.get(str(material.get("source_id") or material["path"]))) is not None
+        and cached["fingerprint"] == material.get("fingerprint", "")
+        and cached["producer_signature"] == material.get("producer_signature", "")
+    )
+    total_materials = len(manifest["materials"])
     _set_stage(
         progress,
         "ocr",
-        total=len(changed),
-        done=0,
-        status="running" if changed else "complete",
-        message="Extracting materials" if changed else "No changed materials",
+        total=total_materials,
+        done=completed_materials,
+        status="running" if completed_materials < total_materials else "complete",
+        message="Extracting materials" if completed_materials < total_materials else "Extraction complete",
     )
     # Clean/Cut totals = number of changed materials (known upfront), advanced
     # once per material in the ingest driver. Stable, monotonic counters even
     # though OCR/Clean/Cut overlap across concurrently-processed materials.
-    _set_stage(progress, "clean", total=len(changed), done=0,
-               status="running" if changed else "complete")
-    _set_stage(progress, "cut", total=len(changed), done=0,
-               status="running" if changed else "complete")
+    _set_stage(progress, "clean", total=total_materials, done=completed_materials,
+               status="running" if completed_materials < total_materials else "complete")
+    _set_stage(progress, "cut", total=total_materials, done=completed_materials,
+               status="running" if completed_materials < total_materials else "complete")
 
     mtus = await _collect_mtus(root, manifest, producer=mtu_producer, settings=settings)
     # All changed materials are ingested once _collect_mtus returns; clamp the
@@ -329,10 +339,19 @@ def _validate_dagger_fallback_rate(dag: dict[str, Any], mtus: list[MTU], setting
     ratio = len(unassigned) / len(mtus)
     maximum = max(0.0, float(getattr(settings, "dagger_max_unassigned_ratio", 0.10)))
     if ratio > maximum:
-        raise PlannerError(
-            "Dagger fallback quality gate failed: "
-            f"{len(unassigned)}/{len(mtus)} MTUs were unassigned ({ratio:.1%}); "
-            f"maximum allowed is {maximum:.1%}."
+        dag.setdefault("diagnostics", []).append(
+            {
+                "reason_code": "high_unassigned_ratio",
+                "severity": "warning",
+                "unassigned_count": len(unassigned),
+                "mtu_count": len(mtus),
+                "ratio": ratio,
+                "configured_threshold": maximum,
+                "message": (
+                    f"{len(unassigned)}/{len(mtus)} MTUs used safe singleton fallback "
+                    f"({ratio:.1%}); review clustering quality."
+                ),
+            }
         )
 
 

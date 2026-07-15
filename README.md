@@ -10,7 +10,7 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 | --- | --- |
 | 桌面架构 | Tauri 原生壳加载 React 前端，并为当前项目启动一个本机、令牌保护的 Python engine sidecar。 |
 | 项目管理 | 桌面 App 以项目为中心；受管理项目保存在 `~/.tree/projects/`，可创建、导入、重命名、导出、迁移和删除。 |
-| 生成与学习 | 支持资料导入、OCR/清洗/切分/RAG、知识图谱、生成 Markdown 学习文件、阅读推荐、完成标记和基于反馈的定向修订。 |
+| 生成与学习 | 支持资料导入、AES PDF/OCR、清洗/切分/RAG、知识图谱、生成 Markdown 学习文件、阅读推荐、完成标记和基于反馈的定向修订。七阶段支持累计进度、断点续跑和局部失败。 |
 | 运行环境 | LLM 与 PaddleOCR 可在 App 中配置；本地 embedding 扩展会在需要时安装运行时和模型，也可改用外部 OpenAI-compatible embedding endpoint。 |
 | 已发布安装包 | macOS Apple Silicon DMG，以及 Windows x64 NSIS 和 MSI 安装包。 |
 
@@ -91,7 +91,9 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 | Link / 生枝 | 建立知识节点之间的先修依赖。 |
 | NodeRun / 结果 | 为每个知识节点生成最终学习文件。 |
 
-Run 支持续跑。如果材料没有变化，并且已有知识图谱和中间产物可读，TREE 会复用已有结果并继续 NodeRun，而不是每次都重新构建 Cluster 和 Link。
+Run 支持续跑。进度条始终显示项目累计完成量；缓存命中和重启后会继承真实的 `done/total`，与一次性跑完保持相同显示，不使用“已复用”或 `0/0 = 100%` 的伪进度。单个 NodeRun 失败时，已完成结果继续可用，项目显示为部分完成，并可从保留的试卷、草稿和 Bottleneck 精准重试。
+
+TREE 会按实际 LLM 服务商共享并发预算，遇到 429、超时、服务繁忙和可恢复 5xx 时自动降速并遵守 `Retry-After`。Embed 会定向修复缺失 MTU，聚类降级会保留来源完整的 singleton，Link 修复耗尽后会按可审计规则移除最低置信环边，最终 DAG 仍保持无环。
 
 ### 收获 / 知识图谱
 
@@ -133,6 +135,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 
 - **LLM API**：需要 OpenAI-compatible Chat API。可在照料页配置。
 - **PaddleOCR**：用于扫描 PDF、图片和复杂版式资料。
+- **PDF crypto**：安装包内置 `pypdf` AES 支持；无需密码的 AES PDF 可直接读取，需要密码的文件会显示文件名和处理建议。
 - **Embedding**：桌面 App 可使用本地 embedding 扩展，基于 `llama-server` 和 Qwen3 embedding GGUF 模型。
 - **本地存储**：受管理项目保存在 TREE 项目库中；项目迁移使用 zip archive。
 
@@ -148,13 +151,18 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | --- | --- | --- |
 | `LLAMA_SERVER_CTX` | `22000` | llama-server 上下文长度。UI/API 限制为 `1024..32768`。Stop/Run 或重启 embedding 后生效。 |
 | `SOURCE_MTU_CHUNK_TOKENS` | `20000` | Source MTU chunk 阈值。UI/API 限制为 `500..32768`。 |
+| `LLM_PROVIDER_CONCURRENCY` | `4` | 同一 LLM 端点与凭据共享的并发上限；限流时会自动降低。 |
+| `SOURCE_INGEST_CONCURRENCY` | `4` | 并行处理的材料数。 |
+| `ARCHIVIST_CHUNK_CONCURRENCY` | `2` | 单次材料清洗/切分的并行分块数。 |
+| `DAGGER_PREREQUISITE_CONCURRENCY` | `3` | Dagger 先修关系请求并发数。 |
+| `MAX_ACTIVE_NODE_RUNS` | `3` | 同时运行的 NodeRun 数。 |
 | `PADDLEOCR_MODEL` | `PaddleOCR-VL-1.6` | PaddleOCR 服务使用的模型名。 |
 | `PADDLEOCR_API_URL` | `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` | PaddleOCR 请求地址。 |
 | `EMBED_API_URL` | 本地 llama-server endpoint | 使用外部 embedding 服务时可覆盖。 |
 | `EMBED_AUTO_START` | App 管理 | 如果你自己管理 embedding 服务，可设为 `false`。 |
 | `LLAMA_SERVER_BIN` | App 管理 | 指定自定义 `llama-server` 可执行文件。 |
 
-照料页还开放了更多高级运行参数，包括 `MAX_ITERATIONS`、`MAX_ACTIVE_NODE_RUNS`、`MAX_EXAMINER_SPAN_NODES`、`MAX_RETRIES`、`MAX_FORMAT_RETRIES`、`LLM_TIMEOUT_SEC`、`SOURCE_INGEST_CONCURRENCY`、`SOURCE_OCR_CONCURRENCY`、`SOURCE_EMBEDDING_CONCURRENCY`、`ARCHIVIST_MTU_REPAIR_ATTEMPTS`、`DAGGER_REPAIR_ATTEMPTS` 和 Dagger cluster 相关阈值。保存后通常需要 Stop/Run 或重启服务才会完全生效。
+照料页还开放了更多高级运行参数，包括 `MAX_ITERATIONS`、`MAX_EXAMINER_SPAN_NODES`、`MAX_RETRIES`、`MAX_FORMAT_RETRIES`、`LLM_TIMEOUT_SEC`、`SOURCE_OCR_CONCURRENCY`、`SOURCE_EMBEDDING_CONCURRENCY`、`ARCHIVIST_MTU_REPAIR_ATTEMPTS`、`DAGGER_REPAIR_ATTEMPTS` 和 Dagger cluster 相关阈值。界面默认值与引擎一致，保存后会说明下次运行需要重算的最早阶段；普通项目建议保留自适应并发的默认设置。
 
 Agent prompt 是项目级设置。修改 prompt 会影响 JSON 格式稳定性、知识图谱生成和审核结果；每个 prompt 都可以单独恢复默认，也可以一键全部恢复默认。
 
@@ -184,7 +192,7 @@ tre embedding stop
 ```bash
 python3 -m pip install -c packaging/release-constraints.txt -e ".[rag,gui,dev]"
 python3 -m ruff check tree_engine tests
-python3 -m pytest -q
+packaging/test_local.sh -q
 
 cd desktop
 npm ci

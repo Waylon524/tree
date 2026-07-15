@@ -87,6 +87,8 @@ _BADGES = {
     "failed": "failed",
     "blocked": "failed",
     "error": "failed",
+    "partial": "partial",
+    "needs_attention": "partial",
     "pending": "wait",
     "idle": "wait",
 }
@@ -212,7 +214,7 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         execution.status = "in_progress"
         run = manager.find_run(state, execution.node_run_id)
         if run is not None:
-            manager.reset_node_run(run)
+            manager.resume_node_run(run)
         manager.save(state)
         start_engine(root)
         return {"node_id": node_id, "status": "regrowing"}
@@ -407,6 +409,7 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         payload: dict[str, Any] = Body(...),
     ) -> dict[str, Any]:
         _require(request)
+        before = config_cmd.read_settings_config(root, env_path=paths.global_config_path())
         try:
             config_cmd.write_settings_config(
                 root,
@@ -415,7 +418,9 @@ def create_app(root: Path, *, token: str) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return config_cmd.read_settings_config(root, env_path=paths.global_config_path())
+        after = config_cmd.read_settings_config(root, env_path=paths.global_config_path())
+        after["invalidated_stages"] = _settings_invalidation_stages(before, after)
+        return after
 
     @app.get("/api/materials")
     def api_materials(request: Request) -> dict[str, list[str]]:
@@ -752,7 +757,7 @@ def _stage_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
         if total:
             pct = max(0, min(100, round(done / total * 100)))
         else:
-            pct = 100 if status in {"complete", "completed"} else 0
+            pct = 0
         active = [str(item) for item in (stage.get("active") or []) if str(item)]
         if key == "noderun":
             active = [labels.get(item, item) for item in active]
@@ -913,6 +918,50 @@ def _sha256_file(path: Path) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _settings_invalidation_stages(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[str]:
+    """Describe the earliest durable stage affected by changed output semantics."""
+    stages = ["OCR", "Clean", "Cut", "Embed", "Cluster", "Link", "NodeRun"]
+
+    def changed(*keys: str) -> bool:
+        return any(before.get(key) != after.get(key) for key in keys)
+
+    before_roles = before.get("role_models") or {}
+    after_roles = after.get("role_models") or {}
+    role_changed = {
+        role for role in ("examiner", "student", "writer", "archivist", "dagger")
+        if before_roles.get(role) != after_roles.get(role)
+    }
+
+    earliest: int | None = None
+    if changed("paddleocr_api_url", "paddleocr_model", "paddleocr_api_token_configured"):
+        earliest = 0
+    elif "archivist" in role_changed or changed(
+        "archivist_mtu_repair_attempts", "archivist_mtu_cut_timeout_sec"
+    ):
+        earliest = 1
+    elif changed("llama_server_ctx", "source_mtu_chunk_tokens"):
+        earliest = 3
+    elif "dagger" in role_changed or changed(
+        "dagger_embed_cluster_enabled",
+        "dagger_cluster_similarity_threshold",
+        "dagger_cluster_top_k",
+        "dagger_cluster_max_size",
+        "dagger_cluster_auto_accept_singleton",
+        "dagger_cluster_auto_accept_same_collection",
+        "dagger_max_nodes_per_call",
+    ):
+        earliest = 4
+    elif changed("dagger_repair_attempts"):
+        earliest = 5
+    elif role_changed & {"examiner", "student", "writer"} or changed(
+        "max_iterations", "max_examiner_span_nodes"
+    ):
+        earliest = 6
+    return stages[earliest:] if earliest is not None else []
 
 
 def _safe_output_path(root: Path, name: str) -> Path:

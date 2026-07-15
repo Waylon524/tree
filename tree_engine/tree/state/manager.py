@@ -69,8 +69,14 @@ class StateManager:
             execution.status = "in_progress"
             run = self.find_run(state, execution.node_run_id)
             if run and str(run.status).lower() in {"failed", "blocked", "error"}:
-                self.reset_node_run(run)
+                self.resume_node_run(run)
         return state
+
+    def resume_node_run(self, run: NodeRunRecord) -> NodeRunRecord:
+        """Resume a failed run while preserving its exam, draft, and audit history."""
+        run.status = "running"
+        run.last_error = None
+        return run
 
     def reset_node_run(self, run: NodeRunRecord) -> NodeRunRecord:
         """Wipe a run back to a clean slate so it re-composes a fresh exam/draft."""
@@ -79,6 +85,8 @@ class StateManager:
         run.draft_path = None
         run.current_iteration = 0
         run.previous_bottleneck = None
+        run.bottleneck_repeat_count = 0
+        run.bottleneck_history = []
         run.exam_repair_count = 0
         run.last_error = None
         return run

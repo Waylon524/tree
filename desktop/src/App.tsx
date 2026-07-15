@@ -48,7 +48,7 @@ const NAV: Array<{ key: Page; labelKey: string }> = [
 ];
 
 const ENGINE_STATES = ["running", "stopped", "starting"];
-const PHASE_STATES = ["idle", "running", "blocked", "complete", "failed"];
+const PHASE_STATES = ["idle", "running", "blocked", "partial", "complete", "failed"];
 const EXTENSION_PHASE_KEYS: Record<string, string> = {
   checking: "gate.soil.phase.checking",
   missing: "gate.soil.phase.missing",

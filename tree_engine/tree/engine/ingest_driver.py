@@ -2,7 +2,7 @@
 
 Incremental through planner manifests: changed materials are re-extracted into
 cleaned Markdown, cut into MTUs, folded into the Dagger DAG, then each source MTU
-is embedded and the cleaned Markdown is removed.
+is embedded; cleaned Markdown is retained for targeted repair.
 """
 
 from __future__ import annotations
@@ -39,26 +39,51 @@ async def prepare_sources(engine: object) -> dict[str, Any]:
 
     try:
         if _can_resume_existing_planner(root, engine.settings):
-            _set_stage(engine, "ocr", total=0, done=0, status="complete", message="No changed materials")
-            _set_stage(engine, "clean", total=0, done=0, status="complete", message="Cleaning complete")
-            _set_stage(engine, "cut", total=0, done=0, status="complete", message="Cutting complete")
             summary = _existing_planner_summary(root)
+            material_count = len(summary["materials"].get("materials", []))
+            generation_id = str(summary["materials"].get("generation_id") or "")
+            progress = _progress(engine)
+            if progress is not None and hasattr(progress, "set_generation_id"):
+                progress.set_generation_id(generation_id)
+            _set_stage(
+                engine,
+                "ocr",
+                total=material_count,
+                done=material_count,
+                status="complete",
+                message="Extraction complete",
+            )
+            _set_stage(
+                engine,
+                "clean",
+                total=material_count,
+                done=material_count,
+                status="complete",
+                message="Cleaning complete",
+            )
+            _set_stage(
+                engine,
+                "cut",
+                total=material_count,
+                done=material_count,
+                status="complete",
+                message="Cutting complete",
+            )
             _set_stage(
                 engine,
                 "cluster",
-                total=summary["node_count"],
-                done=summary["node_count"],
+                total=summary["mtu_count"],
+                done=summary["mtu_count"],
                 status="complete",
-                message="Reused existing nodes",
+                message="Cluster complete",
             )
-            edge_count = summary["hard_edge_count"] + summary["soft_order_edge_count"]
             _set_stage(
                 engine,
                 "link",
-                total=edge_count,
-                done=edge_count,
+                total=summary["node_count"],
+                done=summary["node_count"],
                 status="complete",
-                message="Reused existing DAG",
+                message="Link complete",
             )
             await ensure_all_embedded(engine)
             return summary
@@ -143,11 +168,10 @@ def _existing_planner_summary(root: Path) -> dict[str, Any]:
 
 
 async def ensure_all_embedded(engine: object) -> int:
-    """Index every MTU from the latest planner output, then delete intermediates."""
+    """Index every MTU and retain cleaned sources for targeted index repair."""
     root = _root(engine)
     mtus = _load_mtus(root)
     indexed = await _ensure_mtus_embedded(engine, mtus, backfill_node_ids=True)
-    _delete_source_markdown(root)
     return indexed
 
 
@@ -166,12 +190,17 @@ async def _ensure_mtus_embedded(
         )
 
     mtu_to_node = _mtu_to_node(root) if backfill_node_ids else {}
+    preindexed = {
+        mtu.mtu_id
+        for mtu in mtus
+        if hasattr(indexer, "is_mtu_indexed") and indexer.is_mtu_indexed(mtu.mtu_id)
+    }
     _set_stage(
         engine,
         "embed",
         total=len(mtus),
-        done=0,
-        status="running" if mtus else "complete",
+        done=len(preindexed),
+        status="running" if len(preindexed) < len(mtus) else "complete",
         message="Embedding source MTUs" if not backfill_node_ids else "Backfilling MTU node ids",
     )
     indexed = 0
@@ -179,8 +208,7 @@ async def _ensure_mtus_embedded(
     semaphore = asyncio.Semaphore(concurrency)
 
     async def embed_one(mtu: MTU) -> int:
-        if hasattr(indexer, "is_mtu_indexed") and indexer.is_mtu_indexed(mtu.mtu_id):
-            _advance_stage(engine, "embed", message=f"Already indexed {mtu.title}")
+        if mtu.mtu_id in preindexed:
             return 0
         source_path = source_markdown_path(
             root,
@@ -215,6 +243,14 @@ async def _ensure_mtus_embedded(
 
     if backfill_node_ids and mtu_to_node and hasattr(indexer, "update_mtu_node_ids"):
         indexer.update_mtu_node_ids(mtu_to_node)
+
+    if hasattr(indexer, "is_mtu_indexed"):
+        missing = [mtu.mtu_id for mtu in mtus if not indexer.is_mtu_indexed(mtu.mtu_id)]
+        if missing:
+            raise RuntimeError(
+                "Embedding verification failed after targeted repair; missing MTUs: "
+                + ", ".join(missing[:10])
+            )
     _complete_stage(engine, "embed", "Embedding complete")
     return indexed
 
@@ -311,18 +347,28 @@ async def _clean_and_cut_chunk(
     order_offset: int,
 ) -> list[MTU]:
     archivist = engine.archivist
+    settings = getattr(engine, "settings", None)
     # Per-chunk calls update the display only; the done counter advances once per
     # material in _produce_mtus, so concurrent chunks never inflate the count.
     _set_stage(engine, "clean", status="running", active=source_file, message=f"Cleaning {source_file}")
     cleaned = await archivist.clean(
         raw_chunk,
-        timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
-        repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
+        timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
+        repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
     )
-    _set_stage(engine, "clean", message=f"Cleaned {source_file}")
     if not cleaned.strip():
-        _set_stage(engine, "cut", message=f"Skipped empty cleaned chunk {source_file}")
-        return []
+        _set_stage(engine, "clean", message=f"Retrying empty cleaned chunk {source_file}")
+        cleaned = await archivist.clean(
+            raw_chunk,
+            timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
+            repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
+        )
+        if not cleaned.strip():
+            raise RuntimeError(
+                f"Archivist cleaned non-empty source chunk to empty twice: {source_file}. "
+                "The chunk was preserved and was not silently skipped."
+            )
+    _set_stage(engine, "clean", message=f"Cleaned {source_file}")
 
     source_path = source_markdown_path(
         root,
@@ -337,8 +383,8 @@ async def _clean_and_cut_chunk(
         collection=collection,
         source_file=source_file,
         order_offset=order_offset,
-        timeout_sec=getattr(engine.settings, "archivist_mtu_cut_timeout_sec", None),
-        repair_attempts=getattr(engine.settings, "archivist_mtu_repair_attempts", 1),
+        timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
+        repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
     )
     for mtu in mtus:
         mtu.source_id = source_id
@@ -366,7 +412,7 @@ async def _clean_and_cut_chunks(
     max_retries = max(0, int(getattr(engine.settings, "max_retries", 3)))
     chunk_concurrency = max(
         1,
-        int(getattr(engine.settings, "archivist_chunk_concurrency", 5)),
+        int(getattr(engine.settings, "archivist_chunk_concurrency", 2)),
     )
     wait_for_success_before_retry = False
 
@@ -599,14 +645,6 @@ def _mtu_to_node(root: Path) -> dict[str, str]:
     return mapping
 
 
-def _delete_source_markdown(root: Path) -> None:
-    source_root = paths.source_markdown_root(root)
-    if not source_root.exists():
-        return
-    for path in source_root.rglob("*.md"):
-        path.unlink()
-
-
 def _record_ocr_checkpoint(engine: object, root: Path, path: Path, raw_markdown: str) -> None:
     progress = getattr(engine, "progress", None)
     if progress is None or not hasattr(progress, "update"):
@@ -704,10 +742,15 @@ def _fail_stage(engine: object, stage: str, message: str, *, active: str = "") -
     if progress is None or not hasattr(progress, "update"):
         return
     try:
-        state = progress.load() if hasattr(progress, "load") else {}
-        errors = list(state.get("errors") or [])
-        if message not in errors:
-            errors.append(message)
-        progress.update({"phase": "failed", "message": message, "errors": errors[-8:]})
+        if hasattr(progress, "record_error"):
+            progress.record_error(
+                stage=stage,
+                code=f"{stage}_failed",
+                resource=active,
+                message=message,
+                recoverable=True,
+                action=f"Fix the reported {stage} input or dependency, then resume the pipeline.",
+            )
+        progress.update({"phase": "failed", "message": message})
     except Exception:
         return

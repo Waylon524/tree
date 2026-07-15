@@ -127,6 +127,14 @@ jobs:
           python -m pip install -c packaging/release-constraints.txt -e ".[rag,gui]" pyinstaller==6.21.0
           python -m PyInstaller --noconfirm --clean --distpath packaging/dist --workpath packaging/build packaging/tre-engine.spec
 
+      - name: Verify packaged PDF AES runtime
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
+        shell: bash
+        run: |
+          engine="packaging/dist/tre-engine/tre-engine"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then engine="${engine}.exe"; fi
+          "$engine" doctor --strict
+
       - name: Install frontend deps
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target }}
         working-directory: desktop

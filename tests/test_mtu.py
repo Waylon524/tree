@@ -205,6 +205,26 @@ def test_validate_enforces_unit_metadata_limits():
         validate_and_normalize(plan, line_count=2)
 
 
+def test_validate_normalizes_presentation_metadata_without_failing():
+    plan = {
+        "units": [
+            {
+                "start_line": 1,
+                "end_line": 2,
+                "title": "短",
+                "defines": ["概念"],
+                "summary": "摘" * 100,
+            }
+        ]
+    }
+
+    units, _ = validate_and_normalize(plan, line_count=2)
+
+    assert units[0]["title"] == "短"
+    assert units[0]["summary"].endswith("…")
+    assert len(units[0]["summary"]) < 100
+
+
 def test_validate_rejects_legacy_keywords_field():
     plan = {
         "units": [
@@ -222,15 +242,15 @@ def test_validate_rejects_legacy_keywords_field():
 
 
 @pytest.mark.parametrize(
-    ("title", "summary", "message"),
+    ("title", "summary"),
     [
-        ("A", "说明产生稳定干涉条纹所需满足的相干条件。", "title"),
-        ("这是一个明显超过四十个显示字符限制的标题因为它包含太多汉字", "说明产生稳定干涉条纹所需满足的相干条件。", "title"),
-        ("干涉条件", "太短", "summary"),
-        ("干涉条件", "很长" * 40, "summary"),
+        ("A", "说明产生稳定干涉条纹所需满足的相干条件。"),
+        ("这是一个明显超过四十个显示字符限制的标题因为它包含太多汉字", "说明产生稳定干涉条纹所需满足的相干条件。"),
+        ("干涉条件", "太短"),
+        ("干涉条件", "很长" * 40),
     ],
 )
-def test_validate_enforces_title_and_summary_display_lengths(title, summary, message):
+def test_validate_normalizes_title_and_summary_display_lengths(title, summary):
     plan = {
         "units": [
             {
@@ -242,8 +262,9 @@ def test_validate_enforces_title_and_summary_display_lengths(title, summary, mes
             }
         ]
     }
-    with pytest.raises(MtuCoverageError, match=message):
-        validate_and_normalize(plan, line_count=2)
+    units, _ = validate_and_normalize(plan, line_count=2)
+    assert units[0]["title"]
+    assert units[0]["summary"]
 
 
 def test_validate_allows_four_display_character_title():
@@ -278,7 +299,7 @@ def test_build_mtus_ids_and_order():
     assert [m.mtu_id for m in mtus] == [m.mtu_id for m in again]
 
 
-def test_build_mtus_accepts_twenty_line_concepts_and_rejects_nineteen():
+def test_build_mtus_accepts_single_short_concept_without_data_loss():
     units = [
         {"start_line": 1, "end_line": 20, "title": "A", "defines": ["k"], "summary": "s", "unit_kind": "concept"},
     ]
@@ -288,8 +309,8 @@ def test_build_mtus_accepts_twenty_line_concepts_and_rejects_nineteen():
     too_short = [
         {"start_line": 1, "end_line": 19, "title": "A", "defines": ["k"], "summary": "s", "unit_kind": "concept"},
     ]
-    with pytest.raises(MtuCoverageError, match="at least 20 lines"):
-        build_mtus(too_short, collection="课件", source_file="ch1.md")
+    mtus = build_mtus(too_short, collection="课件", source_file="ch1.md")
+    assert mtus[0].line_range == (1, 19)
 
 
 def test_build_mtus_merges_or_deletes_auxiliary_units():

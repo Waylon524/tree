@@ -228,23 +228,14 @@ async def test_archivist_clean_trims_repair_deleted_ranges_to_unlocked_segments(
     assert cleaned == "line 1\nline 6"
 
 
-async def test_archivist_cut_mtus_repairs_invalid_metadata_block_only():
+async def test_archivist_cut_mtus_accepts_short_title_without_metadata_retry():
     invalid = """{
       "units": [
         {"start_line": 1, "end_line": 31, "title": "短",
          "defines": ["k"], "summary": "说明产生稳定干涉条纹所需满足的相干条件。", "unit_kind": "concept"}
       ]
     }"""
-    repair = """{"title": "干涉条件"}"""
-
     def response(user):
-        if "REPAIR_MTU_METADATA" in user:
-            assert '"metadata_errors"' in user
-            assert '"field": "title"' in user
-            assert '"start_line": 1' in user
-            assert '"end_line": 31' in user
-            assert '"unit"' not in user
-            return repair
         assert "PREVIOUS ATTEMPT WAS INVALID" not in user
         return invalid
 
@@ -253,9 +244,9 @@ async def test_archivist_cut_mtus_repairs_invalid_metadata_block_only():
 
     mtus = await agent.cut_mtus(_markdown_lines(31), collection="课件", source_file="ch1.md", repair_attempts=1)
 
-    assert mtus[0].title == "干涉条件"
+    assert mtus[0].title == "短"
     assert mtus[0].defines == ["k"]
-    assert len(client.calls) == 2
+    assert len(client.calls) == 1
 
 
 async def test_archivist_cut_mtus_repairs_coverage_before_metadata():
@@ -269,15 +260,10 @@ async def test_archivist_cut_mtus_repairs_coverage_before_metadata():
          "unit_kind": "concept"}
       ]
     }"""
-    metadata_repair = """{"title": "干涉条件"}"""
     assignment = """{"mtu_title": "短"}"""
     seen = []
 
     def response(user):
-        if "REPAIR_MTU_METADATA" in user:
-            seen.append("metadata")
-            assert seen == ["coverage", "metadata"]
-            return metadata_repair
         if "ASSIGN_MTU_RANGE" in user:
             seen.append("coverage")
             assert '"start_line": 32' in user
@@ -296,9 +282,9 @@ async def test_archivist_cut_mtus_repairs_coverage_before_metadata():
     )
 
     assert [mtu.line_range for mtu in mtus] == [(1, 32), (33, 63)]
-    assert mtus[0].title == "干涉条件"
-    assert seen == ["coverage", "metadata"]
-    assert len(client.calls) == 3
+    assert mtus[0].title == "短"
+    assert seen == ["coverage"]
+    assert len(client.calls) == 2
 
 
 async def test_archivist_cut_mtus_repairs_legacy_keywords_as_defines():
@@ -328,20 +314,14 @@ async def test_archivist_cut_mtus_repairs_legacy_keywords_as_defines():
     assert len(client.calls) == 2
 
 
-async def test_archivist_cut_mtus_repairs_summary_metadata_field_only():
+async def test_archivist_cut_mtus_accepts_short_summary_without_metadata_retry():
     invalid = """{
       "units": [
         {"start_line": 1, "end_line": 31, "title": "干涉条件",
          "defines": ["相干光"], "summary": "太短", "unit_kind": "concept"}
       ]
     }"""
-    repair = """{"summary": "说明产生稳定干涉条纹所需满足的相干条件。"}"""
-
     def response(user):
-        if "REPAIR_MTU_METADATA" in user:
-            assert '"field": "summary"' in user
-            assert '"unit"' not in user
-            return repair
         return invalid
 
     client = _FakeClient({"archivist": response})
@@ -349,8 +329,8 @@ async def test_archivist_cut_mtus_repairs_summary_metadata_field_only():
 
     mtus = await agent.cut_mtus(_markdown_lines(31), collection="课件", source_file="ch1.md", repair_attempts=1)
 
-    assert mtus[0].summary == "说明产生稳定干涉条纹所需满足的相干条件。"
-    assert len(client.calls) == 2
+    assert mtus[0].summary == "太短"
+    assert len(client.calls) == 1
 
 
 async def test_archivist_cut_mtus_retries_malformed_initial_json():
@@ -599,7 +579,7 @@ async def test_archivist_cut_mtus_sorts_units_by_source_line():
     assert [mtu.line_range for mtu in mtus] == [(1, 31), (32, 62)]
 
 
-async def test_archivist_cut_mtus_repairs_short_concept_with_local_units_window():
+async def test_archivist_cut_mtus_locally_merges_short_concept():
     short_plan = """{
       "units": [
         {"start_line": 1, "end_line": 19, "title": "干涉片段",
@@ -610,21 +590,9 @@ async def test_archivist_cut_mtus_repairs_short_concept_with_local_units_window(
          "unit_kind": "concept"}
       ]
     }"""
-    repair = """{
-      "units": [
-        {"start_line": 1, "end_line": 60, "title": "衍射条件",
-         "defines": ["衍射"], "summary": "合并短教学片段并说明衍射条件的完整边界。",
-         "unit_kind": "concept"}
-      ]
-    }"""
-
     def response(user):
         if "REPAIR_MTU_UNITS" in user:
-            assert '"problem_type": "short_unit"' in user
-            assert '"window_range"' in user
-            assert '"start_line": 1' in user
-            assert '"end_line": 60' in user
-            return repair
+            raise AssertionError("short concepts should be merged locally")
         return short_plan
 
     client = _FakeClient({"archivist": response})
@@ -634,7 +602,8 @@ async def test_archivist_cut_mtus_repairs_short_concept_with_local_units_window(
 
     assert [mtu.line_range for mtu in mtus] == [(1, 60)]
     assert mtus[0].title == "衍射条件"
-    assert len(client.calls) == 2
+    assert mtus[0].defines == ["衍射", "相干光"]
+    assert len(client.calls) == 1
 
 
 async def test_archivist_cut_mtus_fallback_merges_final_short_concept_to_previous():
@@ -655,7 +624,7 @@ async def test_archivist_cut_mtus_fallback_merges_final_short_concept_to_previou
 
     assert [mtu.line_range for mtu in mtus] == [(1, 52)]
     assert mtus[0].title == "沉淀溶解平衡"
-    assert mtus[0].defines == ["沉淀溶解平衡"]
+    assert mtus[0].defines == ["沉淀溶解平衡", "沉淀转化"]
     assert len(client.calls) == 1
 
 
@@ -677,7 +646,7 @@ async def test_archivist_cut_mtus_fallback_merges_initial_short_concept_to_next(
 
     assert [mtu.line_range for mtu in mtus] == [(1, 52)]
     assert mtus[0].title == "沉淀溶解平衡"
-    assert mtus[0].defines == ["沉淀溶解平衡"]
+    assert mtus[0].defines == ["沉淀溶解平衡", "课程导入"]
     assert len(client.calls) == 1
 
 
@@ -730,7 +699,7 @@ async def test_archivist_cut_mtus_fallback_merges_mixed_short_and_example_empty_
 
     assert [mtu.line_range for mtu in mtus] == [(1, 83), (84, 120)]
     assert mtus[0].title == "多元复合函数求导"
-    assert mtus[0].defines == ["多元复合函数求导法则"]
+    assert mtus[0].defines == ["多元复合函数求导法则", "一阶微分形式不变性求导"]
     assert mtus[1].title == "高阶偏导计算"
     assert len(client.calls) == 1
 
@@ -758,7 +727,7 @@ async def test_archivist_cut_mtus_fallback_keeps_regular_empty_defines_invalid()
     assert len(client.calls) == 1
 
 
-async def test_archivist_cut_mtus_repairs_short_units_before_metadata():
+async def test_archivist_cut_mtus_merges_short_units_deterministically():
     plan = """{
       "units": [
         {"start_line": 1, "end_line": 19, "title": "短片段",
@@ -769,13 +738,6 @@ async def test_archivist_cut_mtus_repairs_short_units_before_metadata():
          "unit_kind": "concept"}
       ]
     }"""
-    repair = """{
-      "units": [
-        {"start_line": 1, "end_line": 60, "title": "衍射条件",
-         "defines": ["衍射"], "summary": "合并短教学片段并说明衍射条件的完整边界。",
-         "unit_kind": "concept"}
-      ]
-    }"""
     seen = []
 
     def response(user):
@@ -783,7 +745,7 @@ async def test_archivist_cut_mtus_repairs_short_units_before_metadata():
             raise AssertionError("metadata repair must not run before short-unit repair")
         if "REPAIR_MTU_UNITS" in user:
             seen.append("short")
-            return repair
+            raise AssertionError("short units should be merged locally")
         return plan
 
     client = _FakeClient({"archivist": response})
@@ -792,8 +754,8 @@ async def test_archivist_cut_mtus_repairs_short_units_before_metadata():
     mtus = await agent.cut_mtus(_markdown_lines(60), collection="课件", source_file="ch1.md", repair_attempts=1)
 
     assert [mtu.line_range for mtu in mtus] == [(1, 60)]
-    assert seen == ["short"]
-    assert len(client.calls) == 2
+    assert seen == []
+    assert len(client.calls) == 1
 
 
 async def test_archivist_cut_mtus_repairs_empty_defines_with_local_units_window():
@@ -828,7 +790,7 @@ async def test_archivist_cut_mtus_repairs_empty_defines_with_local_units_window(
     assert len(client.calls) == 2
 
 
-async def test_archivist_cut_mtus_repairs_adjacent_short_units_across_iterations():
+async def test_archivist_cut_mtus_merges_adjacent_short_units_without_llm_repairs():
     short_plan = """{
       "units": [
         {"start_line": 1, "end_line": 40, "title": "阻尼振动",
@@ -845,31 +807,9 @@ async def test_archivist_cut_mtus_repairs_adjacent_short_units_across_iterations
          "unit_kind": "concept"}
       ]
     }"""
-    first_repair = """{
-      "units": [
-        {"start_line": 1, "end_line": 59, "title": "阻尼振动",
-         "defines": ["阻尼振动", "李萨如图形"], "summary": "合并李萨如图形内容并说明阻尼振动的完整边界。",
-         "unit_kind": "concept"},
-        {"start_line": 60, "end_line": 78, "title": "振动频谱",
-         "defines": ["振动频谱"], "summary": "说明振动分解与频谱表达的教学边界。",
-         "unit_kind": "concept"}
-      ]
-    }"""
-    second_repair = """{
-      "units": [
-        {"start_line": 1, "end_line": 59, "title": "阻尼振动",
-         "defines": ["阻尼振动", "李萨如图形"], "summary": "合并李萨如图形内容并说明阻尼振动的完整边界。",
-         "unit_kind": "concept"},
-        {"start_line": 60, "end_line": 130, "title": "受迫振动",
-         "defines": ["受迫振动", "振动频谱"], "summary": "合并振动频谱内容并说明受迫振动的完整边界。",
-         "unit_kind": "concept"}
-      ]
-    }"""
-    repairs = [first_repair, second_repair]
-
     def response(user):
         if "REPAIR_MTU_UNITS" in user:
-            return repairs.pop(0)
+            raise AssertionError("short concepts should be merged locally")
         return short_plan
 
     client = _FakeClient({"archivist": response})
@@ -877,8 +817,8 @@ async def test_archivist_cut_mtus_repairs_adjacent_short_units_across_iterations
 
     mtus = await agent.cut_mtus(_markdown_lines(130), collection="课件", source_file="ch1.md", repair_attempts=2)
 
-    assert [mtu.line_range for mtu in mtus] == [(1, 59), (60, 130)]
-    assert len(client.calls) == 3
+    assert [mtu.line_range for mtu in mtus] == [(1, 78), (79, 130)]
+    assert len(client.calls) == 1
 
 
 async def test_archivist_cut_mtus_repairs_duplicate_defines_with_same_schema():
@@ -1066,7 +1006,7 @@ async def test_archivist_cut_mtus_raises_when_repairs_exhausted():
     invalid = """{
       "units": [
         {"start_line": 1, "end_line": 31, "title": "A",
-         "defines": ["k"], "summary": "太短", "unit_kind": "concept"}
+         "defines": [], "summary": "太短", "unit_kind": "concept"}
       ]
     }"""
 
@@ -1075,7 +1015,7 @@ async def test_archivist_cut_mtus_raises_when_repairs_exhausted():
     import pytest
     from tree.planner.mtu import MtuCoverageError
 
-    with pytest.raises(MtuCoverageError, match="unit 1 must be an object|title"):
+    with pytest.raises(MtuCoverageError, match="empty_defines"):
         await agent.cut_mtus(_markdown_lines(31), collection="课件", source_file="ch1.md", repair_attempts=1)
 
 

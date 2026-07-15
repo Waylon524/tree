@@ -24,6 +24,7 @@ from tree.cli.commands import rag as rag_cmd
 from tree.config import Settings, load_runtime_env
 from tree.engine.orchestrator import TreeEngine
 from tree.ingest.pipeline import MATERIAL_EXTENSIONS
+from tree.ingest.ocr_engine import pdf_crypto_runtime_status
 from tree.io import paths
 from tree.planner.pipeline import load_dag
 from tree.planner.svg import write_dag_svg
@@ -55,7 +56,13 @@ def main(ctx: typer.Context) -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit non-zero when required packaged runtime capabilities are missing.",
+    ),
+) -> None:
     """Read-only environment health check."""
     root = Path.cwd()
     rprint(f"{theme.brand('T.R.E.E.')} {theme.section('doctor')}")
@@ -73,9 +80,14 @@ def doctor() -> None:
         rprint(f"  {theme.label('rag deps')}         : {theme.status('installed')}")
     else:
         rprint(f"  {theme.label('rag deps')}         : [yellow]missing (pip install '.[rag]')[/yellow]")
+    pdf_crypto_ok, pdf_crypto_detail = pdf_crypto_runtime_status()
+    pdf_crypto_value = "ready" if pdf_crypto_ok else f"missing ({pdf_crypto_detail})"
+    rprint(f"  {theme.label('PDF AES crypto')}   : {theme.status(pdf_crypto_value)}")
     rprint(f"  {theme.label('local embed')}      : {theme.status(local_embed_backend_status())}")
     rprint(f"  {theme.label('embedding model')}  : {theme.status(embedding_model_status())}")
     rprint(f"  {theme.label('embedding server')} : {theme.status(embedding_service_status())}")
+    if strict and not pdf_crypto_ok:
+        raise typer.Exit(1)
 
 
 @app.command()

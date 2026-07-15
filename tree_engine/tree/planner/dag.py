@@ -44,7 +44,7 @@ async def build_dag(
 
     timeout = getattr(settings, "dagger_build_timeout_sec", 480.0)
     repair = getattr(settings, "dagger_repair_attempts", 1)
-    prerequisite_concurrency = max(1, int(getattr(settings, "dagger_prerequisite_concurrency", 5)))
+    prerequisite_concurrency = max(1, int(getattr(settings, "dagger_prerequisite_concurrency", 3)))
     max_nodes = getattr(settings, "dagger_max_nodes_per_call", 400)
 
     if getattr(settings, "dagger_embed_cluster_enabled", False):
@@ -61,7 +61,7 @@ async def build_dag(
         _set_progress_stage(
             progress,
             "cluster",
-            total=1,
+            total=len(mtus),
             done=0,
             status="running",
             message="Building nodes",
@@ -69,7 +69,13 @@ async def build_dag(
         nodes_raw = await _build_nodes_with_repair(
             agent, [_meta(m) for m in mtus], timeout=timeout, repair=repair
         )
-        _advance_progress_stage(progress, "cluster", message="Built nodes")
+        _set_progress_stage(
+            progress,
+            "cluster",
+            done=len(mtus),
+            status="complete",
+            message="Built nodes",
+        )
     else:
         logger.info("Dagger batched node build: %d MTUs > %d per call", len(mtus), max_nodes)
         nodes_raw = await _build_nodes_batched(agent, mtus, timeout=timeout, repair=repair, progress=progress)
@@ -138,7 +144,7 @@ async def _build_clustered_nodes(
     _set_progress_stage(
         progress,
         "cluster",
-        total=len(clusters),
+        total=len(mtus),
         done=0,
         status="running" if clusters else "complete",
         message="Refining candidate clusters",
@@ -154,13 +160,23 @@ async def _build_clustered_nodes(
         )
         if len(member_ids) == 1 and auto_singleton:
             nodes_raw.append(cluster_to_raw_node(cluster, mtus_by_id))
-            _advance_progress_stage(progress, "cluster", message="Accepted singleton cluster")
+            _advance_progress_stage(
+                progress,
+                "cluster",
+                step=len(member_ids),
+                message="Accepted singleton cluster",
+            )
             continue
         payload = cluster_refinement_payload(cluster, mtus_by_id)
         nodes_raw.extend(
             await _build_cluster_nodes_with_repair(agent, payload, timeout=timeout, repair=repair)
         )
-        _advance_progress_stage(progress, "cluster", message="Refined cluster")
+        _advance_progress_stage(
+            progress,
+            "cluster",
+            step=len(member_ids),
+            message="Refined cluster",
+        )
     return nodes_raw
 
 
@@ -827,7 +843,27 @@ async def _build_edges_with_cycle_repair(
         if not cycle:
             return nodes, edges, diagnostics
         if attempt >= repair:
-            raise ValueError(f"Dagger prerequisite cycle remains after repair: {sorted(cycle)}")
+            safe_edges = break_cycles({n["node_id"] for n in nodes}, edges)
+            retained = {
+                (edge["from_node_id"], edge["to_node_id"])
+                for edge in safe_edges
+                if edge.get("relation") == "prerequisite"
+            }
+            removed = sorted(
+                (edge["from_node_id"], edge["to_node_id"])
+                for edge in edges
+                if edge.get("relation") == "prerequisite"
+                and (edge["from_node_id"], edge["to_node_id"]) not in retained
+            )
+            diagnostics.append(
+                {
+                    "reason_code": "cycle_edges_removed",
+                    "severity": "warning",
+                    "removed_edges": removed,
+                    "message": "Removed the lowest-confidence cycle edge after LLM repair was exhausted.",
+                }
+            )
+            return nodes, safe_edges, diagnostics
         raw = await _agent_repair_prerequisites(
             agent,
             {

@@ -8,7 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tree.engine.node_run import NodeRunner, ledger_covered_node_ids, reconcile_ledger_generation
+from tree.engine.node_run import (
+    NodeRunner,
+    NodeRunStagnationError,
+    ledger_covered_node_ids,
+    reconcile_ledger_generation,
+)
 from tree.io import paths
 from tree.observability.limiter import IterationLimitExceeded
 from tree.planner.store import envelope, write_json_atomic
@@ -91,6 +96,18 @@ class _AuditDefectExaminer(_ReconcilingExaminer):
                 exam_defect_kind=self.defect_kind,
             )
         return AuditResult(route=Route.PASS, exam_id="化学平衡", bottleneck_report="# Bottleneck Report\nok")
+
+
+class _StagnatingReconcilingExaminer(_ReconcilingExaminer):
+    async def audit(self, **kw):
+        self.audit_calls += 1
+        if self.audit_calls <= 2:
+            return AuditResult(
+                route=Route.FAIL_KNOWLEDGE_GAP,
+                exam_id="化学平衡",
+                bottleneck_report="# Bottleneck Report\nStill missing the same formula.",
+            )
+        return AuditResult(route=Route.PASS, exam_id="化学平衡", bottleneck_report="ok")
 
 
 class _FakeStudent:
@@ -712,3 +729,55 @@ async def test_node_run_keep_fail_reconciliation_still_raises_iteration_limit(tm
     state = state_mgr.load()
     assert examiner.reconcile_calls == 1
     assert state.node_runs[0].exam_repair_count == 1
+
+
+async def test_node_run_reconciles_after_repeated_equivalent_bottleneck(tmp_path):
+    _seed(tmp_path)
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    examiner = _StagnatingReconcilingExaminer()
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    assert await runner.run_one("n1") == "node_complete"
+
+    state = state_mgr.load()
+    run = state.node_runs[0]
+    assert examiner.reconcile_calls == 1
+    assert examiner.audit_calls == 3
+    assert writer.calls == 1
+    assert run.exam_repair_count == 1
+    assert run.bottleneck_repeat_count == 0
+    assert len(run.bottleneck_history) == 2
+
+
+async def test_node_run_stops_early_when_repeated_bottleneck_cannot_be_reconciled(tmp_path):
+    _seed(tmp_path)
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    examiner = _FakeExaminer(fail_then_pass=10)
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=_FakeWriter(),
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    with pytest.raises(NodeRunStagnationError, match="stagnated"):
+        await runner.run_one("n1")
+
+    run = state_mgr.load().node_runs[0]
+    assert examiner.audit_calls == 2
+    assert run.current_iteration == 2
+    assert run.bottleneck_repeat_count == 2
+    assert len(run.bottleneck_history) == 2
+    assert run.status == "failed"

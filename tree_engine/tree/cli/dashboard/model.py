@@ -95,13 +95,18 @@ def _watch_node_count(progress: dict[str, Any], nodes: list[dict[str, Any]]) -> 
 
 
 def _collect_errors(root: Path, progress: dict[str, Any]) -> list[str]:
+    raw_errors = progress.get("errors") or progress.get("error") or []
+    if isinstance(raw_errors, list):
+        structured = [item for item in raw_errors if isinstance(item, dict)]
+        if structured:
+            return _dedupe([_format_structured_error(item) for item in structured])[-8:]
+
     errors: list[str] = []
     phase = str(progress.get("phase") or "").strip().lower()
     message = str(progress.get("message") or "").strip()
     if phase in {"blocked", "failed", "error"} and message:
         errors.append(message)
 
-    raw_errors = progress.get("errors") or progress.get("error") or []
     if isinstance(raw_errors, str):
         raw_errors = [raw_errors]
     if isinstance(raw_errors, list):
@@ -167,7 +172,19 @@ def _is_shutdown_noise(line: str) -> bool:
         "qdrantclient.__del__" in lowered
         or ("qdrantclient" in lowered and "sys.meta_path is none" in lowered)
         or "python is likely shutting down" in lowered
+        or "nameerror: name 'open' is not defined" in lowered
     )
+
+
+def _format_structured_error(item: dict[str, Any]) -> str:
+    message = str(item.get("message") or item.get("error") or item.get("detail") or "Unknown error")
+    resource = str(item.get("resource") or "").strip()
+    action = str(item.get("action") or "").strip()
+    if resource and resource not in message:
+        message = f"{resource}: {message}"
+    if action:
+        message = f"{message} — Action: {action}"
+    return message
 
 
 def _dedupe(items: list[str]) -> list[str]:

@@ -40,6 +40,18 @@ def test_index_requires_token(workspace):
     assert client.get("/").status_code == 403
 
 
+def test_zero_total_complete_stage_does_not_render_fake_100_percent():
+    from tree.gui.server import _stage_rows
+
+    rows = _stage_rows(
+        {"stages": {"clean": {"status": "complete", "done": 0, "total": 0}}}
+    )
+
+    clean = next(row for row in rows if row["key"] == "clean")
+    assert clean["pct"] == 0
+    assert clean["done"] == clean["total"] == 0
+
+
 def test_index_with_token_sets_cookie(workspace):
     client = _client(workspace)
     resp = client.get("/", params={"token": TOKEN})
@@ -629,11 +641,14 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
     assert data["max_iterations"] == 5
-    assert data["max_active_node_runs"] == 5
+    assert data["max_active_node_runs"] == 3
+    assert data["llm_provider_concurrency"] == 4
     assert data["max_retries"] == 3
     assert data["llm_timeout_sec"] == 480.0
     assert data["source_ocr_concurrency"] == 5
     assert data["archivist_mtu_repair_attempts"] == 8
+    assert data["archivist_chunk_concurrency"] == 2
+    assert data["invalidated_stages"] == []
     assert data["dagger_embed_cluster_enabled"] is True
     assert data["dagger_cluster_auto_accept_same_collection"] is False
     assert "llm_api_key" not in data
@@ -664,6 +679,8 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
             "max_active_node_runs": "3",
             "max_retries": "4",
             "llm_timeout_sec": "600",
+            "llm_provider_concurrency": "6",
+            "archivist_chunk_concurrency": "3",
             "source_ocr_upload_interval_sec": "2.5",
             "dagger_embed_cluster_enabled": False,
             "dagger_cluster_similarity_threshold": "0.72",
@@ -680,6 +697,15 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert data["max_iterations"] == 7
     assert data["dagger_embed_cluster_enabled"] is False
     assert data["dagger_cluster_similarity_threshold"] == 0.72
+    assert data["invalidated_stages"] == [
+        "OCR",
+        "Clean",
+        "Cut",
+        "Embed",
+        "Cluster",
+        "Link",
+        "NodeRun",
+    ]
     written = paths.global_config_path().read_text(encoding="utf-8")
     assert "LLM_API_KEY=sk-new" in written
     assert "LLM_BASE_URL=https://llm.test" in written
@@ -698,6 +724,8 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert "MAX_ACTIVE_NODE_RUNS=3" in written
     assert "MAX_RETRIES=4" in written
     assert "LLM_TIMEOUT_SEC=600" in written
+    assert "LLM_PROVIDER_CONCURRENCY=6" in written
+    assert "ARCHIVIST_CHUNK_CONCURRENCY=3" in written
     assert "SOURCE_OCR_UPLOAD_INTERVAL_SEC=2.5" in written
     assert "DAGGER_EMBED_CLUSTER_ENABLED=false" in written
     assert "DAGGER_CLUSTER_SIMILARITY_THRESHOLD=0.72" in written

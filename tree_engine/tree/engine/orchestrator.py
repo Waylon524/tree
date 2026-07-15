@@ -92,7 +92,7 @@ class TreeEngine:
 
     async def run(self) -> None:
         """Run until all DAG nodes are covered, or until the planner is blocked."""
-        self.progress.reset()
+        self.progress.begin_run()
         _clear_stale_run_logs(self.root)
         await self.prepare_sources()
         reconcile_ledger_generation(self.root)
@@ -115,13 +115,19 @@ class TreeEngine:
                     running[item.node_id] = asyncio.create_task(self.node_runner.run_one(item.node_id))
 
             if not running:
-                if had_failure:
-                    self._refresh_noderun_progress(status="failed", message="NodeRun failed")
-                    self.progress.update({"phase": "failed", "message": "TREE_FAILED — NodeRun failed."})
-                    return
                 if _all_nodes_covered(self.root):
                     self._refresh_noderun_progress(status="complete", message="All nodes complete")
                     self.progress.complete("WOODS_COMPLETE — all source nodes covered.")
+                    return
+                if had_failure:
+                    done, total = self._node_completion_counts()
+                    if done > 0:
+                        message = f"TREE_PARTIAL — {done}/{total} nodes complete; failed nodes need attention."
+                        self._refresh_noderun_progress(status="partial", message=message)
+                        self.progress.update({"phase": "partial", "message": message})
+                    else:
+                        self._refresh_noderun_progress(status="failed", message="NodeRun failed")
+                        self.progress.update({"phase": "failed", "message": "TREE_FAILED — NodeRun failed."})
                     return
                 self._refresh_noderun_progress(status="blocked", message="No ready node runs")
                 self.progress.update({"phase": "blocked", "message": "TREE_BLOCKED — no ready node runs."})
@@ -176,7 +182,7 @@ class TreeEngine:
         state = self.state_mgr.load()
         state = self.state_mgr.mark_node_execution_failed(state, node_id, message)
         self.state_mgr.save(state)
-        self._append_progress_error(message)
+        self._append_progress_error(node_id, message)
 
     def _prune_state_to_current_dag(self) -> None:
         valid_node_ids = {str(node.get("node_id")) for node in load_dag(self.root).get("nodes", []) if node.get("node_id")}
@@ -189,13 +195,16 @@ class TreeEngine:
         state.node_runs = [item for item in state.node_runs if item.node_id in valid_node_ids]
         self.state_mgr.save(state)
 
-    def _append_progress_error(self, message: str) -> None:
+    def _append_progress_error(self, node_id: str, message: str) -> None:
         try:
-            state = self.progress.load()
-            errors = list(state.get("errors") or [])
-            if message not in errors:
-                errors.append(message)
-            self.progress.update({"errors": errors[-8:]})
+            self.progress.record_error(
+                stage="noderun",
+                code="node_run_failed",
+                resource=node_id,
+                message=message,
+                recoverable=True,
+                action="Retry this failed node; its exam, draft, and bottleneck history are preserved.",
+            )
         except Exception:
             return
 
@@ -221,6 +230,11 @@ class TreeEngine:
             )
         except Exception:
             return
+
+    def _node_completion_counts(self) -> tuple[int, int]:
+        nodes = load_dag(self.root).get("nodes", [])
+        covered = ledger_covered_node_ids(self.root)
+        return sum(1 for node in nodes if node.get("node_id") in covered), len(nodes)
 
 
 class Retriever:

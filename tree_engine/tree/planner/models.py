@@ -23,7 +23,7 @@ class MTU(BaseModel):
     unit_kind: str = "concept"  # concept | example | exercise | misconception | ...
     source_order_index: int = 0
     # `text` is intentionally NOT persisted in mtus.json; it is read from the
-    # cleaned Markdown by line_range at embedding time, then the Markdown is deleted.
+    # cleaned Markdown by line_range at embedding time; the source is retained for repair.
 
 
 class KnowledgeNode(BaseModel):

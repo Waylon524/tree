@@ -46,6 +46,7 @@ table.stages td { padding: 5px 6px; vertical-align: middle; }
 .badge-done { background: var(--done); } .fill.badge-done { background: var(--done); }
 .badge-running { background: var(--running); } .fill.badge-running { background: var(--running); }
 .badge-failed { background: var(--failed); } .fill.badge-failed { background: var(--failed); }
+.badge-partial { background: #b7791f; } .fill.badge-partial { background: #b7791f; }
 .badge-wait { background: var(--wait); } .fill.badge-wait { background: var(--wait); }
 .errors { margin-top: 10px; color: var(--failed); font-size: 13px; }
 .errors li { white-space: pre-wrap; overflow-wrap: anywhere; }

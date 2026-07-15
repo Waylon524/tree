@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from tree.ingest.ocr_engine import OCREngine, set_job_store_root
+from tree.ingest.ocr_engine import (
+    OCREngine,
+    PdfCryptoDependencyError,
+    PdfPasswordRequiredError,
+    pdf_crypto_runtime_status,
+    set_job_store_root,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -206,6 +212,44 @@ def test_pdf_chunks_reject_empty_partial_result(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match=r"missing PDF chunks: \[2\]"):
         engine._ocr_pdf_chunks([(chunks[0], {}), (chunks[1], {})])
+
+
+def test_pdf_crypto_runtime_round_trip_is_available():
+    ok, detail = pdf_crypto_runtime_status()
+
+    assert ok, detail
+
+
+def test_pdf_page_count_names_file_when_aes_dependency_is_missing(tmp_path, monkeypatch):
+    import pypdf
+    from pypdf.errors import DependencyError
+
+    pdf = tmp_path / "encrypted lecture.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(
+        pypdf,
+        "PdfReader",
+        lambda path: (_ for _ in ()).throw(DependencyError("crypto missing")),
+    )
+
+    with pytest.raises(PdfCryptoDependencyError, match="encrypted lecture.pdf"):
+        OCREngine._pdf_page_count(pdf)
+
+
+def test_pdf_page_count_names_file_when_password_is_required(tmp_path, monkeypatch):
+    import pypdf
+    from pypdf.errors import WrongPasswordError
+
+    pdf = tmp_path / "locked handout.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(
+        pypdf,
+        "PdfReader",
+        lambda path: (_ for _ in ()).throw(WrongPasswordError("wrong password")),
+    )
+
+    with pytest.raises(PdfPasswordRequiredError, match="locked handout.pdf"):
+        OCREngine._pdf_page_count(pdf)
 
 
 def test_remote_job_id_is_resumed_after_poll_timeout(tmp_path, monkeypatch):

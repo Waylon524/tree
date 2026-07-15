@@ -340,7 +340,7 @@ async def test_archivist_model_change_invalidates_mtu_cache(tmp_path):
         )
 
 
-async def test_rebuild_rejects_excessive_dagger_singleton_fallback(tmp_path):
+async def test_rebuild_keeps_singletons_and_warns_on_excessive_dagger_fallback(tmp_path):
     _seed_material(tmp_path)
     settings = SimpleNamespace(
         dagger_build_timeout_sec=1.0,
@@ -349,10 +349,16 @@ async def test_rebuild_rejects_excessive_dagger_singleton_fallback(tmp_path):
         dagger_max_unassigned_ratio=0.10,
     )
 
-    with pytest.raises(PlannerError, match="fallback quality gate failed"):
-        await rebuild_planner(
-            tmp_path,
-            settings=settings,
-            agents=SimpleNamespace(dagger=_EmptyDagger()),
-            mtu_producer=_make_producer({"calls": 0}),
-        )
+    result = await rebuild_planner(
+        tmp_path,
+        settings=settings,
+        agents=SimpleNamespace(dagger=_EmptyDagger()),
+        mtu_producer=_make_producer({"calls": 0}),
+    )
+
+    assert result["node_count"] == 2
+    nodes_envelope = json.loads(paths.knowledge_nodes_path(tmp_path).read_text(encoding="utf-8"))
+    assert any(
+        item.get("reason_code") == "high_unassigned_ratio"
+        for item in nodes_envelope.get("diagnostics", [])
+    )

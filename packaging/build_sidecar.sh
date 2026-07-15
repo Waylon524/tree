@@ -8,4 +8,10 @@ python -m PyInstaller --noconfirm --clean \
   --distpath packaging/dist --workpath packaging/build \
   packaging/tre-engine.spec
 
+ENGINE="packaging/dist/tre-engine/tre-engine"
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+  ENGINE="${ENGINE}.exe"
+fi
+"$ENGINE" doctor --strict
+
 echo "Built: packaging/dist/tre-engine/tre-engine (run: tre-engine serve --port 8799 --token <t>)"

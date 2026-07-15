@@ -21,10 +21,7 @@ _VALID_UNIT_KINDS = {
     "intro",
 }
 _MAX_DEFINES = 4
-_MIN_FINAL_MTU_LINES = 20
-_TITLE_MIN_WIDTH = 4
 _TITLE_MAX_WIDTH = 40
-_SUMMARY_MIN_WIDTH = 20
 _SUMMARY_MAX_WIDTH = 150
 
 
@@ -88,6 +85,7 @@ def build_mtus(
     order_offset: int = 0,
 ) -> list[MTU]:
     units = _merge_auxiliary_units(units)
+    units = _merge_short_units(units)
     _validate_final_units(units)
     mtus: list[MTU] = []
     for offset, unit in enumerate(units):
@@ -120,11 +118,6 @@ def _validate_final_units(units: list[dict]) -> None:
             raise MtuCoverageError(f"final unit {index} must be concept, got {unit['unit_kind']}")
         if not unit.get("defines"):
             raise MtuCoverageError(f"final unit {index} concept must contain at least one define")
-        line_count = int(unit["end_line"]) - int(unit["start_line"]) + 1
-        if line_count < _MIN_FINAL_MTU_LINES:
-            raise MtuCoverageError(
-                f"final unit {index} must cover at least {_MIN_FINAL_MTU_LINES} lines; got {line_count}"
-            )
 
 
 def _merge_auxiliary_units(units: list[dict]) -> list[dict]:
@@ -144,6 +137,29 @@ def _merge_auxiliary_units(units: list[dict]) -> list[dict]:
     result = [unit for index, unit in enumerate(merged) if index not in removed]
     result.sort(key=lambda item: (item["start_line"], item["end_line"]))
     return result
+
+
+def _merge_short_units(
+    units: list[dict[str, Any]], minimum_lines: int = 20
+) -> list[dict[str, Any]]:
+    """Deterministically absorb short concept units when an adjacent unit exists."""
+    merged = [dict(unit) for unit in units]
+    while len(merged) > 1:
+        short_index = next(
+            (
+                index
+                for index, unit in enumerate(merged)
+                if int(unit["end_line"]) - int(unit["start_line"]) + 1 < minimum_lines
+            ),
+            None,
+        )
+        if short_index is None:
+            break
+        target_index = short_index - 1 if short_index > 0 else 1
+        _absorb_unit(merged[target_index], merged[short_index])
+        merged.pop(short_index)
+        merged.sort(key=lambda item: (item["start_line"], item["end_line"]))
+    return merged
 
 
 def _find_concept_index(
@@ -177,25 +193,16 @@ def _normalize_unit(raw: Any, index: int) -> dict:
         raise MtuCoverageError(f"unit {index} must be an object")
     start = _int(raw.get("start_line"), f"unit {index} start_line")
     end = _int(raw.get("end_line"), f"unit {index} end_line")
-    title = str(raw.get("title") or "").strip()
-    _validate_display_width(
-        title,
-        f"unit {index} title",
-        min_width=_TITLE_MIN_WIDTH,
-        max_width=_TITLE_MAX_WIDTH,
+    title = _truncate_display_width(
+        str(raw.get("title") or "").strip() or f"教学单元 {index}",
+        _TITLE_MAX_WIDTH,
     )
     if "keywords" in raw:
         raise MtuCoverageError(f"unit {index} keywords is not allowed; use defines")
     defines = normalize_concepts(raw.get("defines") or [])
     if len(defines) > _MAX_DEFINES:
         raise MtuCoverageError(f"unit {index} defines must contain no more than {_MAX_DEFINES} items")
-    summary = str(raw.get("summary") or "").strip()
-    _validate_display_width(
-        summary,
-        f"unit {index} summary",
-        min_width=_SUMMARY_MIN_WIDTH,
-        max_width=_SUMMARY_MAX_WIDTH,
-    )
+    summary = _truncate_display_width(str(raw.get("summary") or "").strip() or title, _SUMMARY_MAX_WIDTH)
     unit_kind = str(raw.get("unit_kind") or "concept").strip().lower()
     if unit_kind not in _VALID_UNIT_KINDS:
         unit_kind = "concept"
@@ -216,13 +223,18 @@ def _int(value: Any, label: str) -> int:
         raise MtuCoverageError(f"{label} must be an integer") from exc
 
 
-def _validate_display_width(value: str, label: str, *, min_width: int, max_width: int) -> None:
-    width = _display_width(value)
-    if width < min_width or width > max_width:
-        raise MtuCoverageError(
-            f"{label} display length must be {min_width}-{max_width} characters "
-            f"(Han/full-width characters count as 2); got {width}"
-        )
+def _truncate_display_width(value: str, maximum: int) -> str:
+    if _display_width(value) <= maximum:
+        return value
+    result: list[str] = []
+    width = 0
+    for char in value:
+        char_width = 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        if width + char_width > maximum - 1:
+            break
+        result.append(char)
+        width += char_width
+    return "".join(result).rstrip() + "…"
 
 
 def _display_width(value: str) -> int:

@@ -354,6 +354,9 @@ table.stages td {
 .badge-failed {
   background: var(--failed);
 }
+.badge-partial {
+  background: #b7791f;
+}
 .badge-wait {
   background: var(--wait);
 }
@@ -365,6 +368,9 @@ table.stages td {
 }
 .fill.badge-failed {
   background: var(--failed);
+}
+.fill.badge-partial {
+  background: #b7791f;
 }
 .fill.badge-wait {
   background: var(--wait);

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from difflib import SequenceMatcher
 import re
 from pathlib import Path
 from typing import Any, Protocol
@@ -33,6 +34,10 @@ class Retriever(Protocol):
         self, query: str, *, allowed_paths: set[str], top_k: int
     ) -> list[dict[str, Any]]: ...
     def index_finished(self, node_id: str, path: Path) -> int: ...
+
+
+class NodeRunStagnationError(RuntimeError):
+    """Raised when repeated audit feedback no longer produces progress."""
 
 
 class NodeRunner:
@@ -215,6 +220,34 @@ class NodeRunner:
                         iteration = iter_state.iteration
                         continue
 
+            repeat_count = self._record_bottleneck(execution, bottleneck_report)
+            if repeat_count >= 2 and iter_state.draft_path and iter_state.draft_path.exists():
+                repaired = await self._reconcile_exam(
+                    iter_state,
+                    execution,
+                    collections,
+                    prior_paths,
+                    allowed_paths,
+                    node_context,
+                    bottleneck_report=bottleneck_report,
+                    answer_key_only=False,
+                    require_draft=True,
+                    require_bottleneck=True,
+                )
+                if repaired:
+                    exam = iter_state.exam_sections
+                    assert exam is not None
+                    previous_bottleneck = iter_state.previous_bottleneck
+                    iteration = iter_state.iteration
+                    continue
+                error = (
+                    f"NodeRun stagnated for {execution.node_id}: substantially identical audit "
+                    f"feedback repeated {repeat_count} times and the one-time exam "
+                    "reconciliation could not resolve it. Review the saved draft and exam."
+                )
+                self._persist_run_state(execution.node_run_id, status="failed", last_error=error)
+                raise NodeRunStagnationError(error)
+
             wq = f"{exam.knowledge_point}\n{bottleneck_report}"
             result = await self.writer.draft(
                 span_title=exam.knowledge_point,
@@ -244,6 +277,21 @@ class NodeRunner:
                 status="running",
                 last_error=None,
             )
+
+    def _record_bottleneck(self, execution: Any, bottleneck_report: str) -> int:
+        state = self.state_mgr.load()
+        run = self.state_mgr.find_run(state, execution.node_run_id)
+        previous = run.previous_bottleneck if run else None
+        repeat_count = int(getattr(run, "bottleneck_repeat_count", 0) or 0)
+        repeat_count = repeat_count + 1 if _bottlenecks_equivalent(previous, bottleneck_report) else 1
+        history = list(getattr(run, "bottleneck_history", []) or [])
+        history.append(bottleneck_report)
+        self._persist_run_state(
+            execution.node_run_id,
+            bottleneck_repeat_count=repeat_count,
+            bottleneck_history=history[-20:],
+        )
+        return repeat_count
 
     async def _try_reconcile_exam_from_audit_defect(
         self,
@@ -386,6 +434,7 @@ class NodeRunner:
             exam_sections=next_exam,
             current_iteration=0,
             previous_bottleneck=None,
+            bottleneck_repeat_count=0,
             exam_repair_count=repair_count,
             status="running",
             last_error=None,
@@ -929,6 +978,22 @@ def _safe_title(title: str) -> str:
 
 def _clean_title(title: str) -> str:
     return re.sub(r"^\s*\d{1,4}[.．、_\-\s]+", "", title.strip()).strip()
+
+
+def _bottlenecks_equivalent(previous: str | None, current: str) -> bool:
+    if not previous:
+        return False
+
+    def normalize(value: str) -> str:
+        value = re.sub(r"(?im)^\s*#*\s*bottleneck report\s*$", "", value)
+        value = re.sub(r"[\W_]+", "", value.casefold())
+        return value
+
+    left = normalize(previous)
+    right = normalize(current)
+    if not left or not right:
+        return False
+    return left == right or SequenceMatcher(None, left, right).ratio() >= 0.88
 
 
 def _strip_first_h1(text: str) -> str:

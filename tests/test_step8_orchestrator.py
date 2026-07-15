@@ -28,7 +28,7 @@ class _FakeRunner:
                         "node_id": node_id,
                         "output_path": f"outputs/{node_id}.A.md",
                         "title": "A",
-                        "node_ids": ["n1"],
+                        "node_ids": [node_id],
                         "file_seq": "01",
                     }
                 ]
@@ -280,6 +280,91 @@ async def test_tree_engine_marks_failed_node_and_retries_on_next_run(tmp_path, m
     state = StateManager(paths.pipeline_state_path(tmp_path)).load()
     assert state.node_executions[0].status == "completed"
     assert state.node_runs[0].status == "complete"
+
+
+async def test_tree_engine_keeps_completed_nodes_when_an_independent_node_fails(
+    tmp_path, monkeypatch
+):
+    paths.ensure_workspace_dirs(tmp_path)
+    _seed_dag(
+        tmp_path,
+        [
+            {"node_id": "good", "title": "Good", "collections": ["课件"]},
+            {"node_id": "bad", "title": "Bad", "collections": ["课件"]},
+        ],
+    )
+
+    async def _noop_prepare(engine):
+        return {"mtu_count": 0}
+
+    monkeypatch.setattr("tree.engine.orchestrator.prepare_sources", _noop_prepare)
+
+    class _PartialRunner(_FakeRunner):
+        async def run_one(self, node_id: str) -> str:
+            if node_id == "bad":
+                raise RuntimeError("bad node")
+            return await super().run_one(node_id)
+
+    engine = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=2),
+        node_runner=_PartialRunner(tmp_path),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+
+    await engine.run()
+
+    progress = engine.progress.load()
+    assert progress["phase"] == "partial"
+    assert progress["stages"]["noderun"]["status"] == "partial"
+    assert progress["stages"]["noderun"]["done"] == 1
+    assert progress["stages"]["noderun"]["total"] == 2
+    state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+    assert StateManager(paths.pipeline_state_path(tmp_path)).find_execution(state, "good").status == "completed"
+    assert StateManager(paths.pipeline_state_path(tmp_path)).find_execution(state, "bad").status == "failed"
+
+
+def test_retry_failed_node_preserves_exam_draft_and_bottleneck(tmp_path):
+    from tree.state.models import ExamSections, NodeExecutionRecord, NodeRunRecord, PipelineState
+
+    draft = tmp_path / "draft.md"
+    draft.write_text("draft", encoding="utf-8")
+    manager = StateManager(paths.pipeline_state_path(tmp_path))
+    state = PipelineState(
+        node_executions=[
+            NodeExecutionRecord(node_id="n1", status="failed", node_run_id="n1::run")
+        ],
+        node_runs=[
+            NodeRunRecord(
+                node_id="n1",
+                run_id="n1::run",
+                status="failed",
+                current_iteration=4,
+                exam_sections=ExamSections(
+                    knowledge_point="A",
+                    covered_node_ids=["n1"],
+                    blind_exam="Q",
+                    answer_key="A",
+                    writer_instructions="W",
+                ),
+                draft_path=draft,
+                previous_bottleneck="same bottleneck",
+                exam_repair_count=1,
+                last_error="boom",
+            )
+        ],
+    )
+
+    resumed = manager.retry_failed_node_executions(state)
+    run = resumed.node_runs[0]
+
+    assert resumed.node_executions[0].status == "in_progress"
+    assert run.status == "running"
+    assert run.current_iteration == 4
+    assert run.exam_sections is not None and run.exam_sections.answer_key == "A"
+    assert run.draft_path == draft
+    assert run.previous_bottleneck == "same bottleneck"
+    assert run.exam_repair_count == 1
+    assert run.last_error is None
 
 
 async def _wait_until(predicate):

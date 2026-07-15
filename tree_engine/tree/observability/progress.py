@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,9 @@ def _empty_state() -> dict[str, Any]:
         "phase": "idle",
         "message": "",
         "updated_at": _now(),
+        "run_id": "",
+        "generation_id": "",
+        "errors": [],
         "source_ingest": {},
         "planner": {},
         "learning_loop": {},
@@ -58,9 +62,41 @@ class ProgressTracker:
         self.root = Path(root)
         self.path = paths.progress_path(self.root)
         self._lock = threading.Lock()
+        self._run_id: str | None = None
 
     def reset(self) -> None:
+        self._run_id = None
         write_json_atomic(self.path, _empty_state())
+
+    def begin_run(self) -> str:
+        """Start a run without discarding durable cumulative stage counters."""
+        with self._lock:
+            state = self.load()
+            self._run_id = uuid.uuid4().hex
+            for stage in state["stages"].values():
+                stage["active"] = []
+                if str(stage.get("status") or "pending").lower() not in {"complete", "completed"}:
+                    stage["status"] = "pending"
+            state.update(
+                {
+                    "run_id": self._run_id,
+                    "phase": "running",
+                    "message": "Preparing pipeline",
+                    "errors": [],
+                    "updated_at": _now(),
+                }
+            )
+            write_json_atomic(self.path, state)
+            return self._run_id
+
+    def set_generation_id(self, generation_id: str) -> None:
+        with self._lock:
+            state = self.load()
+            if not self._may_update(state):
+                return
+            state["generation_id"] = str(generation_id or "")
+            state["updated_at"] = _now()
+            write_json_atomic(self.path, state)
 
     def load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -72,12 +108,50 @@ class ProgressTracker:
     def update(self, patch: dict[str, Any]) -> None:
         with self._lock:
             state = self.load()
+            if not self._may_update(state):
+                return
             _deep_update(state, patch)
             state["updated_at"] = _now()
             write_json_atomic(self.path, state)
 
     def complete(self, message: str) -> None:
         self.update({"phase": "complete", "message": message})
+
+    def record_error(
+        self,
+        *,
+        stage: str,
+        message: str,
+        code: str = "pipeline_error",
+        resource: str = "",
+        retry_count: int = 0,
+        recoverable: bool = False,
+        action: str = "",
+    ) -> None:
+        """Persist one deduplicated, actionable error for the current run."""
+        with self._lock:
+            state = self.load()
+            if not self._may_update(state):
+                return
+            record = {
+                "run_id": str(state.get("run_id") or ""),
+                "generation_id": str(state.get("generation_id") or ""),
+                "stage": str(stage),
+                "code": str(code),
+                "resource": str(resource),
+                "message": str(message),
+                "retry_count": max(0, int(retry_count)),
+                "recoverable": bool(recoverable),
+                "action": str(action),
+                "timestamp": _now(),
+            }
+            errors = [item for item in state.get("errors", []) if isinstance(item, dict)]
+            key = _error_key(record)
+            errors = [item for item in errors if _error_key(item) != key]
+            errors.append(record)
+            state["errors"] = errors[-20:]
+            state["updated_at"] = _now()
+            write_json_atomic(self.path, state)
 
     def set_stage(
         self,
@@ -91,6 +165,8 @@ class ProgressTracker:
     ) -> None:
         with self._lock:
             state = self.load()
+            if not self._may_update(state):
+                return
             data = _stage_data(state, stage)
             if total is not None:
                 data["total"] = max(0, int(total))
@@ -118,6 +194,8 @@ class ProgressTracker:
     ) -> None:
         with self._lock:
             state = self.load()
+            if not self._may_update(state):
+                return
             data = _stage_data(state, stage)
             data["total"] = max(0, int(data.get("total", 0)) + int(amount))
             if status is not None:
@@ -139,6 +217,8 @@ class ProgressTracker:
     ) -> None:
         with self._lock:
             state = self.load()
+            if not self._may_update(state):
+                return
             data = _stage_data(state, stage)
             total = int(data.get("total", 0))
             done = int(data.get("done", 0)) + int(step)
@@ -158,6 +238,8 @@ class ProgressTracker:
     def complete_stage(self, stage: str, message: str | None = None) -> None:
         with self._lock:
             state = self.load()
+            if not self._may_update(state):
+                return
             data = _stage_data(state, stage)
             total = int(data.get("total", 0))
             if total:
@@ -168,6 +250,9 @@ class ProgressTracker:
                 data["message"] = message
             state["updated_at"] = _now()
             write_json_atomic(self.path, state)
+
+    def _may_update(self, state: dict[str, Any]) -> bool:
+        return self._run_id is None or str(state.get("run_id") or "") == self._run_id
 
 
 def load_progress(root: Path) -> dict[str, Any]:
@@ -183,6 +268,9 @@ def _deep_update(target: dict[str, Any], patch: dict[str, Any]) -> None:
 
 
 def _ensure_stage_defaults(state: dict[str, Any]) -> dict[str, Any]:
+    state.setdefault("run_id", "")
+    state.setdefault("generation_id", "")
+    state.setdefault("errors", [])
     state.setdefault("source_ingest", {})
     state.setdefault("planner", {})
     state.setdefault("learning_loop", {})
@@ -218,3 +306,12 @@ def _active_items(active: list[str] | str | Any) -> list[str]:
     else:
         items = [str(active)] if active else []
     return items[:5]
+
+
+def _error_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(item.get("stage") or ""),
+        str(item.get("code") or ""),
+        str(item.get("resource") or ""),
+        str(item.get("message") or ""),
+    )

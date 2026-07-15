@@ -45,23 +45,25 @@ const EMPTY_ROLE_MODELS: RoleModels = {
 
 const EMPTY_ADVANCED_FIELDS: AdvancedSettings = {
   max_iterations: "5",
-  max_active_node_runs: "5",
+  max_active_node_runs: "3",
   max_examiner_span_nodes: "3",
   max_retries: "3",
   max_format_retries: "2",
   llm_timeout_sec: "480",
+  llm_provider_concurrency: "4",
   pro_degradation_threshold: "3",
   pro_degradation_cooldown_sec: "600",
-  source_ingest_concurrency: "16",
+  source_ingest_concurrency: "4",
   source_ocr_concurrency: "5",
   source_ocr_pdf_max_pages_per_job: "99",
   source_ocr_upload_interval_sec: "5",
   source_embedding_concurrency: "1",
   archivist_mtu_cut_timeout_sec: "480",
   archivist_mtu_repair_attempts: "8",
+  archivist_chunk_concurrency: "2",
   dagger_build_timeout_sec: "480",
   dagger_repair_attempts: "3",
-  dagger_prerequisite_concurrency: "5",
+  dagger_prerequisite_concurrency: "3",
   dagger_max_nodes_per_call: "400",
   dagger_embed_cluster_enabled: true,
   dagger_cluster_similarity_threshold: "0.80",
@@ -159,6 +161,7 @@ const ADVANCED_GROUPS: AdvancedGroup[] = [
       { key: "max_retries", kind: "number", min: "0", max: "20" },
       { key: "max_format_retries", kind: "number", min: "0", max: "10" },
       { key: "llm_timeout_sec", kind: "number", min: "10", max: "3600", step: "1" },
+      { key: "llm_provider_concurrency", kind: "number", min: "1", max: "32" },
       { key: "pro_degradation_threshold", kind: "number", min: "1", max: "20" },
       { key: "pro_degradation_cooldown_sec", kind: "number", min: "0", max: "86400" },
     ],
@@ -178,6 +181,7 @@ const ADVANCED_GROUPS: AdvancedGroup[] = [
     fields: [
       { key: "archivist_mtu_cut_timeout_sec", kind: "number", min: "10", max: "3600" },
       { key: "archivist_mtu_repair_attempts", kind: "number", min: "0", max: "20" },
+      { key: "archivist_chunk_concurrency", kind: "number", min: "1", max: "16" },
     ],
   },
   {
@@ -205,6 +209,7 @@ function advancedFieldsFromSettings(settings: SettingsData): AdvancedSettings {
     max_retries: String(settings.max_retries),
     max_format_retries: String(settings.max_format_retries),
     llm_timeout_sec: String(settings.llm_timeout_sec),
+    llm_provider_concurrency: String(settings.llm_provider_concurrency),
     pro_degradation_threshold: String(settings.pro_degradation_threshold),
     pro_degradation_cooldown_sec: String(settings.pro_degradation_cooldown_sec),
     source_ingest_concurrency: String(settings.source_ingest_concurrency),
@@ -214,6 +219,7 @@ function advancedFieldsFromSettings(settings: SettingsData): AdvancedSettings {
     source_embedding_concurrency: String(settings.source_embedding_concurrency),
     archivist_mtu_cut_timeout_sec: String(settings.archivist_mtu_cut_timeout_sec),
     archivist_mtu_repair_attempts: String(settings.archivist_mtu_repair_attempts),
+    archivist_chunk_concurrency: String(settings.archivist_chunk_concurrency),
     dagger_build_timeout_sec: String(settings.dagger_build_timeout_sec),
     dagger_repair_attempts: String(settings.dagger_repair_attempts),
     dagger_prerequisite_concurrency: String(settings.dagger_prerequisite_concurrency),
@@ -312,7 +318,10 @@ export function Settings() {
       setSettings(saved);
       setFields(fieldsFromSettings(saved));
       setOk(true);
-      setMessage(t("settings.saved"));
+      const impact = saved.invalidated_stages.length
+        ? ` ${t("settings.invalidatedStages")}: ${saved.invalidated_stages.join(" → ")}`
+        : "";
+      setMessage(`${t("settings.saved")}${impact}`);
     } catch (err) {
       setOk(false);
       setMessage(String(err));

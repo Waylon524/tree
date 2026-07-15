@@ -55,7 +55,7 @@ function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> })
   const stageKey = isStageKey(key) ? key : null;
   const label = stageKey ? t(`stage.${stageKey}`) : row.label;
   const tip = stageKey ? t(`stage.${stageKey}.tip`) : "";
-  const badgeKey = ["done", "running", "failed", "wait"].includes(row.badge)
+  const badgeKey = ["done", "running", "failed", "partial", "wait"].includes(row.badge)
     ? `badge.${row.badge}`
     : "";
   return (

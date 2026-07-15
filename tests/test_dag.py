@@ -10,6 +10,7 @@ import pytest
 from tree.agents.prompts import DAGGER_PREREQUISITES_PROMPT, DAGGER_PROMPT
 from tree.planner.cluster import build_candidate_clusters
 from tree.planner.dag import (
+    _find_cycle,
     _validate_node_replacements,
     _validate_prerequisites,
     break_cycles,
@@ -1105,3 +1106,30 @@ async def test_build_dag_repairs_cycle_with_llm_linear_order():
     titles_by_id = {n["node_id"]: n["title"] for n in dag["nodes"]}
     assert [(titles_by_id[e["from_node_id"]], titles_by_id[e["to_node_id"]]) for e in dag["edges"]] == [("A", "B")]
     assert agent.repair_calls == 1
+
+
+async def test_build_dag_drops_cycle_edge_when_llm_repairs_are_exhausted():
+    mtus = [_mtu("mtu:1", "A", "c", 0), _mtu("mtu:2", "B", "c", 1)]
+    cyclic = [
+        {"node_title": "A", "required_defines": ["B"], "reason": "bad cycle"},
+        {"node_title": "B", "required_defines": ["A"], "reason": "bad cycle"},
+    ]
+    agent = _DefinesAgent(
+        nodes=[
+            {"title": "A", "member_mtu_ids": ["mtu:1"], "defines": ["A"]},
+            {"title": "B", "member_mtu_ids": ["mtu:2"], "defines": ["B"]},
+        ],
+        prerequisites=cyclic,
+        repairs=[cyclic],
+    )
+
+    dag = await build_dag(
+        agent,
+        mtus,
+        settings=SimpleNamespace(**{**_SETTINGS.__dict__, "dagger_repair_attempts": 1}),
+    )
+
+    assert len(dag["edges"]) == 1
+    assert not _find_cycle({node["node_id"] for node in dag["nodes"]}, dag["edges"])
+    diagnostic = next(d for d in dag["diagnostics"] if d["reason_code"] == "cycle_edges_removed")
+    assert len(diagnostic["removed_edges"]) == 1

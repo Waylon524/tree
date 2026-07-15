@@ -848,19 +848,6 @@ def _semantic_unit_problems(units: list[dict[str, Any]]) -> list[dict[str, Any]]
     for index, unit in enumerate(units, start=1):
         if unit.get("unit_kind") != "concept":
             continue
-        line_count = int(unit["end_line"]) - int(unit["start_line"]) + 1
-        if line_count < _MIN_FINAL_MTU_LINES:
-            problems.append(
-                {
-                    "problem_type": "short_unit",
-                    "index": index,
-                    "title": unit["title"],
-                    "range": {"start_line": unit["start_line"], "end_line": unit["end_line"]},
-                    "line_count": line_count,
-                    "minimum_lines": _MIN_FINAL_MTU_LINES,
-                }
-            )
-            continue
         if not unit.get("defines"):
             problems.append(
                 {
@@ -978,11 +965,6 @@ def _normalize_repair_units(
         if unit["unit_kind"] == "concept":
             if not unit.get("defines") and _unit_still_matches_semantic_problem(unit, problem):
                 raise MtuCoverageError(f"unit repair concept `{unit['title']}` must contain at least one define")
-            line_span = end - start + 1
-            if line_span < _MIN_FINAL_MTU_LINES and _unit_still_matches_semantic_problem(unit, problem):
-                raise MtuCoverageError(
-                    f"unit repair concept `{unit['title']}` must cover at least {_MIN_FINAL_MTU_LINES} lines; got {line_span}"
-                )
         expected = end + 1
     if expected != window_end + 1:
         raise MtuCoverageError(f"unit repair gap: lines {expected}-{window_end} uncovered")

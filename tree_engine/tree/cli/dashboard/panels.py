@@ -22,6 +22,8 @@ _STATUS_BADGES = {
     "failed": "FAILED",
     "blocked": "FAILED",
     "error": "FAILED",
+    "partial": "PARTIAL",
+    "needs_attention": "PARTIAL",
     "pending": "WAIT",
     "idle": "WAIT",
 }
@@ -113,6 +115,8 @@ def _watch_state(text: str) -> str:
     normalized = text.strip().lower()
     if normalized in {"failed", "blocked", "error"}:
         color = "red"
+    elif normalized in {"partial", "needs_attention"}:
+        color = "yellow"
     elif normalized in {"complete", "completed"}:
         color = theme.TREE_GREEN
     elif normalized in {"running", "in_progress", "active"}:

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from tree.engine.ingest_driver import (
+    _clean_and_cut_chunk,
     prepare_sources,
     remove_ocr_image_html,
     split_raw_markdown_for_cleaning,
@@ -61,6 +62,34 @@ class _FakeArchivist:
             },
         ]
         return build_mtus(units, collection=collection, source_file=source_file, order_offset=order_offset)
+
+
+class _EmptyCleaningArchivist:
+    def __init__(self):
+        self.calls = 0
+
+    async def clean(self, *_args, **_kwargs):
+        self.calls += 1
+        return ""
+
+
+async def test_nonempty_chunk_cleaned_to_empty_retries_then_fails_explicitly(tmp_path):
+    archivist = _EmptyCleaningArchivist()
+    engine = SimpleNamespace(settings=_settings(tmp_path), archivist=archivist)
+
+    with pytest.raises(RuntimeError, match="cleaned non-empty source chunk to empty twice: ch1.md"):
+        await _clean_and_cut_chunk(
+            engine,
+            tmp_path,
+            "source text",
+            collection="课件",
+            source_file="ch1.md",
+            source_id="source:1",
+            source_sha256="abc",
+            order_offset=0,
+        )
+
+    assert archivist.calls == 2
 
 
 class _EchoDagger:
@@ -127,7 +156,7 @@ def _settings(tmp_path):
     )
 
 
-async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(tmp_path, monkeypatch):
+async def test_prepare_sources_builds_planner_indexes_mtus_and_retains_repair_source(tmp_path, monkeypatch):
     material = tmp_path / "materials" / "课件" / "ch1.md"
     material.parent.mkdir(parents=True)
     material.write_text(_raw_lines(62), encoding="utf-8")
@@ -166,7 +195,7 @@ async def test_prepare_sources_builds_planner_indexes_mtus_and_deletes_markdown(
     assert not any(node_id for _, _, node_id in indexer.indexed)
     assert set(indexer.updated_node_ids) == {mtu_id for mtu_id, _, _ in indexer.indexed}
     assert all(indexer.updated_node_ids.values())
-    assert not any(paths.source_markdown_root(tmp_path).rglob("*.md"))
+    assert any(paths.source_markdown_root(tmp_path).rglob("*.md"))
     stages = engine.progress.load()["stages"]
     assert stages["ocr"]["done"] == 1
     assert stages["ocr"]["total"] == 1
@@ -369,14 +398,14 @@ class _BlockingArchivist:
     def __init__(self):
         self.active = 0
         self.max_active = 0
-        self.started_five = asyncio.Event()
+        self.started_two = asyncio.Event()
         self.release = asyncio.Event()
 
     async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
-        if self.active == 5:
-            self.started_five.set()
+        if self.active == 2:
+            self.started_two.set()
         try:
             await self.release.wait()
             return raw_markdown.replace("raw", "clean")
@@ -412,7 +441,7 @@ class _BlockingArchivist:
         )
 
 
-async def test_prepare_sources_processes_chunks_with_max_five_concurrent_parts(tmp_path, monkeypatch):
+async def test_prepare_sources_defaults_to_two_concurrent_parts(tmp_path, monkeypatch):
     material = tmp_path / "materials" / "课件" / "long.md"
     material.parent.mkdir(parents=True)
     raw = "ignored"
@@ -431,8 +460,8 @@ async def test_prepare_sources_processes_chunks_with_max_five_concurrent_parts(t
 
     task = asyncio.create_task(prepare_sources(engine))
     try:
-        await asyncio.wait_for(archivist.started_five.wait(), timeout=1)
-        assert archivist.active == 5
+        await asyncio.wait_for(archivist.started_two.wait(), timeout=1)
+        assert archivist.active == 2
         archivist.release.set()
         await task
     finally:
@@ -440,7 +469,7 @@ async def test_prepare_sources_processes_chunks_with_max_five_concurrent_parts(t
         if not task.done():
             task.cancel()
 
-    assert archivist.max_active == 5
+    assert archivist.max_active == 2
 
 
 class RateLimitError(Exception):
@@ -622,9 +651,13 @@ async def test_unchanged_material_skips_planner_rebuild_when_artifacts_ready(tmp
     assert summary["mtu_count"] == 2
     stages = engine.progress.load()["stages"]
     assert stages["cluster"]["status"] == "complete"
-    assert stages["cluster"]["message"] == "Reused existing nodes"
+    assert stages["cluster"]["message"] == "Cluster complete"
     assert stages["link"]["status"] == "complete"
-    assert stages["link"]["message"] == "Reused existing DAG"
+    assert stages["link"]["message"] == "Link complete"
+    assert stages["ocr"]["done"] == stages["ocr"]["total"] == 1
+    assert stages["clean"]["done"] == stages["clean"]["total"] == 1
+    assert stages["cut"]["done"] == stages["cut"]["total"] == 1
+    assert stages["embed"]["done"] == stages["embed"]["total"] == 2
 
 
 async def test_clean_failure_marks_stage_failed_without_advancing_done(tmp_path, monkeypatch):
@@ -649,7 +682,8 @@ async def test_clean_failure_marks_stage_failed_without_advancing_done(tmp_path,
     assert progress["stages"]["clean"]["done"] == 0
     assert progress["stages"]["cut"]["status"] == "failed"
     assert progress["stages"]["cut"]["done"] == 0
-    assert "bad clean json" in progress["errors"][0]
+    assert "bad clean json" in progress["errors"][0]["message"]
+    assert progress["errors"][0]["resource"] == "课件/ch1.md"
 
 
 async def test_resumes_via_ocr_checkpoint_when_mtu_cache_missing(tmp_path, monkeypatch):

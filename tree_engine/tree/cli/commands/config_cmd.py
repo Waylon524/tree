@@ -31,23 +31,25 @@ _DEFAULT_ENV = {
     "LLAMA_SERVER_CTX": str(DEFAULT_LLAMA_SERVER_CTX),
     "SOURCE_MTU_CHUNK_TOKENS": str(DEFAULT_SOURCE_MTU_CHUNK_TOKENS),
     "MAX_ITERATIONS": "5",
-    "MAX_ACTIVE_NODE_RUNS": "5",
+    "MAX_ACTIVE_NODE_RUNS": "3",
     "MAX_EXAMINER_SPAN_NODES": "3",
     "MAX_RETRIES": "3",
     "MAX_FORMAT_RETRIES": "2",
     "LLM_TIMEOUT_SEC": "480",
+    "LLM_PROVIDER_CONCURRENCY": "4",
     "PRO_DEGRADATION_THRESHOLD": "3",
     "PRO_DEGRADATION_COOLDOWN_SEC": "600",
-    "SOURCE_INGEST_CONCURRENCY": "16",
+    "SOURCE_INGEST_CONCURRENCY": "4",
     "SOURCE_OCR_CONCURRENCY": "5",
     "SOURCE_OCR_PDF_MAX_PAGES_PER_JOB": "99",
     "SOURCE_OCR_UPLOAD_INTERVAL_SEC": "5.0",
     "SOURCE_EMBEDDING_CONCURRENCY": "1",
     "ARCHIVIST_MTU_CUT_TIMEOUT_SEC": "480",
     "ARCHIVIST_MTU_REPAIR_ATTEMPTS": "8",
+    "ARCHIVIST_CHUNK_CONCURRENCY": "2",
     "DAGGER_BUILD_TIMEOUT_SEC": "480",
     "DAGGER_REPAIR_ATTEMPTS": "3",
-    "DAGGER_PREREQUISITE_CONCURRENCY": "5",
+    "DAGGER_PREREQUISITE_CONCURRENCY": "3",
     "DAGGER_MAX_NODES_PER_CALL": "400",
     "DAGGER_EMBED_CLUSTER_ENABLED": "true",
     "DAGGER_CLUSTER_SIMILARITY_THRESHOLD": "0.80",
@@ -77,6 +79,7 @@ _WRITE_ORDER = (
     "MAX_RETRIES",
     "MAX_FORMAT_RETRIES",
     "LLM_TIMEOUT_SEC",
+    "LLM_PROVIDER_CONCURRENCY",
     "PRO_DEGRADATION_THRESHOLD",
     "PRO_DEGRADATION_COOLDOWN_SEC",
     "SOURCE_INGEST_CONCURRENCY",
@@ -86,6 +89,7 @@ _WRITE_ORDER = (
     "SOURCE_EMBEDDING_CONCURRENCY",
     "ARCHIVIST_MTU_CUT_TIMEOUT_SEC",
     "ARCHIVIST_MTU_REPAIR_ATTEMPTS",
+    "ARCHIVIST_CHUNK_CONCURRENCY",
     "DAGGER_BUILD_TIMEOUT_SEC",
     "DAGGER_REPAIR_ATTEMPTS",
     "DAGGER_PREREQUISITE_CONCURRENCY",
@@ -103,6 +107,7 @@ _INT_SETTINGS = {
     "max_active_node_runs": ("MAX_ACTIVE_NODE_RUNS", 1, 32),
     "max_examiner_span_nodes": ("MAX_EXAMINER_SPAN_NODES", 1, 20),
     "max_retries": ("MAX_RETRIES", 0, 20),
+    "llm_provider_concurrency": ("LLM_PROVIDER_CONCURRENCY", 1, 32),
     "max_format_retries": ("MAX_FORMAT_RETRIES", 0, 10),
     "pro_degradation_threshold": ("PRO_DEGRADATION_THRESHOLD", 1, 20),
     "pro_degradation_cooldown_sec": ("PRO_DEGRADATION_COOLDOWN_SEC", 0, 86_400),
@@ -111,6 +116,7 @@ _INT_SETTINGS = {
     "source_ocr_pdf_max_pages_per_job": ("SOURCE_OCR_PDF_MAX_PAGES_PER_JOB", 1, 500),
     "source_embedding_concurrency": ("SOURCE_EMBEDDING_CONCURRENCY", 1, 16),
     "archivist_mtu_repair_attempts": ("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 0, 20),
+    "archivist_chunk_concurrency": ("ARCHIVIST_CHUNK_CONCURRENCY", 1, 16),
     "dagger_repair_attempts": ("DAGGER_REPAIR_ATTEMPTS", 0, 20),
     "dagger_prerequisite_concurrency": ("DAGGER_PREREQUISITE_CONCURRENCY", 1, 32),
     "dagger_max_nodes_per_call": ("DAGGER_MAX_NODES_PER_CALL", 1, 5_000),
@@ -189,6 +195,7 @@ def read_settings_config(root: Path, *, env_path: Path | None = None) -> dict[st
         result[field] = _config_float(values, key, float(_DEFAULT_ENV[key]))
     for field, key in _BOOL_SETTINGS.items():
         result[field] = _config_bool(values, key, _DEFAULT_ENV[key].lower() == "true")
+    result["invalidated_stages"] = []
     return result
 
 

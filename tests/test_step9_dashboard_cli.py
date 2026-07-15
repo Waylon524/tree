@@ -215,6 +215,41 @@ def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     assert f"当前: [{theme.TREE_GREEN}]001. A" not in markup
 
 
+def test_watch_prefers_one_structured_error_over_stage_and_log_duplicates(tmp_path):
+    _seed_workspace(tmp_path)
+    paths.service_log_path(tmp_path, "engine").write_text(
+        "RuntimeError: AES provider is unavailable\n"
+        "NameError: name 'open' is not defined\n",
+        encoding="utf-8",
+    )
+    progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
+    progress["phase"] = "failed"
+    progress["message"] = "AES provider is unavailable"
+    progress["stages"]["ocr"].update(
+        {"status": "failed", "message": "AES provider is unavailable"}
+    )
+    progress["errors"] = [
+        {
+            "run_id": "run-1",
+            "generation_id": "gen-1",
+            "stage": "ocr",
+            "code": "pdf_crypto_missing",
+            "resource": "encrypted.pdf",
+            "message": "AES provider is unavailable",
+            "retry_count": 0,
+            "recoverable": True,
+            "action": "Install crypto support and resume.",
+        }
+    ]
+    write_json_atomic(paths.progress_path(tmp_path), progress)
+
+    errors = build_watch_model(tmp_path)["errors"]
+
+    assert errors == [
+        "encrypted.pdf: AES provider is unavailable — Action: Install crypto support and resume."
+    ]
+
+
 def test_watch_noderun_pending_does_not_show_stale_current(tmp_path):
     _seed_workspace(tmp_path)
     progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))

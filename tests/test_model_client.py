@@ -85,9 +85,18 @@ def test_settings_default_dagger_repair_attempts_is_three(monkeypatch, tmp_path)
     assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_repair_attempts == 3
 
 
-def test_settings_default_dagger_prerequisite_concurrency_is_five(monkeypatch, tmp_path):
+def test_settings_defaults_use_conservative_nested_concurrency(monkeypatch, tmp_path):
+    monkeypatch.delenv("LLM_PROVIDER_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SOURCE_INGEST_CONCURRENCY", raising=False)
+    monkeypatch.delenv("ARCHIVIST_CHUNK_CONCURRENCY", raising=False)
     monkeypatch.delenv("DAGGER_PREREQUISITE_CONCURRENCY", raising=False)
-    assert Settings.from_env(project_root=tmp_path, require_llm=False).dagger_prerequisite_concurrency == 5
+    monkeypatch.delenv("MAX_ACTIVE_NODE_RUNS", raising=False)
+    settings = Settings.from_env(project_root=tmp_path, require_llm=False)
+    assert settings.llm_provider_concurrency == 4
+    assert settings.source_ingest_concurrency == 4
+    assert settings.archivist_chunk_concurrency == 2
+    assert settings.dagger_prerequisite_concurrency == 3
+    assert settings.max_active_node_runs == 3
 
 
 def test_settings_reads_dagger_prerequisite_concurrency(monkeypatch, tmp_path):
@@ -136,3 +145,13 @@ async def test_llm_client_passes_per_call_timeout_to_openai(monkeypatch):
     dagger_index = list(model_client.ROLES).index("dagger")
     call = _FakeAsyncOpenAI.instances[dagger_index].chat.completions.calls[0]
     assert call["timeout"] == 480.0
+
+
+def test_llm_client_shares_limiter_for_roles_on_same_provider(monkeypatch):
+    _FakeAsyncOpenAI.instances = []
+    monkeypatch.setattr(model_client, "AsyncOpenAI", _FakeAsyncOpenAI)
+    client = model_client.LLMClient(_settings())
+
+    limiters = {id(client._limiters[client._provider_keys[role]]) for role in model_client.ROLES}
+    assert len(limiters) == 1
+    assert next(iter(client._limiters.values())).limit == 4

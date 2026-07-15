@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 import logging
 import os
 import re
@@ -60,6 +61,35 @@ _IMAGE_LIST_ITEM_RE = re.compile(
     r"^\s*(?:[-*+]\s+)?(?:https?://\S+|[\\/\w .-]+\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?))(?:\s*)$",
     re.IGNORECASE,
 )
+
+
+class PdfCryptoDependencyError(RuntimeError):
+    """The runtime cannot decrypt an AES-protected PDF."""
+
+
+class PdfPasswordRequiredError(RuntimeError):
+    """A PDF cannot be opened without a user-supplied password."""
+
+
+def pdf_crypto_runtime_status() -> tuple[bool, str]:
+    """Exercise AES write/read through pypdf in the current (possibly frozen) runtime."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+        from pypdf._crypt_providers import crypt_provider
+
+        buffer = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        writer.encrypt("", algorithm="AES-256")
+        writer.write(buffer)
+        buffer.seek(0)
+        reader = PdfReader(buffer)
+        if len(reader.pages) != 1:
+            return False, "AES PDF round-trip returned an unexpected page count"
+        provider = " ".join(str(item) for item in crypt_provider if str(item)).strip()
+        return True, provider or "AES provider ready"
+    except Exception as exc:  # noqa: BLE001 - health check must report any frozen-runtime defect
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 class OCREngine:
@@ -381,39 +411,63 @@ class OCREngine:
     def _pdf_page_count(pdf_path: Path) -> int:
         try:
             from pypdf import PdfReader
+            from pypdf.errors import DependencyError, FileNotDecryptedError, WrongPasswordError
         except ImportError as exc:
             raise RuntimeError(
                 "PDF page counting and splitting requires pypdf. "
                 "Reinstall tree with current dependencies."
             ) from exc
 
-        reader = PdfReader(str(pdf_path))
-        return len(reader.pages)
+        try:
+            reader = PdfReader(str(pdf_path))
+            return len(reader.pages)
+        except DependencyError as exc:
+            raise PdfCryptoDependencyError(
+                f"Cannot read AES-encrypted PDF '{pdf_path.name}': the TREE runtime is missing "
+                "pypdf crypto support. Reinstall or update TREE."
+            ) from exc
+        except (FileNotDecryptedError, WrongPasswordError) as exc:
+            raise PdfPasswordRequiredError(
+                f"Encrypted PDF '{pdf_path.name}' requires a password. Remove the password "
+                "protection or import an unlocked copy."
+            ) from exc
 
     @staticmethod
     def _split_pdf(pdf_path: Path, output_dir: Path, max_pages: int) -> list[Path]:
         try:
             from pypdf import PdfReader, PdfWriter
+            from pypdf.errors import DependencyError, FileNotDecryptedError, WrongPasswordError
         except ImportError as exc:
             raise RuntimeError(
                 "PDF page counting and splitting requires pypdf. "
                 "Reinstall tree with current dependencies."
             ) from exc
 
-        reader = PdfReader(str(pdf_path))
-        output_dir.mkdir(parents=True, exist_ok=True)
-        chunk_paths = []
-        total_pages = len(reader.pages)
-        for start in range(0, total_pages, max_pages):
-            writer = PdfWriter()
-            end = min(start + max_pages, total_pages)
-            for page_index in range(start, end):
-                writer.add_page(reader.pages[page_index])
-            chunk_path = output_dir / f"{pdf_path.stem}__pages-{start + 1:04d}-{end:04d}.pdf"
-            with chunk_path.open("wb") as file:
-                writer.write(file)
-            chunk_paths.append(chunk_path)
-        return chunk_paths
+        try:
+            reader = PdfReader(str(pdf_path))
+            output_dir.mkdir(parents=True, exist_ok=True)
+            chunk_paths = []
+            total_pages = len(reader.pages)
+            for start in range(0, total_pages, max_pages):
+                writer = PdfWriter()
+                end = min(start + max_pages, total_pages)
+                for page_index in range(start, end):
+                    writer.add_page(reader.pages[page_index])
+                chunk_path = output_dir / f"{pdf_path.stem}__pages-{start + 1:04d}-{end:04d}.pdf"
+                with chunk_path.open("wb") as file:
+                    writer.write(file)
+                chunk_paths.append(chunk_path)
+            return chunk_paths
+        except DependencyError as exc:
+            raise PdfCryptoDependencyError(
+                f"Cannot split AES-encrypted PDF '{pdf_path.name}': the TREE runtime is missing "
+                "pypdf crypto support. Reinstall or update TREE."
+            ) from exc
+        except (FileNotDecryptedError, WrongPasswordError) as exc:
+            raise PdfPasswordRequiredError(
+                f"Encrypted PDF '{pdf_path.name}' requires a password. Remove the password "
+                "protection or import an unlocked copy."
+            ) from exc
 
     def _submit_url(self, file_url: str) -> str:
         """Submit job with a file URL (JSON body)."""

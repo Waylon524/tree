@@ -558,6 +558,7 @@ export interface AdvancedSettings {
   max_retries: string;
   max_format_retries: string;
   llm_timeout_sec: string;
+  llm_provider_concurrency: string;
   pro_degradation_threshold: string;
   pro_degradation_cooldown_sec: string;
   source_ingest_concurrency: string;
@@ -567,6 +568,7 @@ export interface AdvancedSettings {
   source_embedding_concurrency: string;
   archivist_mtu_cut_timeout_sec: string;
   archivist_mtu_repair_attempts: string;
+  archivist_chunk_concurrency: string;
   dagger_build_timeout_sec: string;
   dagger_repair_attempts: string;
   dagger_prerequisite_concurrency: string;
@@ -596,6 +598,7 @@ export interface SettingsData {
   max_retries: number;
   max_format_retries: number;
   llm_timeout_sec: number;
+  llm_provider_concurrency: number;
   pro_degradation_threshold: number;
   pro_degradation_cooldown_sec: number;
   source_ingest_concurrency: number;
@@ -605,6 +608,7 @@ export interface SettingsData {
   source_embedding_concurrency: number;
   archivist_mtu_cut_timeout_sec: number;
   archivist_mtu_repair_attempts: number;
+  archivist_chunk_concurrency: number;
   dagger_build_timeout_sec: number;
   dagger_repair_attempts: number;
   dagger_prerequisite_concurrency: number;
@@ -615,6 +619,7 @@ export interface SettingsData {
   dagger_cluster_max_size: number;
   dagger_cluster_auto_accept_singleton: boolean;
   dagger_cluster_auto_accept_same_collection: boolean;
+  invalidated_stages: string[];
 }
 
 export interface SettingsSave extends AdvancedSettings {

@@ -68,6 +68,8 @@ class NodeRunRecord(BaseModel):
     exam_sections: ExamSections | None = None
     draft_path: Path | None = None
     previous_bottleneck: str | None = None
+    bottleneck_repeat_count: int = 0
+    bottleneck_history: list[str] = Field(default_factory=list)
     last_error: str | None = None
     exam_repair_count: int = 0
 

@@ -74,6 +74,7 @@ def test_planner_dag_svg_command_requires_existing_dag(tmp_path, monkeypatch):
 def test_doctor_shows_embedding_model_and_server_status(monkeypatch):
     monkeypatch.setattr("tree.cli.app.embedding_model_status", lambda: "cached")
     monkeypatch.setattr("tree.cli.app.embedding_service_status", lambda: "running")
+    monkeypatch.setattr("tree.cli.app.pdf_crypto_runtime_status", lambda: (True, "cryptography"))
 
     result = CliRunner().invoke(app, ["doctor"])
 
@@ -82,6 +83,16 @@ def test_doctor_shows_embedding_model_and_server_status(monkeypatch):
     assert "cached" in result.stdout
     assert "embedding server" in result.stdout
     assert "running" in result.stdout
+    assert "PDF AES crypto" in result.stdout
+
+
+def test_doctor_strict_fails_when_pdf_crypto_is_missing(monkeypatch):
+    monkeypatch.setattr("tree.cli.app.pdf_crypto_runtime_status", lambda: (False, "missing"))
+
+    result = CliRunner().invoke(app, ["doctor", "--strict"])
+
+    assert result.exit_code == 1
+    assert "PDF AES crypto" in result.stdout
 
 
 def test_embedding_commands_route_to_model_and_service_helpers(tmp_path, monkeypatch):

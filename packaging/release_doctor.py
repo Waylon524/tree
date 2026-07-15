@@ -14,6 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _requirement_name(requirement: str) -> str:
+    """Return a normalized distribution name, ignoring extras and versions."""
+    return re.split(r"[<>=!~\[]", requirement, maxsplit=1)[0].strip().lower().replace("_", "-")
+
+
 def _version_map() -> dict[str, str]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     cargo = (ROOT / "desktop/src-tauri/Cargo.toml").read_text(encoding="utf-8")
@@ -78,7 +83,7 @@ def main() -> int:
         print(f"ERROR: missing release locks: {missing}", file=sys.stderr)
         return 1
     constraints = {
-        re.split(r"[<>=!~]", line, maxsplit=1)[0].strip().lower().replace("_", "-")
+        _requirement_name(line)
         for line in (ROOT / "packaging/release-constraints.txt").read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
@@ -91,7 +96,7 @@ def main() -> int:
     ]
     unconstrained = sorted(
         {
-            re.split(r"[<>=!~]", requirement, maxsplit=1)[0].strip().lower().replace("_", "-")
+            _requirement_name(requirement)
             for requirement in release_requirements
         }
         - constraints

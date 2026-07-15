@@ -15,6 +15,7 @@ python3 packaging/release_doctor.py --tag "$TAG"
 python3 -m pip install -c packaging/release-constraints.txt -e ".[rag,gui]" pyinstaller==6.21.0
 python3 -m PyInstaller --noconfirm --clean \
   --distpath packaging/dist --workpath packaging/build packaging/tre-engine.spec
+packaging/dist/tre-engine/tre-engine doctor --strict
 
 cd desktop
 npm ci
