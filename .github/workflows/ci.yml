@@ -64,4 +64,8 @@ jobs:
         run: cargo fmt --check
       - name: Test
         working-directory: desktop/src-tauri
-        run: cargo test --locked
+        run: |
+          # Tauri validates configured resource paths while compiling the test
+          # target. CI does not need a real sidecar for Rust unit tests.
+          mkdir -p ../../packaging/dist/tre-engine
+          cargo test --locked

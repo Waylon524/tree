@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- 修复干净 GitHub Actions runner 在 Rust 单元测试编译阶段因尚未生成 Tauri sidecar resource 目录而提前失败的问题；正式平台打包仍构建并严格检查真实 sidecar。
 - 修复正式 sidecar 缺少 `cryptography` 导致 AES PDF 在 Gather/OCR 阶段报 `DependencyError` 的问题，并区分密码文件、crypto 缺失和不支持算法。
 - 修复重新运行后进度清零、缓存阶段显示伪百分比、旧运行回调覆盖新状态，以及部分失败被整体标成失败的问题。
 - 修复同一 Examiner Bottleneck 反复改写正确草稿直至耗尽迭代的问题。

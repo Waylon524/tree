@@ -64,6 +64,9 @@ jobs:
       - name: Rust quality and tests
         working-directory: desktop/src-tauri
         run: |
+          # Tauri validates configured resource paths while compiling the test
+          # target. The real sidecar is built later in the platform job.
+          mkdir -p ../../packaging/dist/tre-engine
           cargo fmt --check
           cargo test --locked
 
