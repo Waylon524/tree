@@ -23,7 +23,7 @@ base/token through `app_bootstrap()`.
 
    ```bash
    cd desktop
-   npm install
+   npm ci
    VITE_TREE_API=http://127.0.0.1:8799 npm run dev
    ```
 
@@ -34,7 +34,7 @@ For Tauri development, run the desktop shell instead of manually passing a token
 
 ```bash
 cd desktop
-npm exec tauri dev
+npm run tauri dev
 ```
 
 The desktop shell supports create/open project, rename project, typed-confirm

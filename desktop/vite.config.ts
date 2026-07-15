@@ -1,9 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Browser-first dev server. The app talks to the `tre gui` FastAPI over its
-// token-gated API/WebSocket (see src/api.ts). When this is later wrapped in a
-// Tauri shell, the same build output is loaded by the native webview.
+// In browser development the app talks to `tre gui` over its token-gated
+// API/WebSocket. Production builds are loaded by the Tauri native webview.
 export default defineConfig({
   plugins: [react()],
   resolve: {

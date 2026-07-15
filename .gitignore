@@ -18,5 +18,12 @@ dist/
 .env
 config.env
 
+# Local assistant / release-integration state
+.appstore-companion/
+.claude/
+
+# Office temporary lock files
+~$*
+
 # OS
 .DS_Store
