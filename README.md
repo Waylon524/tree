@@ -2,7 +2,7 @@
 
 TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Markdown 等课程资料整理成一棵“知识果树”：采集和清洗资料、建立知识图谱、为知识点生成学习文件，再让你按依赖关系学习、记录阅读进度、对讲解提出反馈，并把整个项目迁移到另一台设备继续使用。
 
-当前推荐入口是 **TREE 桌面 App**；CLI 保留给自动化、调试和高级用户。当前源码版本为 `0.3.7`，可下载安装的最新正式版本是下方的 `v0.3.6`。
+当前推荐入口是 **TREE 桌面 App**；CLI 保留给自动化、调试和高级用户。当前源码版本与最新正式版本均为 `0.3.7`。
 
 ## 当前状态
 
@@ -16,20 +16,20 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 
 ## 下载
 
-当前发布版本：[v0.3.6](https://github.com/Waylon524/tree/releases/tag/v0.3.6)
+当前发布版本：[v0.3.7](https://github.com/Waylon524/tree/releases/tag/v0.3.7)
 
 | 平台 | 安装包 | 说明 |
 | --- | --- | --- |
-| macOS Apple Silicon | [TREE_0.3.6_macos.dmg](https://github.com/Waylon524/tree/releases/download/v0.3.6/TREE_0.3.6_macos.dmg) | 已使用 Developer ID 签名、公证并 stapled。 |
-| Windows x64 | [TREE_0.3.6_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v0.3.6/TREE_0.3.6_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
-| Windows x64 | [TREE_0.3.6_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v0.3.6/TREE_0.3.6_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
+| macOS Apple Silicon | [TREE_0.3.7_macos.dmg](https://github.com/Waylon524/tree/releases/download/v0.3.7/TREE_0.3.7_macos.dmg) | 已使用 Developer ID 签名、公证并 stapled。 |
+| Windows x64 | [TREE_0.3.7_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v0.3.7/TREE_0.3.7_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
+| Windows x64 | [TREE_0.3.7_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v0.3.7/TREE_0.3.7_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
 
 SHA-256：
 
 ```text
-TREE_0.3.6_macos.dmg          f6ab148d059b254b80c4596a20ee950fe9053672d22feda02fedda13ae611db6
-TREE_0.3.6_x64-setup.exe      7517774498dc7f1f6889e366e51fa4729a3ecda92debff11567aae9b3fe32706
-TREE_0.3.6_x64_en-US.msi      a6fa77225a8fdb9178aa377959514841e1f7a4d995072b7a558f30874bd7b019
+TREE_0.3.7_macos.dmg          ab8517466dcf82ef81330decfddef31ad402fda7618ae1e71ffe47027022a97e
+TREE_0.3.7_x64-setup.exe      e90247f6b942e07afb44455280d89409c0032f2c5db63182374f675c522fde57
+TREE_0.3.7_x64_en-US.msi      a3b8430d23e78925c254a19f76bc2c0aa7c67d07f1567eac07fc4364df880651
 ```
 
 ## TREE 是什么
