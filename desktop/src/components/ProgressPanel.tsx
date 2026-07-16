@@ -29,7 +29,6 @@ export function ProgressPanel({ status }: { status: Status | null }) {
           {t("grow.active")} <b>{status.active}</b>
         </span>
       </div>
-      {status.message && !hasErrors ? <p className="pipeline-message muted">{status.message}</p> : null}
       <div className="stages" role="list">
         {status.rows.map((row) => (
           <StageRowView key={row.key ?? row.label} row={row} t={t} />
@@ -109,11 +108,6 @@ function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> })
           {badgeKey ? t(badgeKey) : row.badge}
         </span>
       </div>
-      {row.current ? (
-        <div className="stage-current" title={row.current}>
-          {row.current}
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -18,7 +18,7 @@ import sys
 import threading
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import markdown as _md  # type: ignore[import-untyped]
@@ -585,10 +585,24 @@ def _status(root: Path) -> dict[str, Any]:
         "engine": engine_status(root),
         "embedding_server": embedding_service_status(),
         "embedding_backend": local_embed_backend_status(),
-        "errors": model.get("errors") or [],
+        "errors": _gui_errors(model),
         "llm_operations": recent_operation_events(root, limit=5),
         "rows": _stage_rows(model),
     }
+
+
+def _gui_errors(model: dict[str, Any]) -> list[str]:
+    errors = [str(item) for item in (model.get("errors") or []) if str(item)]
+    progress = model.get("progress") or {}
+    resources = [
+        str(item.get("resource") or "").strip()
+        for item in (progress.get("errors") or [])
+        if isinstance(item, dict) and str(item.get("resource") or "").strip()
+    ]
+    for resource in sorted(set(resources), key=len, reverse=True):
+        display_name = PurePosixPath(resource.replace("\\", "/")).name or resource
+        errors = [error.replace(resource, display_name) for error in errors]
+    return errors
 
 
 def _dag_model(root: Path) -> dict[str, Any]:

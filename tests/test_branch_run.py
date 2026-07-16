@@ -372,8 +372,8 @@ async def test_fast_node_run_calls_only_fast_writer_and_publishes_normal_format(
     assert "## 学习目标" in text
     assert "## 标准答案" in text
     assert "## 来源追溯" in text
-    assert "`课件/a.md`，第 1–20 行（`mtu:a`）" in text
-    assert "`课件/b.md`，第 21–40 行（`mtu:b`）" in text
+    assert "`a.md`，第 1–20 行（`mtu:a`）" in text
+    assert "`b.md`，第 21–40 行（`mtu:b`）" in text
     assert state_mgr.load().node_runs[0].mode is NodeRunMode.FAST
 
 
@@ -557,8 +557,8 @@ async def test_node_run_includes_every_member_mtu_evidence_and_source_trace(tmp_
     assert all(call == ["mtu:a", "mtu:b"] for call in retriever.required_mtu_calls)
     output = (paths.outputs_root(tmp_path) / "002.化学平衡.md").read_text(encoding="utf-8")
     assert "## 来源追溯" in output
-    assert "`课件/week1.md`，第 1–31 行（`mtu:a`）" in output
-    assert "`课件/week2.md`，第 32–62 行（`mtu:b`）" in output
+    assert "`week1.md`，第 1–31 行（`mtu:a`）" in output
+    assert "`week2.md`，第 32–62 行（`mtu:b`）" in output
 
 
 def test_ledger_rejects_missing_or_modified_output(tmp_path):

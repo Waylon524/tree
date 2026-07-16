@@ -97,11 +97,6 @@ export function Materials() {
                   </span>
                 </div>
                 <div className="imported-meta">
-                  {item.collection !== "default" && (
-                    <span>
-                      {t("seeds.sourceGroup")}: {item.collection}
-                    </span>
-                  )}
                   <span>{item.size_bytes ? formatBytes(item.size_bytes) : t("seeds.sizeUnknown")}</span>
                   <span>{item.imported_at ? formatDateTime(item.imported_at) : t("seeds.legacy")}</span>
                 </div>

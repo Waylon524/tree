@@ -81,16 +81,28 @@ async def rebuild_planner(
         "ocr",
         total=total_materials,
         done=completed_materials,
-        status="running" if completed_materials < total_materials else "complete",
-        message="Extracting materials" if completed_materials < total_materials else "Extraction complete",
+        status="pending" if completed_materials < total_materials else "complete",
+        message="" if completed_materials < total_materials else "Extraction complete",
     )
     # Clean/Cut totals = number of changed materials (known upfront), advanced
     # once per material in the ingest driver. Stable, monotonic counters even
     # though OCR/Clean/Cut overlap across concurrently-processed materials.
-    _set_stage(progress, "clean", total=total_materials, done=completed_materials,
-               status="running" if completed_materials < total_materials else "complete")
-    _set_stage(progress, "cut", total=total_materials, done=completed_materials,
-               status="running" if completed_materials < total_materials else "complete")
+    _set_stage(
+        progress,
+        "clean",
+        total=total_materials,
+        done=completed_materials,
+        status="pending" if completed_materials < total_materials else "complete",
+        message="" if completed_materials < total_materials else "Cleaning complete",
+    )
+    _set_stage(
+        progress,
+        "cut",
+        total=total_materials,
+        done=completed_materials,
+        status="pending" if completed_materials < total_materials else "complete",
+        message="" if completed_materials < total_materials else "Cutting complete",
+    )
 
     mtus = await _collect_mtus(root, manifest, producer=mtu_producer, settings=settings)
     # All changed materials are ingested once _collect_mtus returns; clamp the

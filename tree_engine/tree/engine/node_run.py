@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from difflib import SequenceMatcher
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from tree.agents.examiner import ExaminerAgent
@@ -803,6 +803,7 @@ class NodeRunner:
                 missing.append(mtu_id)
                 continue
             source = str(mtu.get("source_id") or f"{mtu.get('collection', '')}/{mtu.get('source_file', '')}")
+            source = PurePosixPath(source.replace("\\", "/")).name or source
             span = mtu.get("line_range") or []
             range_text = f"第 {span[0]}–{span[1]} 行" if len(span) == 2 else "行范围未知"
             lines.append(f"- `{source}`，{range_text}（`{mtu_id}`）")

@@ -504,7 +504,6 @@ function NodeInspector({
           <InspectorList title={t("harvest.prerequisites")} nodes={prerequisites} onFocus={onFocus} />
           <InspectorList title={t("harvest.dependents")} nodes={dependents} onFocus={onFocus} />
           <TagList title={t("harvest.defines")} items={node.defines} empty={t("common.none")} />
-          <TagList title={t("harvest.collections")} items={node.collections} empty={t("common.none")} />
           <OutputActions node={node} t={t} onReadOutput={onReadOutput} />
         </>
       ) : (

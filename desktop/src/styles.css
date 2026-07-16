@@ -296,9 +296,6 @@ textarea {
   background: var(--bar-bg);
   color: var(--muted);
 }
-.pipeline-message {
-  margin: 0 0 8px;
-}
 .stages {
   display: grid;
   gap: 2px;
@@ -311,9 +308,8 @@ textarea {
     minmax(120px, 1fr)
     48px
     52px
-    68px
-    minmax(140px, 1.65fr);
-  grid-template-areas: "name bar pct count badge current";
+    68px;
+  grid-template-areas: "name bar pct count badge";
   align-items: center;
   min-height: 40px;
   column-gap: 12px;
@@ -359,16 +355,6 @@ textarea {
 .stage-badge {
   grid-area: badge;
   min-width: 0;
-}
-.stage-current {
-  grid-area: current;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: normal;
-  overflow-wrap: break-word;
-  word-break: normal;
-  line-height: 1.35;
 }
 .badge {
   display: inline-flex;
@@ -446,13 +432,7 @@ textarea {
 @media (max-width: 1050px) {
   .stage-row {
     grid-template-columns: minmax(96px, 110px) minmax(110px, 1fr) 44px 48px 64px;
-    grid-template-areas:
-      "name bar pct count badge"
-      "current current current current current";
-    row-gap: 3px;
-  }
-  .stage-current {
-    padding-left: 32px;
+    grid-template-areas: "name bar pct count badge";
   }
 }
 @media (max-width: 600px) {
@@ -460,13 +440,9 @@ textarea {
     grid-template-columns: minmax(0, 1fr) auto auto;
     grid-template-areas:
       "name count badge"
-      "bar bar pct"
-      "current current current";
+      "bar bar pct";
     row-gap: 5px;
     padding-block: 7px;
-  }
-  .stage-current {
-    padding-left: 0;
   }
 }
 .dag {
@@ -872,9 +848,8 @@ textarea {
   display: flex;
   min-width: 130px;
   max-width: 240px;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
   padding: 5px 10px;
   border: 1px solid var(--border);
@@ -884,7 +859,8 @@ textarea {
   text-align: left;
 }
 .project-chip span {
-  width: 100%;
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -892,6 +868,7 @@ textarea {
   line-height: 1.25;
 }
 .project-chip small {
+  flex: none;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.2;
@@ -1796,10 +1773,6 @@ textarea {
 /* --- tree theme: orchard components -------------------------------------- */
 
 .grow-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
   margin-bottom: 14px;
 }
 .grow-title {

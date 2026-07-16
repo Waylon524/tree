@@ -93,6 +93,29 @@ def test_failed_run_rows_do_not_render_stale_running_stages():
     assert by_key["cut"]["badge"] == "wait"
 
 
+def test_gui_errors_hide_material_parent_directory():
+    from tree.gui.server import _gui_errors
+
+    errors = _gui_errors(
+        {
+            "errors": [
+                "default/chapter-2.pdf: PDF stream is invalid — Action: replace the file"
+            ],
+            "progress": {
+                "errors": [
+                    {
+                        "stage": "ocr",
+                        "resource": "default/chapter-2.pdf",
+                        "message": "PDF stream is invalid",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert errors == ["chapter-2.pdf: PDF stream is invalid — Action: replace the file"]
+
+
 def test_index_with_token_sets_cookie(workspace):
     client = _client(workspace)
     resp = client.get("/", params={"token": TOKEN})

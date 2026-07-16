@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import html
 import re
+from functools import partial
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from tree.ingest.pipeline import extract_text
@@ -302,10 +304,6 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
                 "the material was not marked complete."
             )
         raw_chunks = split_raw_markdown_for_cleaning(checkpoint_raw)
-        _set_stage(engine, "clean", status="running", active=material_label,
-                   message=f"Cleaning {material_label}")
-        _set_stage(engine, "cut", status="running", active=material_label,
-                   message=f"Cutting {material_label}")
         clean_cut_started = True
         mtus = await _clean_and_cut_chunks(engine, root, raw_chunks, material=material)
         if not mtus:
@@ -313,8 +311,6 @@ async def _produce_mtus(engine: object, root: Path, material: dict[str, Any]) ->
                 f"Archivist produced no teachable units for {material_label}; "
                 "the material was not marked complete."
             )
-        _advance_stage(engine, "clean", active=[])
-        _advance_stage(engine, "cut", active=[])
         return mtus
     except Exception as exc:
         if not ocr_done:
@@ -346,30 +342,38 @@ async def _clean_and_cut_chunk(
     source_id: str,
     source_sha256: str,
     order_offset: int,
+    on_cleaned: Callable[[], None] | None = None,
+    on_cut: Callable[[], None] | None = None,
 ) -> list[MTU]:
     archivist = engine.archivist
     settings = getattr(engine, "settings", None)
-    # Per-chunk calls update the display only; the done counter advances once per
-    # material in _produce_mtus, so concurrent chunks never inflate the count.
-    _set_stage(engine, "clean", status="running", active=source_file, message=f"Cleaning {source_file}")
-    cleaned = await archivist.clean(
-        raw_chunk,
-        timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
-        repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
-    )
-    if not cleaned.strip():
-        _set_stage(engine, "clean", message=f"Retrying empty cleaned chunk {source_file}")
+    # Activity is tracked per chunk, while callbacks advance each stage only once
+    # after every chunk in this material has crossed that boundary.
+    activity_token = source_id or source_file
+    _start_stage_activity(engine, "clean", activity_token)
+    try:
         cleaned = await archivist.clean(
             raw_chunk,
             timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
             repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
         )
         if not cleaned.strip():
-            raise RuntimeError(
-                f"Archivist cleaned non-empty source chunk to empty twice: {source_file}. "
-                "The chunk was preserved and was not silently skipped."
+            _set_stage(engine, "clean", message=f"Retrying empty cleaned chunk {source_file}")
+            cleaned = await archivist.clean(
+                raw_chunk,
+                timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
+                repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
             )
-    _set_stage(engine, "clean", message=f"Cleaned {source_file}")
+            if not cleaned.strip():
+                raise RuntimeError(
+                    f"Archivist cleaned non-empty source chunk to empty twice: {source_file}. "
+                    "The chunk was preserved and was not silently skipped."
+                )
+        _set_stage(engine, "clean", message=f"Cleaned {source_file}")
+        if on_cleaned is not None:
+            on_cleaned()
+    finally:
+        _finish_stage_activity(engine, "clean", activity_token)
 
     source_path = source_markdown_path(
         root,
@@ -378,24 +382,29 @@ async def _clean_and_cut_chunk(
         source_id=source_id,
     )
     file_ops.write_text(source_path, cleaned)
-    _set_stage(engine, "cut", status="running", active=source_file, message=f"Cutting {source_file}")
-    mtus = await archivist.cut_mtus(
-        cleaned,
-        collection=collection,
-        source_file=source_file,
-        order_offset=order_offset,
-        timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
-        repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
-    )
-    for mtu in mtus:
-        mtu.source_id = source_id
-        mtu.source_sha256 = source_sha256
-        mtu.mtu_id = prefixed_id(
-            "mtu",
-            [source_id, source_sha256, mtu.line_range[0], mtu.line_range[1]],
+    _start_stage_activity(engine, "cut", activity_token)
+    try:
+        mtus = await archivist.cut_mtus(
+            cleaned,
+            collection=collection,
+            source_file=source_file,
+            order_offset=order_offset,
+            timeout_sec=getattr(settings, "archivist_mtu_cut_timeout_sec", None),
+            repair_attempts=getattr(settings, "archivist_mtu_repair_attempts", 1),
         )
-    _set_stage(engine, "cut", message=f"Cut {source_file}")
-    return mtus
+        for mtu in mtus:
+            mtu.source_id = source_id
+            mtu.source_sha256 = source_sha256
+            mtu.mtu_id = prefixed_id(
+                "mtu",
+                [source_id, source_sha256, mtu.line_range[0], mtu.line_range[1]],
+            )
+        _set_stage(engine, "cut", message=f"Cut {source_file}")
+        if on_cut is not None:
+            on_cut()
+        return mtus
+    finally:
+        _finish_stage_activity(engine, "cut", activity_token)
 
 
 async def _clean_and_cut_chunks(
@@ -410,6 +419,8 @@ async def _clean_and_cut_chunks(
     pending = list(range(total))
     running: dict[asyncio.Task[list[MTU]], int] = {}
     retry_counts: dict[int, int] = {}
+    cleaned_indices: set[int] = set()
+    cut_indices: set[int] = set()
     max_retries = max(0, int(getattr(engine.settings, "max_retries", 3)))
     chunk_concurrency = max(
         1,
@@ -440,9 +451,25 @@ async def _clean_and_cut_chunks(
                     source_id=source_id,
                     source_sha256=str(material.get("fingerprint") or ""),
                     order_offset=0,
+                    on_cleaned=partial(mark_cleaned, index),
+                    on_cut=partial(mark_cut, index),
                 )
             )
             running[task] = index
+
+    def mark_cleaned(index: int) -> None:
+        if index in cleaned_indices:
+            return
+        cleaned_indices.add(index)
+        if len(cleaned_indices) == total:
+            _advance_stage(engine, "clean", active=[])
+
+    def mark_cut(index: int) -> None:
+        if index in cut_indices:
+            return
+        cut_indices.add(index)
+        if len(cut_indices) == total:
+            _advance_stage(engine, "cut", active=[])
 
     start_available()
     while pending or running:
@@ -728,6 +755,53 @@ def _set_stage(engine: object, stage: str, **kwargs: Any) -> None:
             progress.set_stage(stage, **kwargs)
         except Exception:
             return
+
+
+def _start_stage_activity(engine: object, stage: str, token: str) -> None:
+    activity = getattr(engine, "_tree_ingest_stage_activity", None)
+    if not isinstance(activity, dict):
+        activity = {}
+        try:
+            setattr(engine, "_tree_ingest_stage_activity", activity)
+        except (AttributeError, TypeError):
+            _set_stage(engine, stage, status="running", active=str(token))
+            return
+    active = activity.setdefault(stage, set())
+    active.add(str(token))
+    _set_stage(engine, stage, status="running", active=sorted(active))
+
+
+def _finish_stage_activity(engine: object, stage: str, token: str) -> None:
+    activity = getattr(engine, "_tree_ingest_stage_activity", None)
+    if not isinstance(activity, dict):
+        return
+    active = activity.setdefault(stage, set())
+    active.discard(str(token))
+    if active:
+        _set_stage(engine, stage, status="running", active=sorted(active))
+        return
+
+    progress = _progress(engine)
+    if progress is None or not hasattr(progress, "load"):
+        _set_stage(engine, stage, status="pending", active=[])
+        return
+    try:
+        state = progress.load()
+        phase = str(state.get("phase") or "").lower()
+        data = (state.get("stages") or {}).get(stage) or {}
+        current_status = str(data.get("status") or "pending").lower()
+        if phase in {"blocked", "error", "failed", "partial", "stopped"} or current_status in {
+            "blocked",
+            "error",
+            "failed",
+        }:
+            return
+        total = int(data.get("total") or 0)
+        done = int(data.get("done") or 0)
+        status = "complete" if total and done >= total else "pending"
+        _set_stage(engine, stage, status=status, active=[])
+    except Exception:
+        return
 
 
 def _add_stage_total(engine: object, stage: str, amount: int, **kwargs: Any) -> None:

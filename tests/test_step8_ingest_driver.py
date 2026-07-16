@@ -624,6 +624,104 @@ async def test_clean_cut_totals_count_materials_not_chunks(tmp_path, monkeypatch
     assert stages["cut"]["status"] == "complete"
 
 
+async def test_single_chunk_stages_only_run_during_real_work(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "default" / "single.md"
+    material.parent.mkdir(parents=True)
+    raw = _raw_lines(62)
+    material.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: raw)
+
+    clean_started = asyncio.Event()
+    release_clean = asyncio.Event()
+    cut_started = asyncio.Event()
+    release_cut = asyncio.Event()
+
+    class BlockingArchivist(_FakeArchivist):
+        async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
+            clean_started.set()
+            await release_clean.wait()
+            return raw_markdown
+
+        async def cut_mtus(self, cleaned_markdown: str, **kwargs):
+            cut_started.set()
+            await release_cut.wait()
+            return await super().cut_mtus(cleaned_markdown, **kwargs)
+
+    engine = _ingest_engine(tmp_path)
+    engine.archivist = BlockingArchivist()
+    task = asyncio.create_task(prepare_sources(engine))
+    try:
+        await asyncio.wait_for(clean_started.wait(), timeout=1)
+        stages = engine.progress.load()["stages"]
+        assert stages["ocr"]["status"] == "complete"
+        assert stages["clean"]["status"] == "running"
+        assert stages["cut"]["status"] == "pending"
+
+        release_clean.set()
+        await asyncio.wait_for(cut_started.wait(), timeout=1)
+        stages = engine.progress.load()["stages"]
+        assert stages["clean"]["status"] == "complete"
+        assert stages["cut"]["status"] == "running"
+
+        release_cut.set()
+        await task
+    finally:
+        release_clean.set()
+        release_cut.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_multi_chunk_clean_and_cut_overlap_only_while_both_are_active(tmp_path, monkeypatch):
+    material = tmp_path / "materials" / "default" / "chunked.md"
+    material.parent.mkdir(parents=True)
+    material.write_text("raw", encoding="utf-8")
+    monkeypatch.setattr("tree.engine.ingest_driver.extract_text", lambda path: "raw")
+    monkeypatch.setattr(
+        "tree.engine.ingest_driver.split_raw_markdown_for_cleaning",
+        lambda text: ["first chunk", "second chunk"],
+    )
+
+    second_clean_started = asyncio.Event()
+    release_second_clean = asyncio.Event()
+    first_cut_started = asyncio.Event()
+    release_cuts = asyncio.Event()
+
+    class OverlappingArchivist(_FakeArchivist):
+        async def clean(self, raw_markdown: str, *, timeout_sec=None, repair_attempts: int = 1) -> str:
+            if raw_markdown == "second chunk":
+                second_clean_started.set()
+                await release_second_clean.wait()
+            return raw_markdown
+
+        async def cut_mtus(self, cleaned_markdown: str, **kwargs):
+            if cleaned_markdown == "first chunk":
+                first_cut_started.set()
+            await release_cuts.wait()
+            return await super().cut_mtus(cleaned_markdown, **kwargs)
+
+    engine = _ingest_engine(tmp_path)
+    engine.archivist = OverlappingArchivist()
+    task = asyncio.create_task(prepare_sources(engine))
+    try:
+        await asyncio.wait_for(second_clean_started.wait(), timeout=1)
+        await asyncio.wait_for(first_cut_started.wait(), timeout=1)
+        stages = engine.progress.load()["stages"]
+        assert stages["clean"]["status"] == "running"
+        assert stages["cut"]["status"] == "running"
+
+        release_second_clean.set()
+        release_cuts.set()
+        await task
+    finally:
+        release_second_clean.set()
+        release_cuts.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_unchanged_material_resumes_from_cache_without_reocr(tmp_path, monkeypatch):
     material = tmp_path / "materials" / "课件" / "ch1.md"
     material.parent.mkdir(parents=True)

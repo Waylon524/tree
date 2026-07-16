@@ -48,7 +48,6 @@ const NAV: Array<{ key: Page; labelKey: string }> = [
 ];
 
 const ENGINE_STATES = ["running", "stopped", "starting"];
-const PHASE_STATES = ["idle", "running", "blocked", "partial", "complete", "failed"];
 const EXTENSION_PHASE_KEYS: Record<string, string> = {
   checking: "gate.soil.phase.checking",
   missing: "gate.soil.phase.missing",
@@ -326,7 +325,12 @@ function Dashboard({
           ))}
         </nav>
         {project && onSwitchProject && (
-          <button className="project-chip" type="button" onClick={onSwitchProject}>
+          <button
+            className="project-chip"
+            type="button"
+            onClick={onSwitchProject}
+            title={`${project.name} · ${t("common.switch")}`}
+          >
             <span>{project.name}</span>
             <small>{t("common.switch")}</small>
           </button>
@@ -351,11 +355,6 @@ function Dashboard({
                 <h2 className="grow-title">{t("grow.heading")}</h2>
                 <p className="muted">{t("grow.subtitle")}</p>
               </div>
-              {status && (
-                <span className={`pill phase-${status.phase}`}>
-                  {PHASE_STATES.includes(status.phase) ? t(`phase.${status.phase}`) : status.phase}
-                </span>
-              )}
             </div>
             <div className="controls">
               <Button
