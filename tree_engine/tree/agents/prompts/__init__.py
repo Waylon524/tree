@@ -14,6 +14,7 @@ from tree.agents.prompts.archivist import (
 )
 from tree.agents.prompts.dagger import DAGGER_PREREQUISITES_PROMPT, DAGGER_PROMPT
 from tree.agents.prompts.examiner import EXAMINER_PROMPT
+from tree.agents.prompts.fast_writer import FAST_WRITER_PROMPT
 from tree.agents.prompts.student import STUDENT_PROMPT
 from tree.agents.prompts.writer import WRITER_PROMPT
 from tree.io import paths
@@ -23,6 +24,7 @@ PROMPTS = {
     "examiner": EXAMINER_PROMPT,
     "student": STUDENT_PROMPT,
     "writer": WRITER_PROMPT,
+    "fast_writer": FAST_WRITER_PROMPT,
     "archivist": ARCHIVIST_PROMPT,
     "archivist_clean": ARCHIVIST_CLEAN_PROMPT,
     "archivist_mtu": ARCHIVIST_MTU_PROMPT,
@@ -34,6 +36,7 @@ PROMPT_LABELS = {
     "examiner": "Examiner",
     "student": "Student",
     "writer": "Writer",
+    "fast_writer": "Fast Writer",
     "archivist_clean": "Archivist Clean",
     "archivist_mtu": "Archivist MTU",
     "dagger": "Dagger Nodes",

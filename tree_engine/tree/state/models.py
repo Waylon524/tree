@@ -35,6 +35,11 @@ class Route(str, Enum):
     FAIL_KNOWLEDGE_GAP = "FAIL_KNOWLEDGE_GAP"
 
 
+class NodeRunMode(str, Enum):
+    STANDARD = "standard"
+    FAST = "fast"
+
+
 class ExamReconciliationAction(str, Enum):
     KEEP_FAIL = "KEEP_FAIL"
     REVISE_EXAM = "REVISE_EXAM"
@@ -240,6 +245,7 @@ class ExamReconciliationRecord(BaseModel):
 class NodeRunRecord(BaseModel):
     node_id: str
     run_id: str
+    mode: NodeRunMode | None = None
     status: str = "running"
     coverage_snapshot: CoverageSnapshot = Field(default_factory=CoverageSnapshot)
     outputs_completed: list[str] = Field(default_factory=list)

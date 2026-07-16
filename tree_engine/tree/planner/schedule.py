@@ -10,7 +10,13 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-from tree.state.models import CoverageSnapshot, NodeExecutionRecord, NodeRunRecord, PipelineState
+from tree.state.models import (
+    CoverageSnapshot,
+    NodeExecutionRecord,
+    NodeRunMode,
+    NodeRunRecord,
+    PipelineState,
+)
 
 
 def start_ready_node_runs(
@@ -21,7 +27,9 @@ def start_ready_node_runs(
     max_active: int,
     finished_output_ids: list[str] | None = None,
     now: str = "",
+    node_run_mode: NodeRunMode | str = NodeRunMode.STANDARD,
 ) -> PipelineState:
+    mode = NodeRunMode(node_run_mode)
     nodes = sorted(
         dag.get("nodes") or [],
         key=lambda n: (n.get("source_order_index", 0), n.get("node_id", "")),
@@ -61,6 +69,7 @@ def start_ready_node_runs(
             NodeRunRecord(
                 node_id=node_id,
                 run_id=run_id,
+                mode=mode,
                 status="running",
                 coverage_snapshot=snapshot,
             )

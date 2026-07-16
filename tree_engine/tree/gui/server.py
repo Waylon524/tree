@@ -982,7 +982,7 @@ def _settings_invalidation_stages(
     elif changed("dagger_repair_attempts"):
         earliest = 5
     elif role_changed & {"examiner", "student", "writer"} or changed(
-        "max_iterations", "max_examiner_span_nodes"
+        "node_run_mode", "max_iterations", "max_examiner_span_nodes"
     ):
         earliest = 6
     return stages[earliest:] if earliest is not None else []

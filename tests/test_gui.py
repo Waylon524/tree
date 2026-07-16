@@ -19,6 +19,7 @@ from tree.state.models import (
     ExamReconciliationTrigger,
     ExamSections,
     NodeExecutionRecord,
+    NodeRunMode,
     NodeRunRecord,
     PipelineState,
     WriterResult,
@@ -541,6 +542,7 @@ def test_regrow_resets_generation_state_instead_of_resuming_it(workspace, monkey
                 NodeRunRecord(
                     node_id="n1",
                     run_id="n1::run",
+                    mode=NodeRunMode.FAST,
                     status="failed",
                     coverage_snapshot=snapshot,
                     outputs_completed=["001.old.md"],
@@ -583,6 +585,7 @@ def test_regrow_resets_generation_state_instead_of_resuming_it(workspace, monkey
     assert execution.status == "in_progress"
     assert execution.outputs_completed == []
     assert run.status == "running"
+    assert run.mode is None
     assert run.outputs_completed == []
     assert run.exam_sections is None
     assert run.draft_path is None
@@ -762,6 +765,7 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["paddleocr_model"] == "PaddleOCR-VL-1.6"
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
+    assert data["node_run_mode"] == "standard"
     assert data["max_iterations"] == 5
     assert data["max_active_node_runs"] == 3
     assert data["llm_provider_concurrency"] == 4
@@ -798,6 +802,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
             "paddleocr_model": "PaddleOCR-VL-Next",
             "llama_server_ctx": "22000",
             "source_mtu_chunk_tokens": "20000",
+            "node_run_mode": "fast",
             "max_iterations": "7",
             "max_active_node_runs": "3",
             "max_retries": "4",
@@ -825,6 +830,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert data["llm_max_output_tokens"] == 4_096
     assert data["llm_prompt_safety_tokens"] == 512
     assert data["max_iterations"] == 7
+    assert data["node_run_mode"] == "fast"
     assert data["dagger_embed_cluster_enabled"] is False
     assert data["dagger_cluster_similarity_threshold"] == 0.72
     assert data["invalidated_stages"] == [
@@ -854,6 +860,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert "PADDLEOCR_MODEL=PaddleOCR-VL-Next" in written
     assert "LLAMA_SERVER_CTX=22000" in written
     assert "SOURCE_MTU_CHUNK_TOKENS=20000" in written
+    assert "NODE_RUN_MODE=fast" in written
     assert "MAX_ITERATIONS=7" in written
     assert "MAX_ACTIVE_NODE_RUNS=3" in written
     assert "MAX_RETRIES=4" in written
@@ -927,7 +934,9 @@ def test_prompt_api_saves_and_resets_project_overrides(workspace):
 
     data = client.get("/api/prompts").json()
     writer = next(item for item in data["prompts"] if item["key"] == "writer")
+    fast_writer = next(item for item in data["prompts"] if item["key"] == "fast_writer")
     assert writer["is_custom"] is False
+    assert fast_writer["is_custom"] is False
     assert writer["current_text"] == writer["default_text"]
 
     resp = client.put("/api/prompts/writer", json={"text": "CUSTOM WRITER"})
@@ -942,6 +951,16 @@ def test_prompt_api_saves_and_resets_project_overrides(workspace):
     assert resp.status_code == 200
     writer = next(item for item in resp.json()["prompts"] if item["key"] == "writer")
     assert writer["is_custom"] is False
+
+
+def test_settings_post_rejects_invalid_node_run_mode(workspace):
+    response = _authed_client(workspace).post(
+        "/api/settings",
+        json={"node_run_mode": "turbo"},
+    )
+
+    assert response.status_code == 400
+    assert "standard or fast" in response.text
 
 
 def test_prompt_api_rejects_unknown_or_empty_prompt(workspace):

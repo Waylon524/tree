@@ -478,6 +478,7 @@ def test_operation_registry_covers_all_agent_call_classes():
         "examiner.reconcile_format_repair",
         "student.answer",
         "writer.create",
+        "writer.fast_create",
         "writer.optimize",
         "writer.feedback_revision",
     }

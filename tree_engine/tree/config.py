@@ -31,6 +31,7 @@ LLAMA_SERVER_CTX_MIN = 1_024
 LLAMA_SERVER_CTX_MAX = 32_768
 SOURCE_MTU_CHUNK_TOKENS_MIN = 500
 SOURCE_MTU_CHUNK_TOKENS_MAX = 32_768
+NODE_RUN_MODES = ("standard", "fast")
 
 # Endpoint keys a workspace-level (untrusted, cwd-controlled) env file may only set
 # when the same file also provides the credential that would be sent to that endpoint.
@@ -107,6 +108,7 @@ class Settings:
     dagger_max_unassigned_ratio: float = 0.10
 
     # NodeRun loop
+    node_run_mode: str = "standard"
     max_active_node_runs: int = 3
     max_examiner_span_nodes: int = 3
 
@@ -188,6 +190,7 @@ class Settings:
             dagger_cluster_auto_accept_singleton=_env_bool("DAGGER_CLUSTER_AUTO_ACCEPT_SINGLETON", True),
             dagger_cluster_auto_accept_same_collection=_env_bool("DAGGER_CLUSTER_AUTO_ACCEPT_SAME_COLLECTION", False),
             dagger_max_unassigned_ratio=_env_float("DAGGER_MAX_UNASSIGNED_RATIO", 0.10),
+            node_run_mode=_node_run_mode(os.environ.get("NODE_RUN_MODE", "standard")),
             max_active_node_runs=_env_int("MAX_ACTIVE_NODE_RUNS", 3),
             max_examiner_span_nodes=_env_int("MAX_EXAMINER_SPAN_NODES", 3),
             project_root=root,
@@ -203,6 +206,22 @@ def load_runtime_env(project_root: Path | None = None) -> None:
     _load_env_file(paths.global_config_path())
     _load_env_file(paths.legacy_workspace_env_path(root), trusted=False)
     _load_env_file(paths.workspace_config_path(root), trusted=False)
+
+
+def configured_node_run_mode(project_root: Path, *, fallback: str = "standard") -> str:
+    """Read the latest effective mode without mutating the running process environment."""
+    mode = _node_run_mode(fallback)
+    for path in (
+        paths.global_config_path(),
+        paths.legacy_workspace_env_path(project_root),
+        paths.workspace_config_path(project_root),
+    ):
+        if not path.exists():
+            continue
+        value = dotenv_values(path).get("NODE_RUN_MODE")
+        if value:
+            mode = _node_run_mode(value)
+    return mode
 
 
 def _role_config(
@@ -282,3 +301,12 @@ def _env_bool(name: str, default: bool) -> bool:
     if not value:
         return default
     return value.split("#", 1)[0].strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _node_run_mode(value: str) -> str:
+    mode = str(value).split("#", 1)[0].strip().lower()
+    if mode not in NODE_RUN_MODES:
+        raise ConfigurationError(
+            f"NODE_RUN_MODE must be one of {', '.join(NODE_RUN_MODES)}; got {value!r}."
+        )
+    return mode

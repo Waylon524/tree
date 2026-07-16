@@ -546,6 +546,7 @@ export type PromptKey =
   | "examiner"
   | "student"
   | "writer"
+  | "fast_writer"
   | "archivist_clean"
   | "archivist_mtu"
   | "dagger"
@@ -596,6 +597,7 @@ export interface SettingsData {
   paddleocr_model: string;
   llama_server_ctx: number;
   source_mtu_chunk_tokens: number;
+  node_run_mode: "standard" | "fast";
   max_iterations: number;
   max_active_node_runs: number;
   max_examiner_span_nodes: number;
@@ -640,6 +642,7 @@ export interface SettingsSave extends AdvancedSettings {
   paddleocr_model: string;
   llama_server_ctx: string;
   source_mtu_chunk_tokens: string;
+  node_run_mode: "standard" | "fast";
 }
 
 export async function fetchSettings(): Promise<SettingsData> {

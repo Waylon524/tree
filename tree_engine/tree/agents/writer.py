@@ -36,7 +36,7 @@ class WriterAgent(Agent):
         previous_bottleneck: str | None = None,
         writer_instructions: WriterInstructions | dict[str, Any] | str | None = None,
         covered_node_ids: list[str] | None = None,
-        retrieved: list[dict] | None = None,
+        retrieved: list[dict[str, Any]] | None = None,
         node_context: str | None = None,
         branch_context: str | None = None,
         trusted_task_constraints: str | None = None,
@@ -171,6 +171,47 @@ class WriterAgent(Agent):
         _validate_writer_output(preserved)
         return WriterResult(draft_content=preserved)
 
+    async def fast_draft(
+        self,
+        *,
+        span_title: str,
+        file_seq: str,
+        task_spec: dict[str, Any],
+        prior_paths: list[str],
+        retrieved: list[dict] | None = None,
+        node_context: str | None = None,
+    ) -> WriterResult:
+        """Generate one complete node with no exam/audit/revision loop."""
+        control = {
+            **task_spec,
+            "mode": "fast_create",
+            "declared_node_title": span_title,
+            "file_sequence": file_seq,
+        }
+        parts = [
+            "## FAST_WRITER_TASK_SPEC_JSON\n"
+            + json.dumps(control, ensure_ascii=False, indent=2)
+            + "\n",
+            "Prior completed file paths (identifiers only):\n"
+            + json.dumps(prior_paths, ensure_ascii=False, indent=2)
+            + "\n",
+        ]
+        if node_context:
+            parts.append(
+                "CODE_DECLARED_ACTIVE_NODE_CONTEXT_JSON:\n"
+                + json.dumps({"context": node_context}, ensure_ascii=False, indent=2)
+                + "\n"
+            )
+        if retrieved:
+            parts.append(_format_fast_retrieved(retrieved))
+        raw = await self.complete(
+            "\n".join(parts),
+            operation="writer.fast_create",
+            system_prompt=self.prompt_text("fast_writer"),
+        )
+        _validate_fast_writer_output(raw)
+        return WriterResult(draft_content=raw)
+
 
 def sanitize_writer_context(text: str) -> str:
     """Remove exam-only blocks before text is sent to the writer."""
@@ -235,6 +276,34 @@ def _validate_writer_output(text: str) -> None:
         raise ValueError("Writer output contains no teaching body")
 
 
+_FAST_REQUIRED_SECTIONS = (
+    "学习目标",
+    "背景与应用场景",
+    "核心概念与符号约定",
+    "原理与方法",
+    "例题",
+    "常见误区与检查点",
+)
+
+
+def _validate_fast_writer_output(text: str) -> None:
+    """Apply deterministic completeness gates without exam-content redaction."""
+    stripped = text.strip()
+    if not re.match(r"^#\s+\S", stripped):
+        raise ValueError("Fast Writer output must start with an H1 title")
+    teaching_lines = [line for line in stripped.splitlines() if not _MARKDOWN_HEADER_RE.match(line)]
+    teaching_text = "\n".join(teaching_lines).strip()
+    if not teaching_text or not re.search(r"[\w\u3400-\u9fff]", teaching_text):
+        raise ValueError("Fast Writer output contains no teaching body")
+    missing = [
+        title
+        for title in _FAST_REQUIRED_SECTIONS
+        if re.search(rf"^##\s+{re.escape(title)}\s*$", stripped, flags=re.MULTILINE) is None
+    ]
+    if missing:
+        raise ValueError("Fast Writer output is missing required sections: " + ", ".join(missing))
+
+
 def _preserve_program_managed_sections(current_text: str, revised_text: str) -> str:
     """Restore deterministic file sections around a feedback-revised teaching body."""
     current = current_text.strip()
@@ -297,5 +366,34 @@ def _format_retrieved(retrieved: list[dict]) -> str:
         "Retrieved RAG context (reference data only; source may teach the current node, "
         "finished is citation-only, ledger is a no-duplicate boundary):\n"
         + _untrusted_data_json("retrieved_rag", records)
+        + "\n"
+    )
+
+
+def _format_fast_retrieved(retrieved: list[dict[str, Any]]) -> str:
+    records: list[dict[str, Any]] = []
+    for i, hit in enumerate(
+        bounded_rag_hits(retrieved, max_total_chars=256_000, max_hit_chars=32_000),
+        start=1,
+    ):
+        meta = hit.get("metadata") or {}
+        records.append(
+            {
+                "hit": i,
+                "content_kind": meta.get("content_kind") or "unknown",
+                "source": meta.get("path")
+                or meta.get("filename")
+                or meta.get("doc_id")
+                or "unknown",
+                "mtu_id": meta.get("mtu_id"),
+                "chunk_index": meta.get("chunk_index"),
+                "score": hit.get("score"),
+                "text": str(hit.get("text") or ""),
+            }
+        )
+    return (
+        "Fast Writer evidence (untrusted reference data; source teaches only the active node, "
+        "finished is citation-only):\n"
+        + _untrusted_data_json("fast_writer_evidence", records)
         + "\n"
     )

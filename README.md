@@ -10,7 +10,7 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 | --- | --- |
 | 桌面架构 | Tauri 原生壳加载 React 前端，并为当前项目启动一个本机、令牌保护的 Python engine sidecar。 |
 | 项目管理 | 桌面 App 以项目为中心；受管理项目保存在 `~/.tree/projects/`，可创建、导入、重命名、导出、迁移和删除。 |
-| 生成与学习 | 支持资料导入、AES PDF、大资源 PDF/OCR、清洗/切分/RAG、知识图谱、生成 Markdown 学习文件、阅读推荐、完成标记和基于反馈的定向修订。七阶段支持累计进度、断点续跑和局部失败。 |
+| 生成与学习 | 支持资料导入、AES PDF、大资源 PDF/OCR、清洗/切分/RAG、知识图谱、标准/快速两种 NodeRun、生成 Markdown 学习文件、阅读推荐、完成标记和基于反馈的定向修订。七阶段支持累计进度、断点续跑和局部失败。 |
 | 运行环境 | LLM 与 PaddleOCR 可在 App 中配置；本地 embedding 扩展会在需要时安装运行时和模型，也可改用外部 OpenAI-compatible embedding endpoint。 |
 | 已发布安装包 | macOS Apple Silicon DMG，以及 Windows x64 NSIS 和 MSI 安装包。 |
 
@@ -71,8 +71,9 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 - 配置 LLM API、Base URL、provider profile、默认模型和角色模型。
 - 配置 PaddleOCR token、API URL 和 OCR 模型。
 - 调整运行参数，例如 llama-server context 和 MTU chunk 阈值。
+- 切换 NodeRun 标准模式或快速模式；标准模式保留多智能体审核循环，快速模式每个节点只调用一次 Fast Writer。
 - 在高级设置中调整 NodeRun、LLM retry/timeout、Source/OCR、Archivist 和 Dagger 参数。
-- 在 Agent 提示词区查看、修改或恢复 Examiner、Student、Writer、Archivist 和 Dagger 的内置 prompt。
+- 在 Agent 提示词区查看、修改或恢复 Examiner、Student、Writer、Fast Writer、Archivist 和 Dagger 的内置 prompt。
 - 切换界面语言。
 
 普通用户通常只需要为 LLM、PaddleOCR 和 embedding 准备好运行环境，再开始生成。运行参数和密钥保存在本机全局 `~/.tree/config.env`；Agent prompt override 保存在当前项目的 `.tree/prompts/overrides.json`，会随 Parent Tree zip 一起迁移。
@@ -92,6 +93,10 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 | NodeRun / 结果 | 为每个知识节点生成最终学习文件。 |
 
 Run 支持续跑。进度条始终显示项目累计完成量；缓存命中和重启后会继承真实的 `done/total`，与一次性跑完保持相同显示，不使用“已复用”或 `0/0 = 100%` 的伪进度。并行 PDF OCR 按每个分块的单调已完成页数汇总，乱序、重复、重试和结果复用事件都不会让文件进度倒退或提前完成。阶段失败时，TREE 会冻结一致的终止快照，后台迟到事件不会把页面重新标成“进行中”；再次 Run 会从保留检查点继续。主动暂停会取消尚未结束的 NodeRun 请求并把 CLI、GUI 和阶段 active 统一显示为 stopped，但仍保留试卷、草稿、迭代和 `in_progress` 检查点供下次续跑。单个 NodeRun 失败时，已完成结果继续可用，项目显示为部分完成，并可从保留的试卷、草稿和 Bottleneck 精准重试。
+
+NodeRun 默认使用标准模式，继续执行 Examiner、Student 与 Writer 的命题、作答、审核和修订循环。快速模式为每个新启动节点只调用一次独立 Fast Writer，不生成试卷或学生作答，也不执行语义质量循环；它仍要求覆盖 Dagger 固定的成员 MTU 与 defines，保留不可信 RAG 隔离、完整章节结构、来源追溯、原子发布、Ledger 和 finished RAG 索引。快速模式不会清洗课件中合法的“标准答案”或“解析”内容，但会要求模型纠正原资料中的事实、公式和推导错误。
+
+模式在节点真正启动时写入 NodeRun。运行中切换设置时，已经启动的并发节点继续使用原模式，之后启动的节点使用新模式；暂停、失败重试继续沿用节点快照。“重新生长”会清除该快照，并在节点重新启动时读取当前设置。切换模式不会重写已经完成的知识文件。
 
 TREE 会按实际 LLM 服务商共享并发预算，遇到 429、超时、服务繁忙和可恢复 5xx 时自动降速并遵守 `Retry-After`。每次 AI 请求都有稳定的 operation id，并按具体任务选择输出上限、超时、推理模式、JSON 能力和重试次数；角色级配置仍是用户可调的总上限。项目级 `.tree/runtime/services/llm-operations.jsonl` 以有界轮转 JSONL 记录 operation、角色、provider、模型、token 估算与实际 usage、耗时、重试原因、终止原因和降级状态，但不会记录 prompt、材料、学生答案、模型正文、密钥或 Authorization header；`tre logs` 可列出该文件，GUI 诊断接口可读取最近摘要。
 
@@ -167,6 +172,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | `SOURCE_INGEST_CONCURRENCY` | `4` | 并行处理的材料数。 |
 | `ARCHIVIST_CHUNK_CONCURRENCY` | `2` | 单次材料清洗/切分的并行分块数。 |
 | `DAGGER_PREREQUISITE_CONCURRENCY` | `3` | Dagger 先修关系请求并发数。 |
+| `NODE_RUN_MODE` | `standard` | NodeRun 模式：`standard` 使用多智能体质量循环，`fast` 每个新节点只调用一次 Fast Writer。 |
 | `MAX_ACTIVE_NODE_RUNS` | `3` | 同时运行的 NodeRun 数。 |
 | `PADDLEOCR_MODEL` | `PaddleOCR-VL-1.6` | PaddleOCR 服务使用的模型名。 |
 | `PADDLEOCR_API_URL` | `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` | PaddleOCR 请求地址。 |
@@ -178,7 +184,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 
 每个角色都可以通过 `<ROLE>_PROVIDER_PROFILE`、`<ROLE>_CONTEXT_WINDOW` 和 `<ROLE>_MAX_OUTPUT_TOKENS` 覆盖全局值，例如 `DAGGER_CONTEXT_WINDOW=160000`。调用前 TREE 会估算 system + user 输入；operation 的输出预算只会在角色上限以内收紧，短 JSON 修复不会默认占用与长文生成相同的输出额度和推理强度。超出输入预算时会先缩减低优先级 RAG/repair 上下文或为 Dagger 覆盖输入分批，仍无法容纳时在请求 provider 前返回包含 operation、角色和预算数字的错误。
 
-Agent prompt 是项目级设置。修改 prompt 会影响 JSON 格式稳定性、知识图谱生成和审核结果；每个 prompt 都可以单独恢复默认，也可以一键全部恢复默认。有效的 Archivist/Dagger prompt 哈希和语义配置会进入对应 Planner 缓存签名，因此只失效真正受影响的阶段，不包含 API key 或 prompt 正文。
+Agent prompt 是项目级设置。标准 Writer 与 Fast Writer 使用相互独立的 prompt；修改 prompt 会影响 JSON 格式稳定性、知识图谱生成和审核结果。每个 prompt 都可以单独恢复默认，也可以一键全部恢复默认。有效的 Archivist/Dagger prompt 哈希和语义配置会进入对应 Planner 缓存签名，因此只失效真正受影响的阶段，不包含 API key 或 prompt 正文。
 
 `SOURCE_MTU_CHUNK_TOKENS` 不强制小于 `LLAMA_SERVER_CTX`，因为 TREE 的 token 估算和 llama.cpp 实际 tokenization 不完全一致。默认组合是 `LLAMA_SERVER_CTX=22000`、`SOURCE_MTU_CHUNK_TOKENS=20000`。
 

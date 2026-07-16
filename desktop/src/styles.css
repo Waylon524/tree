@@ -648,6 +648,45 @@ textarea {
   background: var(--bg);
   color: var(--text);
 }
+.node-run-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.node-run-mode strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.node-run-mode p {
+  margin: 4px 0 0;
+}
+.mode-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.mode-toggle button {
+  min-width: 82px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mode-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
 .secret-input-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1110,6 +1149,14 @@ textarea {
   .section-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .node-run-mode {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .mode-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
   .project-chip {
     margin-left: 0;

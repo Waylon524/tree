@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tree.planner.store import write_json_atomic
-from tree.state.models import NodeExecutionRecord, NodeRunRecord, PipelineState
+from tree.state.models import NodeExecutionRecord, NodeRunMode, NodeRunRecord, PipelineState
 
 
 class StateManager:
@@ -73,14 +73,33 @@ class StateManager:
         return state
 
     def resume_node_run(self, run: NodeRunRecord) -> NodeRunRecord:
-        """Resume a failed run while preserving its exam, draft, and audit history."""
+        """Resume a failed run while preserving its mode and generation checkpoints."""
         run.status = "running"
         run.last_error = None
         return run
 
+    def snapshot_node_run_mode(
+        self,
+        run: NodeRunRecord,
+        preferred: NodeRunMode,
+    ) -> NodeRunMode:
+        """Persist a mode once; legacy runs with standard checkpoints stay standard."""
+        if run.mode is not None:
+            return run.mode
+        has_standard_checkpoint = bool(
+            run.exam_sections is not None
+            or run.current_iteration
+            or run.previous_bottleneck
+            or run.bottleneck_history
+            or run.exam_reconciliation_history
+        )
+        run.mode = NodeRunMode.STANDARD if has_standard_checkpoint else preferred
+        return run.mode
+
     def reset_node_run(self, run: NodeRunRecord) -> NodeRunRecord:
         """Wipe a run back to a clean slate so it re-composes a fresh exam/draft."""
         run.status = "running"
+        run.mode = None
         run.outputs_completed = []
         run.exam_sections = None
         run.draft_path = None

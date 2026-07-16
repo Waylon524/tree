@@ -29,6 +29,7 @@ from tree.state.models import (
     ExamReconciliationResult,
     ExamSections,
     NodeExecutionRecord,
+    NodeRunMode,
     NodeRunRecord,
     PipelineState,
     Route,
@@ -158,6 +159,28 @@ class _FakeWriter:
         )
 
 
+class _FastWriter:
+    def __init__(self):
+        self.fast_calls = []
+
+    async def draft(self, **kw):
+        raise AssertionError("standard Writer must not run in fast mode")
+
+    async def fast_draft(self, **kw):
+        self.fast_calls.append(kw)
+        return WriterResult(
+            draft_content=(
+                "# 002. 化学平衡\n\n"
+                "## 学习目标\n\n掌握平衡常数。\n\n"
+                "## 背景与应用场景\n\n说明可逆反应。\n\n"
+                "## 核心概念与符号约定\n\n定义平衡常数。\n\n"
+                "## 原理与方法\n\n推导表达式。\n\n"
+                "## 例题\n\n## 标准答案\n\n保留并整合合法解析。\n\n"
+                "## 常见误区与检查点\n\n检查平衡浓度。"
+            )
+        )
+
+
 class _FakeRetriever:
     def __init__(self):
         self.indexed = []
@@ -279,6 +302,131 @@ async def test_node_run_fail_then_pass_records_single_node_output(tmp_path):
     assert execution.status == "completed"
     assert execution.outputs_completed == ["002.化学平衡.md"]
     assert state.node_runs[0].status == "complete"
+
+
+async def test_fast_node_run_calls_only_fast_writer_and_publishes_normal_format(tmp_path):
+    _seed(tmp_path)
+    dag_envelope = json.loads(paths.knowledge_dag_path(tmp_path).read_text(encoding="utf-8"))
+    target = next(node for node in dag_envelope["data"]["nodes"] if node["node_id"] == "n1")
+    target["member_mtu_ids"] = ["mtu:a", "mtu:b"]
+    write_json_atomic(paths.knowledge_dag_path(tmp_path), dag_envelope)
+    write_json_atomic(
+        paths.mtus_path(tmp_path),
+        envelope(
+            schema="tree.mtus",
+            data={
+                "mtus": [
+                    {"mtu_id": "mtu:a", "source_id": "课件/a.md", "line_range": [1, 20]},
+                    {"mtu_id": "mtu:b", "source_id": "课件/b.md", "line_range": [21, 40]},
+                ]
+            },
+        ),
+    )
+
+    class _FastEvidenceRetriever(_FakeRetriever):
+        def source_evidence(self, mtu_ids):
+            return [
+                {
+                    "text": f"evidence for {mtu_id}",
+                    "metadata": {"content_kind": "source", "mtu_id": mtu_id},
+                }
+                for mtu_id in mtu_ids
+            ]
+
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state.node_runs[0].mode = NodeRunMode.FAST
+    state_mgr.save(state)
+    examiner = _FakeExaminer()
+    student = _FakeStudent()
+    writer = _FastWriter()
+    retriever = _FastEvidenceRetriever()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5, node_run_mode="standard"),
+        examiner=examiner,
+        student=student,
+        writer=writer,
+        retriever=retriever,
+        state_mgr=state_mgr,
+    )
+
+    assert await runner.run_one("n1") == "node_complete"
+
+    assert examiner.compose_kwargs == []
+    assert examiner.audit_calls == 0
+    assert student.calls == []
+    assert len(writer.fast_calls) == 1
+    task = writer.fast_calls[0]["task_spec"]
+    assert task["node_id"] == "n1"
+    assert task["defines"] == ["平衡"]
+    assert task["member_mtu_ids"] == ["mtu:a", "mtu:b"]
+    assert task["direct_prerequisites"][0]["node_id"] == "n0"
+    assert retriever.finished_queries == [
+        {"allowed_paths": {"outputs/001.前置.md"}, "top_k": 8}
+    ]
+    assert any(hit["text"] == "prior hit" for hit in writer.fast_calls[0]["retrieved"])
+    output = paths.outputs_root(tmp_path) / "002.化学平衡.md"
+    text = output.read_text(encoding="utf-8")
+    assert text.startswith("# 002. 化学平衡\n\n## 先修前置\n")
+    assert "## 学习目标" in text
+    assert "## 标准答案" in text
+    assert "## 来源追溯" in text
+    assert "`课件/a.md`，第 1–20 行（`mtu:a`）" in text
+    assert "`课件/b.md`，第 21–40 行（`mtu:b`）" in text
+    assert state_mgr.load().node_runs[0].mode is NodeRunMode.FAST
+
+
+async def test_fast_node_run_resumes_saved_draft_without_second_writer_call(tmp_path):
+    _seed(tmp_path)
+    draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text(
+        "# 002. 化学平衡\n\n## 学习目标\n\n恢复已经保存的快速草稿。\n",
+        encoding="utf-8",
+    )
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state.node_runs[0].mode = NodeRunMode.FAST
+    state.node_runs[0].draft_path = draft
+    state_mgr.save(state)
+    writer = _FastWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5, node_run_mode="standard"),
+        examiner=_FakeExaminer(),
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    assert await runner.run_one("n1") == "node_complete"
+    assert writer.fast_calls == []
+    assert (paths.outputs_root(tmp_path) / "002.化学平衡.md").exists()
+
+
+async def test_started_standard_node_ignores_later_fast_setting(tmp_path):
+    _seed(tmp_path)
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    state = state_mgr.load()
+    state.node_runs[0].mode = NodeRunMode.STANDARD
+    state_mgr.save(state)
+    examiner = _FakeExaminer(fail_then_pass=1)
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5, node_run_mode="fast"),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    assert await runner.run_one("n1") == "node_complete"
+    assert examiner.compose_kwargs
+    assert writer.calls == 1
 
 
 async def test_node_run_planner_prerequisite_defect_stops_before_writer(tmp_path):

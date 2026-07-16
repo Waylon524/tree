@@ -23,6 +23,7 @@ from tree.state.models import (
     ExamReconciliationTrigger,
     ExamSections,
     IterationState,
+    NodeRunMode,
     Route,
 )
 
@@ -75,6 +76,7 @@ class NodeRunner:
         if execution is None:
             raise RuntimeError(f"No node execution for {node_id}")
         run = self.state_mgr.find_run(state, execution.node_run_id)
+        mode = self._snapshot_run_mode(state, run)
         snapshot = run.coverage_snapshot if run else None
 
         dag = self._load_dag()
@@ -93,6 +95,24 @@ class NodeRunner:
         node_context = _node_context(node_id, dag, nodes_by_id, snapshot)
         prior_paths, allowed_paths = self._prior_scope(snapshot, ledger)
         collections = list(execution.source_collections or node.get("collections") or [])
+
+        if mode is NodeRunMode.FAST:
+            await self._run_fast(
+                node_id=node_id,
+                node=node,
+                dag=dag,
+                nodes_by_id=nodes_by_id,
+                run=run,
+                execution=execution,
+                file_seq=file_seq,
+                node_context=node_context,
+                prior_paths=prior_paths,
+                allowed_paths=allowed_paths,
+                collections=collections,
+                snapshot=snapshot,
+            )
+            self._complete_node_if_covered(node_id, execution.node_run_id)
+            return "node_complete"
 
         if run and run.exam_sections is not None:
             exam = run.exam_sections
@@ -129,6 +149,80 @@ class NodeRunner:
         await self._iteration_loop(iter_state, execution, collections, prior_paths, allowed_paths, node_context)
         self._complete_node_if_covered(node_id, execution.node_run_id)
         return "node_complete"
+
+    def _snapshot_run_mode(self, state: Any, run: Any) -> NodeRunMode:
+        preferred = NodeRunMode(
+            str(getattr(self.settings, "node_run_mode", NodeRunMode.STANDARD.value))
+        )
+        if run is None:
+            return preferred
+        mode = self.state_mgr.snapshot_node_run_mode(run, preferred)
+        self.state_mgr.save(state)
+        return mode
+
+    async def _run_fast(
+        self,
+        *,
+        node_id: str,
+        node: dict[str, Any],
+        dag: dict[str, Any],
+        nodes_by_id: dict[str, dict[str, Any]],
+        run: Any,
+        execution: Any,
+        file_seq: str,
+        node_context: str,
+        prior_paths: list[str],
+        allowed_paths: set[str],
+        collections: list[str],
+        snapshot: Any,
+    ) -> None:
+        """Generate and publish a node with exactly one Fast Writer content call."""
+        title = _clean_title(str(node.get("title") or node_id)) or node_id
+        draft_path = _existing_draft_path(run.draft_path) if run else None
+        if draft_path is None:
+            query = f"{node_id}\n{title}\n完整讲清当前知识节点"
+            source_hits = self._fast_source_evidence_hits(node, query, collections, top_k=8)
+            result = await self.writer.fast_draft(
+                span_title=title,
+                file_seq=file_seq,
+                task_spec=_fast_writer_task_spec(
+                    node_id,
+                    node,
+                    dag,
+                    nodes_by_id,
+                    snapshot,
+                ),
+                prior_paths=prior_paths,
+                retrieved=source_hits
+                + self.retriever.finished_hits(query, allowed_paths=allowed_paths, top_k=8),
+                node_context=node_context,
+            )
+            draft_path = self._persist_draft(node_id, file_seq, title, result.draft_content)
+            self._persist_run_state(
+                execution.node_run_id,
+                draft_path=draft_path,
+                status="running",
+                last_error=None,
+            )
+
+        publication = IterationState(
+            execution_path=node_id,
+            file_seq=file_seq,
+            knowledge_point=title,
+            covered_node_ids=[node_id],
+            draft_path=draft_path,
+        )
+        self._handle_pass(
+            publication,
+            execution,
+            ExamSections(
+                knowledge_point=title,
+                covered_node_ids=[node_id],
+                blind_exam="",
+                answer_key="",
+                writer_instructions="",
+            ),
+        )
 
     async def _iteration_loop(
         self,
@@ -657,7 +751,7 @@ class NodeRunner:
         collections: list[str],
         *,
         top_k: int,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         semantic = self.retriever.source_hits(
             query,
             collections=collections,
@@ -667,6 +761,29 @@ class NodeRunner:
         evidence_fn = getattr(self.retriever, "source_evidence", None)
         required = evidence_fn(list(node.get("member_mtu_ids") or [])) if callable(evidence_fn) else []
         return _dedupe_hits([*required, *semantic])
+
+    def _fast_source_evidence_hits(
+        self,
+        node: dict[str, Any],
+        query: str,
+        collections: list[str],
+        *,
+        top_k: int,
+    ) -> list[dict]:
+        hits = self._source_evidence_hits(node, query, collections, top_k=top_k)
+        required_ids = {str(item) for item in node.get("member_mtu_ids") or [] if item}
+        returned_ids = {
+            str((hit.get("metadata") or {}).get("mtu_id"))
+            for hit in hits
+            if (hit.get("metadata") or {}).get("mtu_id")
+        }
+        missing = sorted(required_ids - returned_ids)
+        if missing:
+            raise RuntimeError(
+                f"Fast Writer source evidence is missing member MTUs for {node.get('node_id')}: "
+                + ", ".join(missing)
+            )
+        return hits
 
     def _source_trace(self, node_id: str) -> str:
         node = self._node_for_id(node_id)
@@ -906,6 +1023,43 @@ def _node_context(node_id: str, dag: dict[str, Any], nodes_by_id: dict[str, dict
     lines.append("Covered_Node_IDs must be exactly: " + node_id)
     lines.append("Do not cover sibling, future, or multiple KnowledgeNodes in this NodeRun.")
     return "\n".join(lines)
+
+
+def _fast_writer_task_spec(
+    node_id: str,
+    node: dict[str, Any],
+    dag: dict[str, Any],
+    nodes_by_id: dict[str, dict[str, Any]],
+    snapshot: Any,
+) -> dict[str, Any]:
+    parents, children = _prereq_adjacency(dag)
+    direct_ids = list(parents.get(node_id, []))
+    visible_ids = sorted(getattr(snapshot, "snapshot_visible_ancestor_node_ids", []) or [])
+    future_ids = sorted(
+        set(getattr(snapshot, "forbidden_future_node_ids", []) or [])
+        or _descendants(children, node_id)
+    )
+    other_ids = {str(item.get("node_id")) for item in dag.get("nodes") or [] if item.get("node_id")}
+    sibling_ids = sorted(other_ids - {node_id} - set(visible_ids) - set(future_ids))
+    return {
+        "task": "fast_create",
+        "node_id": node_id,
+        "title": str(node.get("title") or node_id),
+        "member_mtu_ids": list(node.get("member_mtu_ids") or []),
+        "defines": list(node.get("defines") or []),
+        "direct_prerequisites": [
+            {
+                "node_id": parent_id,
+                "title": str(nodes_by_id.get(parent_id, {}).get("title") or parent_id),
+                "defines": list(nodes_by_id.get(parent_id, {}).get("defines") or []),
+            }
+            for parent_id in direct_ids
+        ],
+        "visible_ancestor_node_ids": visible_ids,
+        "material_external_prerequisites": list(node.get("external_prerequisites") or []),
+        "forbidden_sibling_node_ids": sibling_ids,
+        "forbidden_future_node_ids": future_ids,
+    }
 
 
 def _prereq_adjacency(dag: dict[str, Any]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:

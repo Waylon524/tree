@@ -99,6 +99,7 @@ OPERATION_SPECS: dict[str, LLMOperationSpec] = {
     # Student / Writer natural-language operations
     "student.answer": LLMOperationSpec("student", 131_072, "disabled"),
     "writer.create": LLMOperationSpec("writer", 131_072, "enabled"),
+    "writer.fast_create": LLMOperationSpec("writer", 131_072, "enabled"),
     "writer.optimize": LLMOperationSpec("writer", 131_072, "enabled"),
     "writer.feedback_revision": LLMOperationSpec("writer", 131_072, "enabled"),
 }

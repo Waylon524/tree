@@ -37,6 +37,7 @@ _DEFAULT_ENV = {
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
     "LLAMA_SERVER_CTX": str(DEFAULT_LLAMA_SERVER_CTX),
     "SOURCE_MTU_CHUNK_TOKENS": str(DEFAULT_SOURCE_MTU_CHUNK_TOKENS),
+    "NODE_RUN_MODE": "standard",
     "MAX_ITERATIONS": "5",
     "MAX_ACTIVE_NODE_RUNS": "3",
     "MAX_EXAMINER_SPAN_NODES": "3",
@@ -84,6 +85,7 @@ _WRITE_ORDER = (
     "PADDLEOCR_MODEL",
     "LLAMA_SERVER_CTX",
     "SOURCE_MTU_CHUNK_TOKENS",
+    "NODE_RUN_MODE",
     "MAX_ITERATIONS",
     "MAX_ACTIVE_NODE_RUNS",
     "MAX_EXAMINER_SPAN_NODES",
@@ -203,6 +205,7 @@ def read_settings_config(root: Path, *, env_path: Path | None = None) -> dict[st
         "source_mtu_chunk_tokens": _config_int(
             values, "SOURCE_MTU_CHUNK_TOKENS", DEFAULT_SOURCE_MTU_CHUNK_TOKENS
         ),
+        "node_run_mode": values.get("NODE_RUN_MODE", "standard"),
     }
     for field, (key, _minimum, _maximum) in _INT_SETTINGS.items():
         result[field] = _config_int(values, key, int(_DEFAULT_ENV[key]))
@@ -242,6 +245,13 @@ def write_settings_config(
     profile = existing.get("LLM_PROVIDER_PROFILE", "auto").lower()
     if profile not in {"auto", "deepseek", "openai", "generic"}:
         raise ValueError("llm_provider_profile must be auto, deepseek, openai, or generic.")
+
+    node_run_mode = _settings_str(settings.get("node_run_mode"))
+    if node_run_mode:
+        node_run_mode = node_run_mode.lower()
+        if node_run_mode not in {"standard", "fast"}:
+            raise ValueError("node_run_mode must be standard or fast.")
+        existing["NODE_RUN_MODE"] = node_run_mode
 
     role_models = settings.get("role_models")
     if isinstance(role_models, dict):

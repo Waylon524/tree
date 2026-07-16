@@ -7,7 +7,7 @@ import pytest
 from tree.agents.archivist import ArchivistAgent
 from tree.agents.dagger import DaggerAgent
 from tree.agents.examiner import ExaminerAgent
-from tree.agents.prompts import ARCHIVIST_MTU_PROMPT, save_prompt_override
+from tree.agents.prompts import ARCHIVIST_MTU_PROMPT, get_prompt, save_prompt_override
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.planner.mtu import MtuCoverageError
@@ -1165,6 +1165,88 @@ async def test_agent_uses_project_prompt_override(tmp_path):
     )
 
     assert client.systems[-1] == "CUSTOM WRITER PROMPT"
+
+
+_FAST_WRITER_OUTPUT = """# 001. 化学平衡
+
+## 学习目标
+掌握化学平衡。
+
+## 背景与应用场景
+说明反应体系。
+
+## 核心概念与符号约定
+定义平衡常数。
+
+## 原理与方法
+推导平衡常数表达式。
+
+## 例题
+给出完整计算与检查。
+
+## 常见误区与检查点
+区分浓度和平衡浓度。
+"""
+
+
+async def test_fast_writer_uses_independent_prompt_and_keeps_answer_labeled_source():
+    client = _FakeClient({"writer": _FAST_WRITER_OUTPUT})
+    agent = WriterAgent(client)
+
+    result = await agent.fast_draft(
+        span_title="化学平衡",
+        file_seq="001",
+        task_spec={
+            "node_id": "n1",
+            "member_mtu_ids": ["mtu:1"],
+            "defines": ["平衡常数"],
+            "forbidden_sibling_node_ids": ["n2"],
+        },
+        prior_paths=["outputs/000.前置.md"],
+        retrieved=[
+            {
+                "text": "## 标准答案\n合法的例题解析",
+                "metadata": {"content_kind": "source", "mtu_id": "mtu:1"},
+            }
+        ],
+        node_context="TARGET n1",
+    )
+
+    assert result.draft_content == _FAST_WRITER_OUTPUT
+    assert client.operations == ["writer.fast_create"]
+    assert client.systems[-1] == get_prompt("fast_writer")
+    assert "FAST_WRITER_TASK_SPEC_JSON" in client.calls[-1][1]
+    assert "TREE_UNTRUSTED_DATA_JSON" in client.calls[-1][1]
+    assert "标准答案" in client.calls[-1][1]
+    assert "[REDACTED writer-invisible exam content]" not in client.calls[-1][1]
+    assert "Bottleneck" not in client.systems[-1]
+    assert "Writer_Instructions" not in client.systems[-1]
+
+
+async def test_fast_writer_rejects_incomplete_structure():
+    client = _FakeClient({"writer": "# 001. 化学平衡\n\n## 学习目标\n只有目标。"})
+
+    with pytest.raises(ValueError, match="missing required sections"):
+        await WriterAgent(client).fast_draft(
+            span_title="化学平衡",
+            file_seq="001",
+            task_spec={"node_id": "n1"},
+            prior_paths=[],
+        )
+
+
+async def test_fast_writer_uses_its_own_project_prompt_override(tmp_path):
+    save_prompt_override(tmp_path, "fast_writer", "CUSTOM FAST WRITER PROMPT")
+    client = _FakeClient({"writer": _FAST_WRITER_OUTPUT})
+
+    await WriterAgent(client, project_root=tmp_path).fast_draft(
+        span_title="化学平衡",
+        file_seq="001",
+        task_spec={"node_id": "n1"},
+        prior_paths=[],
+    )
+
+    assert client.systems[-1] == "CUSTOM FAST WRITER PROMPT"
 
 
 async def test_archivist_and_dagger_use_project_prompt_overrides(tmp_path):

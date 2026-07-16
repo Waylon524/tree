@@ -6,6 +6,8 @@
 
 ### Added
 
+- 增加可在照料页切换的 NodeRun 标准/快速模式。快速模式为每个新启动节点只调用一次独立 Fast Writer，同时保留 Dagger 节点边界、成员 MTU/defines 覆盖、不可信 RAG 隔离、固定教材结构、来源追溯、原子发布、Ledger 和 finished RAG 索引。
+- 增加独立且可项目级覆盖的 Fast Writer prompt 与 `writer.fast_create` operation；任务规格由代码声明当前节点、直接前置、可见祖先和禁止扩展的兄弟/未来节点，合法的课件答案与解析不会被标准模式考试门禁误删。
 - 增加项目级有界轮转 LLM operation JSONL，记录安全的成功、重试、输出截断、provider 能力降级和失败摘要；`tre logs` 可发现该日志，GUI 提供最近 operation 诊断接口。
 - 为 Archivist 与 Dagger 的全部 AI JSON 边界增加严格 Pydantic schema 和唯一 JSON 对象提取；字段类型、必填内容、未知字段与跨对象一致性错误现在进入受控 repair，并在耗尽后失败关闭。
 - 为 Examiner 生成的 Writer Instructions 增加严格结构模型，校验覆盖节点、教学范围、必需概念、公式、推导、禁止越界项和先修缺口后才允许传给 Writer。
@@ -15,6 +17,7 @@
 
 ### Changed
 
+- NodeRun 模式现在在节点启动时持久化：运行中切换只影响之后启动的节点，暂停和失败恢复沿用原模式，“重新生长”清除模式快照后按当前设置重新选择；已完成知识文件不会因切换模式自动重写。
 - 将全部 AI operation 的 Max Tokens 上限提高到原配置的十六倍：`512→8192`、`2048→32768`、`4096→65536`、`8192→131072`；默认角色级输出上限同步提高到 `131072`，默认 DeepSeek V4 Flash context window 校准为 `1000000`，在保持短修复请求分档的同时降低长输出截断概率。
 - LLM 响应现在统一验证 choices、message、content、refusal、tool calls 与 `finish_reason`，仅在完整响应通过契约后记录 provider 成功；异常退出会把流水线、当前阶段和 active 状态统一收敛到失败或停止终态。
 - 全部 Agent prompt 和调用入口明确分离代码任务控制与不可信材料；OCR、RAG、草稿、试卷、答案、反馈及格式修复原响应中的控制语句不再具有任务权限，格式修复也保留完整原始任务而不静默截断中间内容。
@@ -28,6 +31,7 @@
 
 ### Fixed
 
+- 修复 NodeRun 模式切换控件引用未定义颜色变量、浅色主题下已选模式文字近乎不可见的问题；标准与快速模式现在都使用主题强调色显示明确选中态。
 - 修复 Examiner 把材料内部缺失先修交给 Writer 越界补写的静默语义错误；确认属于图谱的缺口现在返回 `PLANNER_DEFECT: MISSING_PREREQUISITE`，NodeRun 在 Writer 调用前以可行动错误终止并提示重新生长。
 - 修复 Student 在推理完整时仍被要求编造“缺失逻辑”、外部基础名称被误当成已学证据，以及 Dagger 因相同 define 自动合并节点、REFINE 越出候选簇和环修复改动未报告环的问题。
 - 修复 Dagger 前置理由 schema 与 prompt 对 `none` 分支要求不一致、用抽象“更高层”概念代替最直接先修，以及 Writer 把 RAG chunk 当成完整节点成员或虚构前置文件锚点的问题。

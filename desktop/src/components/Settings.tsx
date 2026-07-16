@@ -29,6 +29,7 @@ const PROMPT_GROUPS: PromptKey[] = [
   "examiner",
   "student",
   "writer",
+  "fast_writer",
   "archivist_clean",
   "archivist_mtu",
   "dagger",
@@ -87,6 +88,7 @@ const EMPTY_FIELDS: SettingsSave = {
   paddleocr_model: "PaddleOCR-VL-1.6",
   llama_server_ctx: "22000",
   source_mtu_chunk_tokens: "20000",
+  node_run_mode: "standard",
   ...EMPTY_ADVANCED_FIELDS,
 };
 
@@ -255,6 +257,7 @@ function fieldsFromSettings(settings: SettingsData): SettingsSave {
     paddleocr_model: settings.paddleocr_model,
     llama_server_ctx: String(settings.llama_server_ctx),
     source_mtu_chunk_tokens: String(settings.source_mtu_chunk_tokens),
+    node_run_mode: settings.node_run_mode,
     ...advancedFieldsFromSettings(settings),
   };
 }
@@ -486,6 +489,34 @@ export function Settings() {
             <legend>
               {t("tend.climate")} <small className="legend-note">({t("tend.note.runtime")})</small>
             </legend>
+            <div className="node-run-mode">
+              <div>
+                <strong>{t("settings.nodeRunMode")}</strong>
+                <p className="hint">
+                  {fields.node_run_mode === "fast"
+                    ? t("settings.nodeRunMode.fastHint")
+                    : t("settings.nodeRunMode.standardHint")}
+                </p>
+              </div>
+              <div className="mode-toggle" role="group" aria-label={t("settings.nodeRunMode")}>
+                <button
+                  type="button"
+                  className={fields.node_run_mode === "standard" ? "active" : ""}
+                  aria-pressed={fields.node_run_mode === "standard"}
+                  onClick={() => setFields((prev) => ({ ...prev, node_run_mode: "standard" }))}
+                >
+                  {t("settings.nodeRunMode.standard")}
+                </button>
+                <button
+                  type="button"
+                  className={fields.node_run_mode === "fast" ? "active" : ""}
+                  aria-pressed={fields.node_run_mode === "fast"}
+                  onClick={() => setFields((prev) => ({ ...prev, node_run_mode: "fast" }))}
+                >
+                  {t("settings.nodeRunMode.fast")}
+                </button>
+              </div>
+            </div>
             <div className="form-grid">
               <Field
                 label={t("settings.llamaCtx")}

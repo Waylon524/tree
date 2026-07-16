@@ -12,7 +12,7 @@ from tree.agents.dagger import DaggerAgent
 from tree.agents.examiner import ExaminerAgent
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent
-from tree.config import DEFAULT_SOURCE_MTU_CHUNK_TOKENS, Settings
+from tree.config import DEFAULT_SOURCE_MTU_CHUNK_TOKENS, Settings, configured_node_run_mode
 from tree.engine.node_run import (
     NodeRunner,
     ledger_covered_node_ids,
@@ -26,6 +26,7 @@ from tree.observability.progress import ProgressTracker
 from tree.planner.pipeline import load_dag
 from tree.planner.schedule import start_ready_node_runs
 from tree.state.manager import StateManager
+from tree.state.models import NodeRunMode
 
 if TYPE_CHECKING:
     from tree.rag.indexer import RAGIndexer
@@ -185,6 +186,10 @@ class TreeEngine:
         return await prepare_sources(self)
 
     def _activate_ready_node_runs(self, state: Any) -> Any:
+        configured_mode = configured_node_run_mode(
+            self.root,
+            fallback=str(getattr(self.settings, "node_run_mode", NodeRunMode.STANDARD.value)),
+        )
         updated = start_ready_node_runs(
             state,
             load_dag(self.root),
@@ -192,6 +197,7 @@ class TreeEngine:
             max_active=self.settings.max_active_node_runs,
             finished_output_ids=ledger_output_ids(self.root),
             now=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            node_run_mode=NodeRunMode(configured_mode),
         )
         self.state_mgr.save(updated)
         return updated

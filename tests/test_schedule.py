@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tree.planner.schedule import start_ready_node_runs
-from tree.state.models import NodeExecutionRecord, PipelineState
+from tree.state.models import NodeExecutionRecord, NodeRunMode, PipelineState
 
 
 _DAG = {
@@ -55,3 +55,25 @@ def test_does_not_reschedule_existing_node():
     state = start_ready_node_runs(state, _DAG, covered_node_ids=set(), max_active=5)
 
     assert [item.node_id for item in state.node_executions] == ["n1"]
+
+
+def test_new_runs_snapshot_current_mode_without_changing_started_runs():
+    state = start_ready_node_runs(
+        PipelineState(),
+        _DAG,
+        covered_node_ids=set(),
+        max_active=1,
+        node_run_mode=NodeRunMode.STANDARD,
+    )
+    assert state.node_runs[0].mode is NodeRunMode.STANDARD
+    state.node_executions[0].status = "completed"
+
+    state = start_ready_node_runs(
+        state,
+        _DAG,
+        covered_node_ids={"n1"},
+        max_active=1,
+        node_run_mode=NodeRunMode.FAST,
+    )
+
+    assert [run.mode for run in state.node_runs] == [NodeRunMode.STANDARD, NodeRunMode.FAST]

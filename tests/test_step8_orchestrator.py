@@ -401,7 +401,13 @@ async def test_tree_engine_keeps_completed_nodes_when_an_independent_node_fails(
 
 
 def test_retry_failed_node_preserves_exam_draft_and_bottleneck(tmp_path):
-    from tree.state.models import ExamSections, NodeExecutionRecord, NodeRunRecord, PipelineState
+    from tree.state.models import (
+        ExamSections,
+        NodeExecutionRecord,
+        NodeRunMode,
+        NodeRunRecord,
+        PipelineState,
+    )
 
     draft = tmp_path / "draft.md"
     draft.write_text("draft", encoding="utf-8")
@@ -414,6 +420,7 @@ def test_retry_failed_node_preserves_exam_draft_and_bottleneck(tmp_path):
             NodeRunRecord(
                 node_id="n1",
                 run_id="n1::run",
+                mode=NodeRunMode.FAST,
                 status="failed",
                 current_iteration=4,
                 exam_sections=ExamSections(
@@ -436,12 +443,67 @@ def test_retry_failed_node_preserves_exam_draft_and_bottleneck(tmp_path):
 
     assert resumed.node_executions[0].status == "in_progress"
     assert run.status == "running"
+    assert run.mode is NodeRunMode.FAST
     assert run.current_iteration == 4
     assert run.exam_sections is not None and run.exam_sections.answer_key == "A"
     assert run.draft_path == draft
     assert run.previous_bottleneck == "same bottleneck"
     assert run.exam_repair_count == 1
     assert run.last_error is None
+
+
+async def test_tree_engine_snapshots_latest_mode_only_for_newly_started_nodes(
+    tmp_path, monkeypatch
+):
+    from tree.state.models import NodeRunMode
+
+    paths.ensure_workspace_dirs(tmp_path)
+    _seed_dag(
+        tmp_path,
+        [
+            {"node_id": "parent", "title": "Parent", "collections": ["课件"]},
+            {"node_id": "child", "title": "Child", "collections": ["课件"]},
+        ],
+        edges=[
+            {
+                "from_node_id": "parent",
+                "to_node_id": "child",
+                "relation": "prerequisite",
+            }
+        ],
+    )
+
+    async def _noop_prepare(engine):
+        return {"mtu_count": 0}
+
+    monkeypatch.setattr("tree.engine.orchestrator.prepare_sources", _noop_prepare)
+    modes = iter(["standard", "fast", "fast", "fast"])
+    monkeypatch.setattr(
+        "tree.engine.orchestrator.configured_node_run_mode",
+        lambda *args, **kwargs: next(modes, "fast"),
+    )
+    observed = []
+
+    class _ModeRunner(_FakeRunner):
+        async def run_one(self, node_id: str) -> str:
+            state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+            execution = next(item for item in state.node_executions if item.node_id == node_id)
+            run = next(item for item in state.node_runs if item.run_id == execution.node_run_id)
+            observed.append((node_id, run.mode))
+            return await super().run_one(node_id)
+
+    engine = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1, node_run_mode="standard"),
+        node_runner=_ModeRunner(tmp_path),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+
+    await engine.run()
+
+    assert observed == [
+        ("parent", NodeRunMode.STANDARD),
+        ("child", NodeRunMode.FAST),
+    ]
 
 
 async def _wait_until(predicate):
