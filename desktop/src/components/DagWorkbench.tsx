@@ -8,7 +8,9 @@ import type { DagEdge, DagNode, DagPayload } from "../api";
 import type { Status } from "../types";
 import { useT } from "../i18n";
 import type { Translate } from "../i18n";
+import { fixedFocusPosition } from "../lib/dagCamera";
 import { formatDateTime } from "../lib/format";
+import { recommendationReasonCode } from "../lib/recommendation";
 import { AppleTreeStage } from "./illustrations";
 import type { StageKey } from "./illustrations";
 import { Button } from "./ui/Button";
@@ -100,6 +102,8 @@ export function DagWorkbench({
   const t = useT();
   const [dag, setDag] = useState<DagPayload | null>(null);
   const [filter, setFilter] = useState<DagFilter>("all");
+  const [activeFilterTip, setActiveFilterTip] = useState<DagFilter | null>(null);
+  const [filterTipPosition, setFilterTipPosition] = useState<{ left: number; top: number } | null>(null);
   const [canopyScale, setCanopyScale] = useState<number>(1);
   const [showDownstream, setShowDownstream] = useState<boolean>(false);
   const [regrowBusy, setRegrowBusy] = useState<boolean>(false);
@@ -203,17 +207,9 @@ export function DagWorkbench({
     const nz = Number(node.z ?? 0);
     const getCamera = graph.cameraPosition as unknown as () => { x: number; y: number; z: number };
     const cam = getCamera();
-    // Keep the current viewing direction (camera stays on the same side of the
-    // node); just dolly gently toward it so it centers without flipping to a
-    // top-down close-up.
-    const ox = cam.x - nx;
-    const oy = cam.y - ny;
-    const oz = cam.z - nz;
-    const current = Math.hypot(ox, oy, oz) || 1;
-    const target = Math.max(220, current * 0.6); // gentle zoom, not too close
-    const k = target / current;
+    const position = fixedFocusPosition(cam, { x: nx, y: ny, z: nz });
     graph.cameraPosition(
-      { x: nx + ox * k, y: ny + oy * k, z: nz + oz * k },
+      position,
       { x: nx, y: ny, z: nz },
       reducedMotion ? 0 : 700,
     );
@@ -280,6 +276,20 @@ export function DagWorkbench({
     frontView();
   };
 
+  const showFilterTip = (item: DagFilter, target: HTMLElement): void => {
+    const rect = target.getBoundingClientRect();
+    setActiveFilterTip(item);
+    setFilterTipPosition({
+      left: Math.min(rect.right + 8, Math.max(12, window.innerWidth - 268)),
+      top: Math.min(rect.top, Math.max(12, window.innerHeight - 84)),
+    });
+  };
+
+  const hideFilterTip = (): void => {
+    setActiveFilterTip(null);
+    setFilterTipPosition(null);
+  };
+
   return (
     <section className="dag-workbench" aria-label={t("harvest.aria.graph")}>
       <aside className="dag-rail" aria-label={t("harvest.aria.filters")}>
@@ -287,44 +297,44 @@ export function DagWorkbench({
           <h2>{t("harvest.title")}</h2>
           <p className="muted">{t("harvest.subtitle")}</p>
         </div>
-        <div className="dag-stats">
-          <span>
-            <b>{graph.nodes.length}</b>
-            {t("harvest.nodes")}
-          </span>
-          <span>
-            <b>{graph.links.length}</b>
-            {t("harvest.edges")}
-          </span>
-        </div>
         <div className="dag-filter-list">
-          {filters.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={`dag-filter ${filter === item ? "active" : ""}`}
-              onClick={() => setFilter(item)}
-            >
-              <span className={`dag-dot ${item === "all" ? "dag-dot-all" : `dag-dot-${item}`}`} />
-              <span>{item === "all" ? t("harvest.all") : t(`ripe.${item}`)}</span>
-              <b>{item === "all" ? graph.nodes.length : graph.counts[item]}</b>
-            </button>
-          ))}
+          {filters.map((item) => {
+            const tipId = `ripeness-tip-${item}`;
+            const tipOpen = activeFilterTip === item;
+            return (
+              <button
+                key={item}
+                type="button"
+                className={`dag-filter ${filter === item ? "active" : ""}`}
+                aria-describedby={tipOpen ? tipId : undefined}
+                onClick={() => setFilter(item)}
+                onMouseEnter={(event) => showFilterTip(item, event.currentTarget)}
+                onMouseLeave={hideFilterTip}
+                onFocus={(event) => showFilterTip(item, event.currentTarget)}
+                onBlur={hideFilterTip}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") hideFilterTip();
+                }}
+              >
+                <span className={`dag-dot ${item === "all" ? "dag-dot-all" : `dag-dot-${item}`}`} />
+                <span>{item === "all" ? t("harvest.all") : t(`ripe.${item}`)}</span>
+                <b>{item === "all" ? graph.nodes.length : graph.counts[item]}</b>
+              </button>
+            );
+          })}
         </div>
-        <div className="dag-canopy-control">
-          <label htmlFor="canopy-size">
-            {t("harvest.canopy")} <b>{canopyScale.toFixed(1)}×</b>
-          </label>
-          <input
-            id="canopy-size"
-            type="range"
-            min="0.6"
-            max="1.8"
-            step="0.1"
-            value={canopyScale}
-            onChange={(event) => setCanopyScale(parseFloat(event.target.value))}
-          />
-        </div>
+        {activeFilterTip && filterTipPosition ? (
+          <span
+            id={`ripeness-tip-${activeFilterTip}`}
+            role="tooltip"
+            className="ui-tooltip dag-filter-tooltip"
+            style={filterTipPosition}
+          >
+            {activeFilterTip === "all"
+              ? t("harvest.all.desc")
+              : t(`ripe.${activeFilterTip}.desc`)}
+          </span>
+        ) : null}
         {dag?.updated_at && (
           <p className="muted">
             {t("common.updated")} {formatDateTime(dag.updated_at)}
@@ -378,6 +388,21 @@ export function DagWorkbench({
 
         {!showScene && (
           <>
+            <div className="dag-canopy-control" role="group" aria-label={t("harvest.canopy")}>
+              <label htmlFor="canopy-size">
+                {t("harvest.canopy")} <b>{canopyScale.toFixed(1)}×</b>
+              </label>
+              <input
+                id="canopy-size"
+                type="range"
+                min="0.6"
+                max="1.8"
+                step="0.1"
+                value={canopyScale}
+                aria-valuetext={`${canopyScale.toFixed(1)}×`}
+                onChange={(event) => setCanopyScale(parseFloat(event.target.value))}
+              />
+            </div>
             <div className="dag-canvas-hint">{t("harvest.canvasHint")}</div>
             <div className="dag-view-controls">
               <Button variant="ghost" onClick={fitView}>
@@ -448,37 +473,53 @@ function NodeInspector({
         .filter((item): item is DagGraphNode => Boolean(item))
     : [];
   const downstreamCount = node ? descendantsOf(node.id, graph.byId).size - 1 : 0;
+  const reasonCode = node ? recommendationReasonCode(node.recommendation_reason) : null;
+  const recommendation = reasonCode ? t(`harvest.recommendation.${reasonCode}`) : "";
 
   return (
     <aside className="dag-inspector" aria-label={t("harvest.aria.inspector")}>
       {node ? (
         <>
-          <div className="inspector-head">
-            <span className={`dag-state state-${node.ripeness}`}>{t(`ripe.${node.ripeness}`)}</span>
-            <span className="muted">{node.label}</span>
-          </div>
-          <h2>{node.title}</h2>
-          <p className="muted">{t(`ripe.${node.ripeness}.desc`)}</p>
-          {node.ripeness === "blighted" && (
-            <div className="dag-regrow">
-              <Button onClick={() => onRegrow(String(node.id))} disabled={regrowBusy}>
-                {regrowBusy ? t("harvest.regrowing") : t("harvest.regrow")}
-              </Button>
-              {actionMsg && <Message kind="hint">{actionMsg}</Message>}
+          <div className="inspector-summary-card">
+            <div className="inspector-head">
+              <span className={`dag-state state-${node.ripeness}`}>{t(`ripe.${node.ripeness}`)}</span>
+              <span className="inspector-node-label">{node.label}</span>
             </div>
-          )}
-          <Toggle
-            className="downstream-toggle"
-            checked={showDownstream}
-            onChange={onToggleDownstream}
-            label={
-              <>
-                {t("harvest.downstream")} <b>{downstreamCount}</b>
-              </>
-            }
-          />
-          {unreadAncestors.length > 0 && (
-            <div className="dag-inspector-section prereq-reminder">
+            <h2>{node.title}</h2>
+            <p className="inspector-state-description">{t(`ripe.${node.ripeness}.desc`)}</p>
+            {node.recommended && recommendation ? (
+              <div className="inspector-recommendation">
+                <strong>{t("harvest.recommendationLabel")}</strong>
+                <span>{recommendation}</span>
+              </div>
+            ) : null}
+            {node.summary ? <p className="inspector-summary-text">{node.summary}</p> : null}
+            {node.affected_by_feedback ? <p className="hint">{t("harvest.affected")}</p> : null}
+            {node.last_feedback_error ? <p className="errors">{node.last_feedback_error}</p> : null}
+            {node.ripeness === "blighted" ? (
+              <div className="dag-regrow">
+                <Button onClick={() => onRegrow(String(node.id))} disabled={regrowBusy}>
+                  {regrowBusy ? t("harvest.regrowing") : t("harvest.regrow")}
+                </Button>
+                {actionMsg ? <Message kind="hint">{actionMsg}</Message> : null}
+              </div>
+            ) : null}
+            <OutputActions node={node} t={t} onReadOutput={onReadOutput} />
+          </div>
+          <div className="inspector-filter-card">
+            <Toggle
+              className="downstream-toggle"
+              checked={showDownstream}
+              onChange={onToggleDownstream}
+              label={
+                <>
+                  {t("harvest.downstream")} <b>{downstreamCount}</b>
+                </>
+              }
+            />
+          </div>
+          {unreadAncestors.length > 0 ? (
+            <div className="dag-inspector-section inspector-section-card prereq-reminder">
               <p className="hint">{t("harvest.prereqReminder", { n: unreadAncestors.length })}</p>
               <div className="node-link-list">
                 {unreadAncestors.map((ancestor) => (
@@ -494,20 +535,13 @@ function NodeInspector({
                 ))}
               </div>
             </div>
-          )}
-          {node.recommended && node.recommendation_reason && (
-            <p className="ok">{node.recommendation_reason}</p>
-          )}
-          {node.affected_by_feedback && <p className="hint">{t("harvest.affected")}</p>}
-          {node.last_feedback_error && <p className="errors">{node.last_feedback_error}</p>}
-          {node.summary && <p>{node.summary}</p>}
+          ) : null}
           <InspectorList title={t("harvest.prerequisites")} nodes={prerequisites} onFocus={onFocus} />
           <InspectorList title={t("harvest.dependents")} nodes={dependents} onFocus={onFocus} />
           <TagList title={t("harvest.defines")} items={node.defines} empty={t("common.none")} />
-          <OutputActions node={node} t={t} onReadOutput={onReadOutput} />
         </>
       ) : (
-        <>
+        <div className="inspector-empty-card">
           <h2>{t("harvest.selectNode")}</h2>
           <p className="muted">{t("harvest.selectHint")}</p>
           <div className="dag-legend">
@@ -518,7 +552,7 @@ function NodeInspector({
               </span>
             ))}
           </div>
-        </>
+        </div>
       )}
     </aside>
   );
@@ -542,7 +576,7 @@ function OutputActions({
         : "";
 
   return (
-    <div className="dag-inspector-section">
+    <div className="inspector-output-actions">
       <h3>{t("harvest.outputs")}</h3>
       {disabledMessage ? (
         <Button variant="ghost" className="output-action" disabled>
@@ -575,7 +609,7 @@ function InspectorList({
   onFocus: (id: string) => void;
 }) {
   return (
-    <div className="dag-inspector-section">
+    <div className="dag-inspector-section inspector-section-card">
       <h3>{title}</h3>
       {nodes.length ? (
         <div className="node-link-list">
@@ -600,7 +634,7 @@ function InspectorList({
 
 function TagList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
   return (
-    <div className="dag-inspector-section">
+    <div className="dag-inspector-section inspector-section-card">
       <h3>{title}</h3>
       {items.length ? (
         <div className="tag-list">
@@ -867,6 +901,7 @@ function dagSignature(dag: DagPayload): string {
       generation_status: node.generation_status,
       reading_status: node.reading_status,
       recommended: node.recommended,
+      recommendation_reason: node.recommendation_reason,
       affected_by_feedback: node.affected_by_feedback,
       learning_ready: node.learning_ready,
       summary: node.summary,
@@ -1082,13 +1117,6 @@ function refreshTrunk(
   );
   grass.position.set(0, groundY - 7, 0); // top face sits at groundY
   group.add(grass);
-  // a thin mowed patch resting on the grass under the tree (avoids z-fighting)
-  const patch = new THREE.Mesh(
-    new CylinderGeometry(maxR * 0.85 + 60, maxR * 0.85 + 60, 2, 36),
-    new THREE.MeshStandardMaterial({ color: "#6fa049", roughness: 1 }),
-  );
-  patch.position.set(0, groundY + 1, 0);
-  group.add(patch);
 
   const bushMaterials = [
     new THREE.MeshStandardMaterial({ color: "#4f8f43", roughness: 0.9 }),

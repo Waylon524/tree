@@ -357,6 +357,11 @@ export async function openDag(): Promise<string> {
 export type DagNodeStatus = "locked" | "ready" | "running" | "complete" | "failed";
 export type DagNodeReadingStatus = "unread" | "recommended" | "reading" | "read";
 
+export interface DagRecommendationReason {
+  code: "root_ready" | "prerequisites_read" | "suggested_start" | string;
+  params: Record<string, string | number>;
+}
+
 export interface DagNode {
   id: string;
   title: string;
@@ -367,7 +372,7 @@ export interface DagNode {
   recommended: boolean;
   affected_by_feedback: boolean;
   learning_ready: boolean;
-  recommendation_reason: string;
+  recommendation_reason: DagRecommendationReason | string | null;
   last_opened_at?: string | null;
   read_at?: string | null;
   last_revised_at?: string | null;

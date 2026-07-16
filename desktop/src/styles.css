@@ -302,6 +302,7 @@ textarea {
   width: 100%;
 }
 .stage-row {
+  position: relative;
   display: grid;
   grid-template-columns:
     minmax(96px, 112px)
@@ -315,6 +316,10 @@ textarea {
   column-gap: 12px;
   padding: 5px 6px;
   border-radius: 8px;
+}
+.stage-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 1px;
 }
 .stage-row:nth-child(odd) {
   background: color-mix(in srgb, var(--bar-bg) 20%, transparent);
@@ -396,6 +401,40 @@ textarea {
 }
 .fill.badge-wait {
   background: var(--wait);
+}
+.ui-tooltip {
+  position: absolute;
+  z-index: 20;
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  pointer-events: none;
+  animation: tooltip-in 0.1s ease-out;
+}
+.stage-tooltip {
+  bottom: calc(100% + 4px);
+  left: 34px;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 64px));
+}
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .errors {
   margin-top: 12px;
@@ -1166,7 +1205,7 @@ textarea {
 
 .dag-workbench {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 310px;
+  grid-template-columns: 174px minmax(0, 1fr) 330px;
   grid-template-areas: "rail stage inspector";
   min-height: 100%;
   background:
@@ -1189,58 +1228,54 @@ textarea {
   background: color-mix(in srgb, var(--card) 88%, transparent);
   backdrop-filter: blur(10px);
   border-color: var(--border);
-  padding: 18px;
   overflow-y: auto;
 }
 
 .dag-rail {
   grid-area: rail;
+  padding: 16px 12px;
   border-right: 1px solid var(--border);
 }
 
 .dag-inspector {
   grid-area: inspector;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
   border-left: 1px solid var(--border);
 }
 
-.dag-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 18px 0;
-}
-
-.dag-stats span {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
-  color: var(--muted);
-  font-size: 12px;
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
-.dag-stats b {
-  display: block;
-  color: var(--text);
-  font-size: 20px;
-  line-height: 1.1;
-}
-
 .dag-canopy-control {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 4;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 4px 0 18px;
+  align-items: center;
+  gap: 10px;
+  width: min(360px, calc(100% - 32px));
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
+  transform: translateX(-50%);
 }
 .dag-canopy-control label {
+  flex: none;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 .dag-canopy-control label b {
   color: var(--text);
 }
 .dag-canopy-control input {
-  width: 100%;
+  min-width: 0;
+  flex: 1;
   accent-color: var(--accent);
 }
 
@@ -1248,7 +1283,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 0 6px;
+  margin: 0;
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
@@ -1263,13 +1298,12 @@ textarea {
 }
 
 .dag-regrow {
-  margin: 10px 0 4px;
+  margin: 10px 0 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 .prereq-reminder {
-  margin-top: 14px;
   border: 1px solid color-mix(in srgb, var(--ripe-almost) 55%, var(--border));
   border-radius: 8px;
   padding: 10px 12px;
@@ -1284,10 +1318,12 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  margin-top: 18px;
   margin-bottom: 18px;
 }
 
 .dag-filter {
+  position: relative;
   display: grid;
   grid-template-columns: 12px 1fr auto;
   align-items: center;
@@ -1306,6 +1342,18 @@ textarea {
 .dag-filter.active {
   border-color: var(--border);
   background: var(--bar-bg);
+}
+.dag-filter:hover,
+.dag-filter:focus-visible {
+  z-index: 6;
+}
+.dag-filter:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+.dag-filter-tooltip {
+  position: fixed;
+  width: min(248px, calc(100vw - 24px));
 }
 
 .dag-filter b {
@@ -1377,7 +1425,7 @@ textarea {
 }
 
 .dag-alert {
-  top: 16px;
+  top: 66px;
   left: 16px;
   right: 16px;
   color: var(--failed);
@@ -1435,7 +1483,35 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.inspector-summary-card,
+.inspector-filter-card,
+.inspector-section-card,
+.inspector-empty-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 64%, var(--card));
+}
+.inspector-summary-card,
+.inspector-empty-card {
+  padding: 13px;
+}
+.inspector-filter-card {
+  padding: 10px 12px;
+}
+.inspector-section-card {
+  padding: 11px 12px;
+}
+.inspector-node-label {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dag-state {
@@ -1488,11 +1564,60 @@ textarea {
   line-height: 1.25;
   letter-spacing: 0;
   text-transform: none;
-  margin-bottom: 8px;
+  margin: 0 0 7px;
+}
+
+.inspector-state-description,
+.inspector-summary-text {
+  margin: 0;
+  line-height: 1.5;
+}
+.inspector-state-description {
+  color: var(--muted);
+  font-size: 12px;
+}
+.inspector-summary-text {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+.inspector-recommendation {
+  display: grid;
+  gap: 2px;
+  margin-top: 11px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.inspector-recommendation strong {
+  color: var(--text);
+  font-size: 11px;
+}
+.inspector-output-actions {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+.inspector-output-actions h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.inspector-output-actions button,
+.inspector-output-actions .output-action-list {
+  width: 100%;
+}
+.inspector-output-actions .output-action-list {
+  display: grid;
 }
 
 .dag-inspector-section {
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .dag-inspector-section h3 {
@@ -1511,11 +1636,15 @@ textarea {
   flex-wrap: wrap;
   gap: 7px;
 }
+.node-link-list {
+  flex-direction: column;
+}
 
 .node-link {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  width: 100%;
   max-width: 100%;
   background: var(--bar-bg);
   color: var(--text);
@@ -1523,6 +1652,7 @@ textarea {
   border-radius: 8px;
   padding: 5px 8px;
   font-size: 12px;
+  text-align: left;
 }
 
 .tag {

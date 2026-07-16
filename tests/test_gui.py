@@ -258,6 +258,7 @@ def test_dag_payload_labels_edges_and_statuses(workspace):
     # is still growing — recommendation is per-node, not gated on whole-tree done.
     assert data["nodes"][0]["reading_status"] == "recommended"
     assert data["nodes"][0]["recommended"] is True
+    assert data["nodes"][0]["recommendation_reason"] == {"code": "root_ready", "params": {}}
     assert data["nodes"][0]["learning_ready"] is False
     assert data["nodes"][1]["prerequisites"] == ["n1"]
     assert data["nodes"][1]["dependents"] == ["n3"]
@@ -319,7 +320,9 @@ def test_learning_state_marks_read_and_recommends_next_node(workspace):
     assert initial["learning_ready"] is True
     assert by_id["n1"]["reading_status"] == "recommended"
     assert by_id["n1"]["recommended"] is True
+    assert by_id["n1"]["recommendation_reason"] == {"code": "root_ready", "params": {}}
     assert by_id["n2"]["reading_status"] == "unread"
+    assert by_id["n2"]["recommendation_reason"] is None
 
     opened = client.post("/api/learning/nodes/n1/open").json()
     assert opened["state"]["reading_status"] == "reading"
@@ -331,6 +334,10 @@ def test_learning_state_marks_read_and_recommends_next_node(workspace):
     assert by_id["n1"]["reading_status"] == "read"
     assert by_id["n2"]["reading_status"] == "recommended"
     assert by_id["n2"]["recommended"] is True
+    assert by_id["n2"]["recommendation_reason"] == {
+        "code": "prerequisites_read",
+        "params": {},
+    }
 
 
 def test_learning_feedback_revises_output_and_marks_dependents_affected(workspace, monkeypatch):

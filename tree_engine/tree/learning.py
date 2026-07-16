@@ -286,15 +286,15 @@ def _recommendation_reason(
     parents: dict[str, set[str]],
     read_ids: set[str],
     recommended: bool,
-) -> str:
+) -> dict[str, Any] | None:
     if not recommended:
-        return ""
+        return None
     direct = parents.get(node_id, set())
     if not direct:
-        return "Root node; ready to start."
+        return {"code": "root_ready", "params": {}}
     if direct <= read_ids:
-        return "All prerequisite nodes have been read."
-    return "Suggested starting point."
+        return {"code": "prerequisites_read", "params": {}}
+    return {"code": "suggested_start", "params": {}}
 
 
 def _node_output_path(root: Path, node_id: str) -> Path | None:

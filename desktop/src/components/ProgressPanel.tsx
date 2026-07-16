@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import type { Status, StageRow } from "../types";
 import { useT } from "../i18n";
 import { StageGlyph } from "./illustrations";
@@ -75,6 +76,8 @@ function ErrorItem({ error, t }: { error: string; t: ReturnType<typeof useT> }) 
 }
 
 function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> }) {
+  const tooltipId = useId();
+  const [tipOpen, setTipOpen] = useState(false);
   const key = row.key;
   const stageKey = isStageKey(key) ? key : null;
   const label = stageKey ? t(`stage.${stageKey}`) : row.label;
@@ -83,9 +86,25 @@ function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> })
     ? `badge.${row.badge}`
     : "";
   return (
-    <div className={`stage-row stage-row-${row.badge}`} role="listitem">
+    <div
+      className={`stage-row stage-row-${row.badge}`}
+      role="listitem"
+      tabIndex={tip ? 0 : undefined}
+      aria-describedby={tip && tipOpen ? tooltipId : undefined}
+      onMouseEnter={() => {
+        if (tip) setTipOpen(true);
+      }}
+      onMouseLeave={() => setTipOpen(false)}
+      onFocus={() => {
+        if (tip) setTipOpen(true);
+      }}
+      onBlur={() => setTipOpen(false)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setTipOpen(false);
+      }}
+    >
       <div className="stage-name">
-        <span className="stage-name-cell" title={tip}>
+        <span className="stage-name-cell">
           {stageKey && (
             <span className={`stage-glyph glyph-${row.badge}`}>
               <StageGlyph stage={stageKey} size={17} />
@@ -108,6 +127,11 @@ function StageRowView({ row, t }: { row: StageRow; t: ReturnType<typeof useT> })
           {badgeKey ? t(badgeKey) : row.badge}
         </span>
       </div>
+      {tip && tipOpen ? (
+        <span id={tooltipId} role="tooltip" className="ui-tooltip stage-tooltip">
+          {tip}
+        </span>
+      ) : null}
     </div>
   );
 }
