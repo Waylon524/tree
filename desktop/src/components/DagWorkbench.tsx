@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
+import { createPortal } from "react-dom";
 import ForceGraph3D from "react-force-graph-3d";
 import type { ForceGraphMethods, LinkObject, NodeObject } from "react-force-graph-3d";
 import * as THREE from "three";
@@ -323,18 +324,21 @@ export function DagWorkbench({
             );
           })}
         </div>
-        {activeFilterTip && filterTipPosition ? (
-          <span
-            id={`ripeness-tip-${activeFilterTip}`}
-            role="tooltip"
-            className="ui-tooltip dag-filter-tooltip"
-            style={filterTipPosition}
-          >
-            {activeFilterTip === "all"
-              ? t("harvest.all.desc")
-              : t(`ripe.${activeFilterTip}.desc`)}
-          </span>
-        ) : null}
+        {activeFilterTip && filterTipPosition && typeof document !== "undefined"
+          ? createPortal(
+              <span
+                id={`ripeness-tip-${activeFilterTip}`}
+                role="tooltip"
+                className="ui-tooltip dag-filter-tooltip"
+                style={filterTipPosition}
+              >
+                {activeFilterTip === "all"
+                  ? t("harvest.all.desc")
+                  : t(`ripe.${activeFilterTip}.desc`)}
+              </span>,
+              document.body,
+            )
+          : null}
         {dag?.updated_at && (
           <p className="muted">
             {t("common.updated")} {formatDateTime(dag.updated_at)}

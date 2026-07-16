@@ -399,8 +399,13 @@ export function Settings() {
       <Materials />
 
       <section className="card settings-card">
-        <div className="section-head">
-          <h2>{t("tend.title")}</h2>
+        <div className="settings-header">
+          <div className="settings-heading">
+            <h2>{t("tend.title")}</h2>
+            <Message kind="hint" className="settings-privacy">
+              {t("settings.privacyNotice")}
+            </Message>
+          </div>
           <div className="lang-toggle" role="group" aria-label={t("tend.language")}>
             <button
               type="button"
@@ -418,10 +423,9 @@ export function Settings() {
             </button>
           </div>
         </div>
-        <Message kind="hint">{t("settings.privacyNotice")}</Message>
 
         <form className="settings-form" onSubmit={(event) => void submit(event)}>
-          <fieldset>
+          <fieldset className="settings-section settings-llm-section">
             <legend>
               {t("tend.fertilizer")} <small className="legend-note">({t("tend.note.llm")})</small>
             </legend>
@@ -461,7 +465,7 @@ export function Settings() {
             </div>
           </fieldset>
 
-          <fieldset>
+          <fieldset className="settings-section settings-ocr-section">
             <legend>
               {t("tend.gather")} <small className="legend-note">({t("tend.note.ocr")})</small>
             </legend>
@@ -485,7 +489,7 @@ export function Settings() {
             </div>
           </fieldset>
 
-          <fieldset>
+          <fieldset className="settings-section settings-runtime-section">
             <legend>
               {t("tend.climate")} <small className="legend-note">({t("tend.note.runtime")})</small>
             </legend>

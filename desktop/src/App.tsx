@@ -355,20 +355,14 @@ function Dashboard({
                 <h2 className="grow-title">{t("grow.heading")}</h2>
                 <p className="muted">{t("grow.subtitle")}</p>
               </div>
-            </div>
-            <div className="controls">
               <Button
-                onClick={() => void runAction(runPipeline)}
-                disabled={busy || Boolean(growBlockReason) || engineActive}
+                className="grow-toggle"
+                variant={engineActive ? "ghost" : "primary"}
+                onClick={() => void runAction(engineActive ? stopPipeline : runPipeline)}
+                disabled={busy || (!engineActive && Boolean(growBlockReason))}
+                aria-label={engineActive ? t("grow.rest") : t("grow.grow")}
               >
-                {t("grow.grow")}
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => void runAction(stopPipeline)}
-                disabled={busy || !engineActive}
-              >
-                {t("grow.rest")}
+                {engineActive ? t("grow.rest") : t("grow.grow")}
               </Button>
             </div>
             {growBlockReason === "extension" && (

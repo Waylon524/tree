@@ -1353,6 +1353,7 @@ textarea {
 }
 .dag-filter-tooltip {
   position: fixed;
+  z-index: 1000;
   width: min(248px, calc(100vw - 24px));
 }
 
@@ -1903,7 +1904,18 @@ textarea {
 /* --- tree theme: orchard components -------------------------------------- */
 
 .grow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
   margin-bottom: 14px;
+}
+.grow-head > div {
+  min-width: 0;
+}
+.grow-toggle {
+  flex: 0 0 auto;
+  min-width: 76px;
 }
 .grow-title {
   margin: 0 0 4px;
@@ -1989,6 +2001,33 @@ textarea {
   flex-direction: column;
   gap: 16px;
 }
+.settings-card {
+  padding: 20px;
+}
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.settings-heading {
+  min-width: 0;
+}
+.settings-heading h2 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 18px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.settings-privacy {
+  max-width: 720px;
+  margin: 0;
+  padding-left: 11px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 52%, var(--border));
+  line-height: 1.55;
+}
 .legend-note {
   color: var(--muted);
   font-weight: 400;
@@ -2073,13 +2112,54 @@ textarea {
 /* Tend — settings fieldsets as tidy cards */
 .settings-form fieldset {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px 16px;
-  background: var(--bg);
+  border-radius: 12px;
+  padding: 16px 18px 18px;
+  background: color-mix(in srgb, var(--bg) 72%, var(--card));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 36%, transparent);
 }
 .settings-form legend {
-  padding: 0 6px;
+  padding: 0 8px;
   margin-bottom: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+.settings-form {
+  gap: 14px;
+}
+.settings-form input,
+.ui-field input {
+  min-height: 38px;
+  border-radius: 8px;
+  background: var(--card);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+.settings-form input:hover,
+.ui-field input:hover {
+  border-color: color-mix(in srgb, var(--trunk-soft) 62%, var(--border));
+}
+.settings-form input:focus,
+.ui-field input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+.settings-form .label-row {
+  min-height: 18px;
+}
+.settings-form .role-grid {
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+.settings-runtime-section .node-run-mode {
+  background: var(--card);
+}
+.settings-form > .settings-details {
+  background: color-mix(in srgb, var(--bg) 72%, var(--card));
+}
+.settings-form > .form-actions {
+  justify-content: flex-end;
+  padding-top: 2px;
 }
 
 /* Fruits — card grid */
@@ -2249,8 +2329,41 @@ textarea {
   gap: 8px;
   margin-top: auto;
 }
+.tree-card-actions {
+  flex-wrap: nowrap;
+}
+.tree-card-actions > button,
+.tree-card-actions > .tree-more {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.tree-card-actions > button,
+.tree-card-actions .tree-more-toggle {
+  width: 100%;
+  justify-content: center;
+}
+.tree-card-actions .tree-menu {
+  width: max(100%, 168px);
+}
 .tree-more {
   position: relative;
+}
+
+@media (max-width: 760px) {
+  .settings-card {
+    padding: 16px;
+  }
+  .settings-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .settings-header .lang-toggle {
+    align-self: flex-start;
+  }
+  .settings-form fieldset {
+    padding: 14px;
+  }
 }
 .tree-more-toggle {
   white-space: nowrap;

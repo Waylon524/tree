@@ -302,10 +302,6 @@ export function ProjectLibrary({
                       <dt>{t("orchard.generated")}</dt>
                       <dd>{project.output_count}</dd>
                     </div>
-                    <div>
-                      <dt>{t("orchard.storage")}</dt>
-                      <dd className="stat-small">{formatBytes(project.storage_bytes)}</dd>
-                    </div>
                   </dl>
 
                   {editingId === project.id ? (
@@ -367,7 +363,7 @@ export function ProjectLibrary({
                       onCancel={() => setUprootId("")}
                     />
                   ) : (
-                    <div className="tree-actions">
+                    <div className="tree-actions tree-card-actions">
                       <Button
                         onClick={() => void observe(project)}
                         disabled={busyId === `open:${project.id}`}
