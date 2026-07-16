@@ -2,7 +2,7 @@
 
 TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Markdown 等课程资料整理成一棵“知识果树”：采集和清洗资料、建立知识图谱、为知识点生成学习文件，再让你按依赖关系学习、记录阅读进度、对讲解提出反馈，并把整个项目迁移到另一台设备继续使用。
 
-当前推荐入口是 **TREE 桌面 App**；CLI 保留给自动化、调试和高级用户。当前源码版本与最新正式版本均为 `0.3.7`。
+当前推荐入口是 **TREE 桌面 App**；CLI 保留给自动化、调试和高级用户。本 README 对应 `0.4.0`，正式安装包见下方下载区。
 
 ## 当前状态
 
@@ -16,21 +16,15 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 
 ## 下载
 
-当前发布版本：[v0.3.7](https://github.com/Waylon524/tree/releases/tag/v0.3.7)
+当前发布版本：[v0.4.0](https://github.com/Waylon524/tree/releases/tag/v0.4.0)
 
 | 平台 | 安装包 | 说明 |
 | --- | --- | --- |
-| macOS Apple Silicon | [TREE_0.3.7_macos.dmg](https://github.com/Waylon524/tree/releases/download/v0.3.7/TREE_0.3.7_macos.dmg) | 已使用 Developer ID 签名、公证并 stapled。 |
-| Windows x64 | [TREE_0.3.7_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v0.3.7/TREE_0.3.7_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
-| Windows x64 | [TREE_0.3.7_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v0.3.7/TREE_0.3.7_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
+| macOS Apple Silicon | [TREE_0.4.0_macos.dmg](https://github.com/Waylon524/tree/releases/download/v0.4.0/TREE_0.4.0_macos.dmg) | 已使用 Developer ID 签名、公证并 stapled。 |
+| Windows x64 | [TREE_0.4.0_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v0.4.0/TREE_0.4.0_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
+| Windows x64 | [TREE_0.4.0_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v0.4.0/TREE_0.4.0_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
 
-SHA-256：
-
-```text
-TREE_0.3.7_macos.dmg          ab8517466dcf82ef81330decfddef31ad402fda7618ae1e71ffe47027022a97e
-TREE_0.3.7_x64-setup.exe      e90247f6b942e07afb44455280d89409c0032f2c5db63182374f675c522fde57
-TREE_0.3.7_x64_en-US.msi      a3b8430d23e78925c254a19f76bc2c0aa7c67d07f1567eac07fc4364df880651
-```
+SHA-256 校验值随 Release 资产提供：[macOS 清单](https://github.com/Waylon524/tree/releases/download/v0.4.0/SHA256SUMS-macos.txt) · [Windows 清单](https://github.com/Waylon524/tree/releases/download/v0.4.0/SHA256SUMS-windows.txt)
 
 ## TREE 是什么
 
@@ -57,8 +51,8 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 
 项目卡片只展示种子与果实数量，观察和更多操作会平分并撑满卡片底部，常用入口在不同卡片宽度下保持一致。
 
-- **Plant / From Seeds**：新建一棵空果树。
-- **Plant / From Parent Tree**：从 TREE 项目 zip 导入一棵已有果树。
+- **从种子新建 / From Seeds**：新建一棵空果树。
+- **从母树导入 / From Parent Tree**：从 TREE 项目 zip 导入一棵已有果树。
 - **Propagate**：复制一份项目 zip，用于备份或迁移，不删除本地项目。
 - **Transplant**：导出项目 zip，导出成功后从本机果园中移除该项目。
 - **Uproot**：只删除本机项目，不导出。
@@ -96,21 +90,13 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 
 鼠标悬停或键盘聚焦任一阶段会显示其实际处理内容，包括文本提取、清洗、教学单元切分、向量化、知识节点聚合、先修关系构建和知识文件生成。
 
-Run 支持续跑。进度条始终显示项目累计完成量；缓存命中和重启后会继承真实的 `done/total`，与一次性跑完保持相同显示，不使用“已复用”或 `0/0 = 100%` 的伪进度。阶段徽章只在真实任务进入该阶段后显示“进行中”：单个分块按采集、筛净、分种顺序推进，只有同一材料的不同分块确实并发时，筛净和分种才会同时运行。桌面生长页只显示七阶段进度与独立异常，不展示内部 phase、检查点或阶段调试消息。并行 PDF OCR 按每个分块的单调已完成页数汇总，乱序、重复、重试和结果复用事件都不会让文件进度倒退或提前完成。阶段失败时，TREE 会冻结一致的终止快照，后台迟到事件不会把页面重新标成“进行中”；再次 Run 会从保留检查点继续。主动暂停会取消尚未结束的 NodeRun 请求并把 CLI、GUI 和阶段 active 统一显示为 stopped，但仍保留试卷、草稿、迭代和 `in_progress` 检查点供下次续跑。单个 NodeRun 失败时，已完成结果继续可用，项目显示为部分完成，并可从保留的试卷、草稿和 Bottleneck 精准重试。
+生长支持续跑。进度条显示项目累计完成量，缓存命中、重启和失败恢复都会继承真实进度；阶段只在实际处理时显示“进行中”。主动休眠会取消尚未结束的请求并保留检查点，单个 NodeRun 失败也不会影响已经完成的结果，再次生长会从保留状态继续。
 
-NodeRun 默认使用标准模式，继续执行 Examiner、Student 与 Writer 的命题、作答、审核和修订循环。快速模式为每个新启动节点只调用一次独立 Fast Writer，不生成试卷或学生作答，也不执行语义质量循环；它仍要求覆盖 Dagger 固定的成员 MTU 与 defines，保留不可信 RAG 隔离、完整章节结构、来源追溯、原子发布、Ledger 和 finished RAG 索引。快速模式不会清洗课件中合法的“标准答案”或“解析”内容，但会要求模型纠正原资料中的事实、公式和推导错误。
+NodeRun 默认使用标准模式，由 Examiner、Student 与 Writer 循环审核和修订；快速模式为每个新节点调用一次 Fast Writer，同时保留节点边界、来源追溯、原子发布和 finished RAG 索引。模式在节点启动时固定，运行中切换只影响之后启动的节点；“重新生长”会清除该节点的旧试卷、草稿和迭代状态，从头生成。
 
-模式在节点真正启动时写入 NodeRun。运行中切换设置时，已经启动的并发节点继续使用原模式，之后启动的节点使用新模式；暂停、失败重试继续沿用节点快照。“重新生长”会清除该快照，并在节点重新启动时读取当前设置。切换模式不会重写已经完成的知识文件。
+TREE 会按 LLM 服务商共享并发预算，并对限流、超时和可恢复服务错误自动降速重试。模型响应、Agent 结构化输出、知识边界和先修关系都会在进入下一阶段前验证；材料内容始终作为不可信数据处理，不能覆盖程序声明的任务规则。安全的调用摘要保存在项目运行日志中，不记录 prompt、材料正文、答案、密钥或 Authorization header。
 
-TREE 会按实际 LLM 服务商共享并发预算，遇到 429、超时、服务繁忙和可恢复 5xx 时自动降速并遵守 `Retry-After`。每次 AI 请求都有稳定的 operation id，并按具体任务选择输出上限、超时、推理模式、JSON 能力和重试次数；角色级配置仍是用户可调的总上限。项目级 `.tree/runtime/services/llm-operations.jsonl` 以有界轮转 JSONL 记录 operation、角色、provider、模型、token 估算与实际 usage、耗时、重试原因、终止原因和降级状态，但不会记录 prompt、材料、学生答案、模型正文、密钥或 Authorization header；`tre logs` 可列出该文件，GUI 诊断接口可读取最近摘要。
-
-模型返回在进入业务逻辑前会验证完整响应契约；Archivist 和 Dagger 的 JSON 经过严格 schema，输出截断、内容过滤、拒答、意外 tool call 和空响应具有不同终态。所有 Agent 都把代码声明的任务控制与 OCR、RAG、草稿、反馈等不可信材料分区，材料中的提示词不能改写当前任务。Archivist Clean 会先移除 OCR 图片噪声，再按“最多 1000 行且最多 100000 字符”拆分请求并优先保留标题边界；若较小窗口仍因输出上限截断，会递归二分，最小窗口持续失败时保守保留原文而不静默删除教学内容。Archivist 只抽取 MTU，Dagger 独占 MTU 归组和节点边界；历史 `excercise` 会兼容读取并规范为 `exercise`。Dagger 只有在模型显式选择 `selected` 或 `none` 后才接受先修结论，同名 define 只表示需要检查而不自动合并；大批量节点输出超限时会递归拆批，环修复只能最小删除当前报告环上的依赖，不能改写无关边或强制多根、并行分支串行化。
-
-Examiner 交给 Writer 的指令会先解析为严格结构，硬约束始终高于指令、草稿、RAG、Bottleneck 和用户反馈等动态内容；即时 `EXAM_DEFECT` 会携带缺陷类型和真实迭代上下文进入独立复核，复核确认试卷无误时继续 Writer 教学循环，而不是把 `KEEP_FAIL` 误当成节点终止。真正属于图谱而非当前 Writer 的缺失先修会以 `PLANNER_DEFECT: MISSING_PREREQUISITE` 明确终止当前节点并提示重新生长，不再被误修成越界正文。材料外基础不会被假定为已掌握，Writer 必须在当前节点补足最小解释桥；材料内先修与来源引用只允许使用代码提供的节点关系和证据路径。Dagger 固定的成员 MTU 与 defines 必须被综合覆盖，RAG 分块本身不被误当成节点边界。反馈修订沿用相同 Writer 教学契约，程序会确定性保留 H1、先修前置和来源追溯区块。来源追溯面向用户只显示文件名、行范围和 MTU 标识，不暴露材料父目录；完整 `source_id`、collection 与路径仍保留在内部缓存、RAG、日志和迁移数据中。每次 Examiner 复核的触发原因、动作和模型理由都会保留在 NodeRun 状态中。Embed 会定向修复缺失 MTU，Link 模型修复耗尽后会按可审计规则移除最低置信边，最终 DAG 仍保持无环。
-
-本地 PDF 页数检查与 OCR 分块会在各自作用域内汇总 pypdf 已自动恢复的缺失对象和重复 `/Filter` 警告，避免重复噪声淹没诊断；密码、crypto 依赖、非法超长流、缺页和无法读取等完整性错误仍会明确失败。
-
-枯果的 **重新生长** 与普通断点恢复语义不同：重新生长会清空旧试卷、草稿引用、迭代和 Bottleneck 历史，从新试卷开始；普通再次 Run 则保留检查点继续。
+来源追溯面向用户只显示文件名、行范围和 MTU 标识，不暴露材料父目录。PDF/OCR、MTU、知识图谱和 NodeRun 的恢复与修复均以保留教学内容、保持来源完整和避免静默越界为原则；无法安全恢复的问题会明确停止并给出处理建议。
 
 ### 收获 / 知识图谱
 
@@ -133,12 +119,12 @@ Reader 用于阅读生成的 Markdown 学习文件，支持公式、表格和常
 ## 推荐工作流
 
 1. 从 Release 页面下载并安装桌面 App。
-2. 打开果园，选择 **Plant / From Seeds** 新建项目。
+2. 打开果园，选择 **从种子新建 / From Seeds** 新建项目。
 3. 在照料页导入资料，并配置 LLM / OCR。
-4. 在生长页点击 **Run**，等待知识图谱和学习文件生成。
+4. 在生长页点击 **生长 / Grow**，等待知识图谱和学习文件生成。
 5. 在知识图谱页从推荐节点开始学习，也可以自行选择节点。
 6. 在 Reader 中阅读、标记完成，必要时提交反馈让 Writer 微调。
-7. 在果实页导出学习文件，或用 Propagate 导出整棵项目树。
+7. 在果实页导出学习文件，或用 **繁殖 / Propagate** 导出整棵项目树。
 
 ## 运行依赖
 
@@ -160,7 +146,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `LLAMA_SERVER_CTX` | `22000` | llama-server 上下文长度。UI/API 限制为 `1024..32768`。Stop/Run 或重启 embedding 后生效。 |
+| `LLAMA_SERVER_CTX` | `22000` | llama-server 上下文长度。UI/API 限制为 `1024..32768`。下一次休眠/生长或重启 embedding 后生效。 |
 | `SOURCE_MTU_CHUNK_TOKENS` | `20000` | Source MTU chunk 阈值。UI/API 限制为 `500..32768`。 |
 | `LLM_PROVIDER_CONCURRENCY` | `4` | 同一 LLM 端点与凭据共享的并发上限；限流时会自动降低。 |
 | `LLM_PROVIDER_PROFILE` | `auto` | 能力 profile：`auto`、`deepseek`、`openai` 或 `generic`；未知兼容端点自动采用 `generic`，不发送 DeepSeek 专属参数。 |
@@ -230,7 +216,7 @@ cargo test --locked
 
 TREE 项目 zip 是迁移和备份格式，不是密钥备份格式。它会包含项目材料、生成结果、运行中间产物、RAG store、NodeRun 状态和学习状态，但会排除 `.env`、`.tree/config.env`、全局 `~/.tree/config.env`、服务日志、pid 文件和其他易失运行状态。
 
-这意味着你可以通过 **Plant / From Parent Tree** 在另一台设备继续项目，但目标设备仍然需要配置自己的 LLM / OCR 凭据。
+这意味着你可以通过 **从母树导入 / From Parent Tree** 在另一台设备继续项目，但目标设备仍然需要配置自己的 LLM / OCR 凭据。
 
 TREE 会把完成任务所需的材料内容发送到你主动配置的 LLM 和 OCR 服务。具体的数据保留、训练和跨境处理规则由相应服务提供商决定；导入含有个人、学校或机构敏感信息的资料前，请先确认所选服务符合你的隐私要求。TREE 的项目迁移包不会包含 API 密钥，但材料、生成结果和运行状态本身仍可能包含敏感内容，请像保护原始课程资料一样保管迁移包。
 
