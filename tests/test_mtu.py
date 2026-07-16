@@ -114,7 +114,7 @@ def test_invalid_unit_kind_falls_back_to_concept():
     assert units[0]["unit_kind"] == "concept"
 
 
-@pytest.mark.parametrize("unit_kind", ["example", "exercise", "misconception", "procedure", "weird"])
+@pytest.mark.parametrize("unit_kind", ["example", "misconception", "procedure", "weird"])
 def test_removed_or_invalid_unit_kinds_fall_back_to_concept(unit_kind):
     plan = {
         "units": [
@@ -181,7 +181,7 @@ def test_validate_accepts_auxiliary_unit_kinds():
     units, _ = validate_and_normalize(plan, line_count=5)
 
     assert [unit["unit_kind"] for unit in units] == [
-        "excercise",
+        "exercise",
         "review",
         "summary",
         "intro",

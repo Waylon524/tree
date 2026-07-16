@@ -190,6 +190,9 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
             retrieved=retrieved + finished,
             node_context=_learning_node_context(node_id, dag, nodes_by_id, parents, children),
             node_id=node_id,
+            member_mtu_ids=list(node.get("member_mtu_ids") or []),
+            node_defines=list(node.get("defines") or []),
+            external_prerequisites=list(node.get("external_prerequisites") or []),
         )
         revised = result.draft_content.strip()
         if not revised:

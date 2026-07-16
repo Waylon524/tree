@@ -14,6 +14,7 @@ from tree.planner.models import MTU
 
 _VALID_UNIT_KINDS = {
     "concept",
+    "exercise",
     "excercise",
     "application",
     "review",
@@ -131,7 +132,7 @@ def _merge_auxiliary_units(units: list[dict]) -> list[dict]:
             if target_index is not None:
                 _absorb_unit(merged[target_index], unit)
             removed.add(index)
-        elif unit["unit_kind"] in {"intro", "summary", "excercise", "review"}:
+        elif unit["unit_kind"] in {"intro", "summary", "exercise", "excercise", "review"}:
             removed.add(index)
 
     result = [unit for index, unit in enumerate(merged) if index not in removed]
@@ -204,6 +205,8 @@ def _normalize_unit(raw: Any, index: int) -> dict:
         raise MtuCoverageError(f"unit {index} defines must contain no more than {_MAX_DEFINES} items")
     summary = _truncate_display_width(str(raw.get("summary") or "").strip() or title, _SUMMARY_MAX_WIDTH)
     unit_kind = str(raw.get("unit_kind") or "concept").strip().lower()
+    if unit_kind == "excercise":
+        unit_kind = "exercise"
     if unit_kind not in _VALID_UNIT_KINDS:
         unit_kind = "concept"
     return {

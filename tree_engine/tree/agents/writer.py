@@ -41,6 +41,10 @@ class WriterAgent(Agent):
         branch_context: str | None = None,
         trusted_task_constraints: str | None = None,
         operation: str | None = None,
+        task_kind: str | None = None,
+        member_mtu_ids: list[str] | None = None,
+        node_defines: list[str] | None = None,
+        external_prerequisites: list[str] | None = None,
     ) -> WriterResult:
         mode = "OPTIMIZE" if draft_text else "CREATE"
         bottleneck_report = sanitize_writer_context(bottleneck_report)
@@ -55,9 +59,13 @@ class WriterAgent(Agent):
             + json.dumps(
                 {
                     "mode": mode,
+                    "task_kind": task_kind or ("node_run_optimize" if draft_text else "node_run_create"),
                     "declared_node_title": span_title,
                     "file_sequence": file_seq,
                     "covered_node_ids": covered_node_ids or [],
+                    "member_mtu_ids": member_mtu_ids or [],
+                    "node_defines": node_defines or [],
+                    "external_prerequisite_bridges": external_prerequisites or [],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -127,6 +135,9 @@ class WriterAgent(Agent):
         retrieved: list[dict] | None = None,
         node_context: str | None = None,
         node_id: str | None = None,
+        member_mtu_ids: list[str] | None = None,
+        node_defines: list[str] | None = None,
+        external_prerequisites: list[str] | None = None,
     ) -> WriterResult:
         """Surgically revise a finished learning node from reader feedback."""
         feedback = sanitize_writer_context(user_feedback)
@@ -137,7 +148,7 @@ class WriterAgent(Agent):
             "if present. Do not rerun or reveal exam logic. Do not expand into future or sibling "
             "KnowledgeNodes. Return the full revised Markdown file, not a patch."
         )
-        return await self.draft(
+        result = await self.draft(
             span_title=span_title,
             file_seq=file_seq,
             bottleneck_report=f"User feedback for this generated learning node:\n{feedback}",
@@ -151,7 +162,14 @@ class WriterAgent(Agent):
             node_context=node_context,
             trusted_task_constraints=instructions,
             operation="writer.feedback_revision",
+            task_kind="feedback_revision",
+            member_mtu_ids=member_mtu_ids,
+            node_defines=node_defines,
+            external_prerequisites=external_prerequisites,
         )
+        preserved = _preserve_program_managed_sections(current_text, result.draft_content)
+        _validate_writer_output(preserved)
+        return WriterResult(draft_content=preserved)
 
 
 def sanitize_writer_context(text: str) -> str:
@@ -217,9 +235,50 @@ def _validate_writer_output(text: str) -> None:
         raise ValueError("Writer output contains no teaching body")
 
 
+def _preserve_program_managed_sections(current_text: str, revised_text: str) -> str:
+    """Restore deterministic file sections around a feedback-revised teaching body."""
+    current = current_text.strip()
+    revised = revised_text.strip()
+    h1_match = re.match(r"^(#\s+[^\n]+)\n?", current)
+    current_h1 = h1_match.group(1).strip() if h1_match else ""
+    prerequisite = _extract_markdown_section(current, "先修前置")
+    source_trace = _extract_markdown_section(current, "来源追溯", through_eof=True)
+
+    body = re.sub(r"^#\s+[^\n]+\n+", "", revised, count=1).strip()
+    body = _remove_markdown_section(body, "先修前置")
+    body = _remove_markdown_section(body, "来源追溯", through_eof=True)
+    _validate_writer_output(body)
+
+    parts = [part for part in (current_h1, prerequisite, body, source_trace) if part]
+    return "\n\n".join(parts).strip() + "\n"
+
+
+def _extract_markdown_section(text: str, title: str, *, through_eof: bool = False) -> str:
+    end = r"\Z" if through_eof else r"(?=^##\s+|\Z)"
+    match = re.search(
+        rf"^##\s+{re.escape(title)}\s*\n.*?{end}",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    return match.group(0).strip() if match else ""
+
+
+def _remove_markdown_section(text: str, title: str, *, through_eof: bool = False) -> str:
+    end = r"\Z" if through_eof else r"(?=^##\s+|\Z)"
+    return re.sub(
+        rf"^##\s+{re.escape(title)}\s*\n.*?{end}",
+        "",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    ).strip()
+
+
 def _format_retrieved(retrieved: list[dict]) -> str:
     records: list[dict[str, Any]] = []
-    for i, hit in enumerate(bounded_rag_hits(retrieved), start=1):
+    for i, hit in enumerate(
+        bounded_rag_hits(retrieved, max_total_chars=256_000, max_hit_chars=32_000),
+        start=1,
+    ):
         meta = hit.get("metadata") or {}
         kind = meta.get("content_kind") or "unknown"
         source = meta.get("path") or meta.get("filename") or meta.get("doc_id") or "unknown"
@@ -228,6 +287,8 @@ def _format_retrieved(retrieved: list[dict]) -> str:
                 "hit": i,
                 "content_kind": kind,
                 "source": source,
+                "mtu_id": meta.get("mtu_id"),
+                "chunk_index": meta.get("chunk_index"),
                 "score": hit.get("score"),
                 "text": sanitize_writer_context(str(hit.get("text") or "")),
             }

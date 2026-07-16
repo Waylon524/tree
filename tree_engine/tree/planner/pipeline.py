@@ -35,8 +35,8 @@ class PlannerError(RuntimeError):
     pass
 
 
-ARCHIVIST_ALGORITHM_VERSION = "v4-clean-window-limits"
-DAGGER_ALGORITHM_VERSION = "v3-explicit-prerequisites"
+ARCHIVIST_ALGORITHM_VERSION = "v5-canonical-exercise-and-prompt-boundaries"
+DAGGER_ALGORITHM_VERSION = "v4-prompt-boundaries"
 
 
 class HasDagger(Protocol):

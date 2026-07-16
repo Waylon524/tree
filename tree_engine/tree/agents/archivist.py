@@ -522,7 +522,7 @@ def _mtu_prompt_body(cleaned_markdown: str, line_count: int) -> str:
         f"Every line number in units must be between 1 and {line_count}, inclusive.\n"
         "Do not output skipped_ranges. The JSON object must contain only `units`.\n"
         "END_CONTRACT\n\n"
-        f"{numbered}"
+        + _untrusted_data_json("numbered_markdown", numbered)
     )
 
 
@@ -546,13 +546,13 @@ def _mtu_assignment_prompt_body(
         "Decide whether the given range belongs to the previous MTU or the next MTU.\n"
         "Do not rewrite any MTU metadata. Do not create units. Do not output prose.\n"
         "Return strict JSON only in this exact shape: {\"mtu_title\": \"目标MTU标题\"}\n\n"
-        f"{json.dumps({
+        + _untrusted_data_json("mtu_assignment_reference", {
             'problem_type': problem_type,
             'range': line_range,
             'range_excerpt': excerpt,
             'previous_mtu_metadata': _assignment_meta(previous),
             'next_mtu_metadata': _assignment_meta(next_unit),
-        }, ensure_ascii=False, indent=2)}"
+        })
     )
 
 
@@ -583,14 +583,14 @@ def _mtu_metadata_repair_prompt_body(
         "Do not create, delete, split, or merge units.\n"
         "For `defines`, use `defines`, never `keywords`; it must contain 1-4 new definitions, formulas, methods, models, or laws introduced by this MTU.\n"
         f"Return strict JSON only in this exact shape: {output_shapes[field]}\n\n"
-        f"{json.dumps({
+        + _untrusted_data_json("mtu_metadata_repair_reference", {
             'problem_type': 'invalid_metadata',
             'field': field,
             'range': line_range,
             'range_excerpt': excerpt,
             'current_metadata': _assignment_meta(invalid_unit.get('block')),
             'metadata_errors': [metadata_error],
-        }, ensure_ascii=False, indent=2)}"
+        })
     )
 
 
@@ -626,12 +626,12 @@ def _mtu_units_repair_prompt_body(
         f"Any final `concept` unit must cover at least {_MIN_FINAL_MTU_LINES} lines and must have at least one define.\n"
         "If a worked example is merged into a concept, the title must name only the concept; do not mention examples, exercises, applications, or cases in the title.\n"
         "Use `defines`, never `keywords`. Do not output prose or code fences.\n\n"
-        f"{json.dumps({
+        + _untrusted_data_json("mtu_unit_repair_reference", {
             'problem': problem,
             'window_range': {'start_line': window_start, 'end_line': window_end},
             'window_units_metadata': [_assignment_meta(unit) for unit in window_units],
             'window_excerpt': excerpt,
-        }, ensure_ascii=False, indent=2)}"
+        })
     )
 
 
@@ -661,11 +661,11 @@ def _mtu_duplicate_defines_repair_prompt_body(
         "If the repeated define is truly introduced by only one MTU, keep it there and replace/remove it from the other MTU with a specific define that is actually introduced by that MTU.\n"
         "Use `defines`, never `keywords`. Every concept unit must keep 1-4 defines.\n"
         "Return a strict JSON object with `units` only. Each unit may contain only `start_line`, `end_line`, and `defines`. Do not output prose or code fences.\n\n"
-        f"{json.dumps({
+        + _untrusted_data_json("mtu_duplicate_define_repair_reference", {
             'problem': problem,
             'duplicate_units_metadata': [_assignment_meta(unit) for unit in duplicate_units],
             'duplicate_unit_excerpts': excerpts,
-        }, ensure_ascii=False, indent=2)}"
+        })
     )
 
 
@@ -1341,7 +1341,7 @@ def _clean_prompt_body(raw_markdown: str, line_count: int) -> str:
         f"Only output deleted_ranges with line numbers between 1 and {line_count}, inclusive.\n"
         "Do not output cleaned Markdown. Do not modify headings.\n"
         "END_CONTRACT\n\n"
-        f"{numbered}"
+        + _untrusted_data_json("numbered_ocr_markdown", numbered)
     )
 
 
@@ -1357,13 +1357,28 @@ def _clean_repair_prompt_body(
         "REPAIR_ONLY_INVALID_DELETED_RANGES\n"
         f"TOTAL_LINES: {line_count}\n"
         "The following valid deleted_ranges are locked. Do not change or repeat them.\n"
-        f"VALID_DELETED_RANGES:\n{json.dumps(valid_ranges, ensure_ascii=False)}\n\n"
+        "VALID_DELETED_RANGES are code-locked and included in the reference JSON below.\n\n"
         "Only regenerate replacements for the invalid deleted_ranges below. "
         "If an invalid range should not delete anything, omit it from the replacement output.\n"
-        f"INVALID_DELETED_RANGES:\n{json.dumps(invalid_ranges, ensure_ascii=False)}\n\n"
         "Return strict JSON only in this shape:\n"
         '{"deleted_ranges": [{"start_line": 1, "end_line": 1, "reason": "reason"}]}\n\n'
-        f"{numbered}"
+        + _untrusted_data_json(
+            "clean_range_repair_reference",
+            {
+                "valid_deleted_ranges_locked": valid_ranges,
+                "invalid_deleted_ranges_to_replace": invalid_ranges,
+                "numbered_ocr_markdown": numbered,
+            },
+        )
+    )
+
+
+def _untrusted_data_json(label: str, content: object) -> str:
+    return "TREE_UNTRUSTED_DATA_JSON\n" + json.dumps(
+        {"label": label, "content": content},
+        ensure_ascii=False,
+        indent=2,
+        default=str,
     )
 
 

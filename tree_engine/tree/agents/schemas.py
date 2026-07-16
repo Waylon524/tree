@@ -41,7 +41,11 @@ class MtuUnitPayload(StrictAgentModel):
     # Explicitly typed legacy input so Archivist can repair it to `defines`.
     keywords: list[NonEmptyStr] | None = Field(default=None, max_length=4)
     summary: NonEmptyStr
-    unit_kind: Literal["concept", "excercise", "application", "review", "summary", "intro"]
+    # Accept the historical misspelling for cached/custom-prompt compatibility;
+    # planner normalization stores the canonical `exercise` value.
+    unit_kind: Literal[
+        "concept", "exercise", "excercise", "application", "review", "summary", "intro"
+    ]
 
 
 class ArchivistMtuPlan(StrictAgentModel):

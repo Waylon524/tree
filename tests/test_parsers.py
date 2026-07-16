@@ -13,9 +13,15 @@ from tree.agents.parsers import (
     parse_exam_id,
     parse_exam_reconciliation,
     parse_exam_sections,
+    parse_planner_defect_kind,
     parse_route,
 )
-from tree.state.models import AuditExamDefectKind, ExamReconciliationAction, Route
+from tree.state.models import (
+    AuditExamDefectKind,
+    AuditPlannerDefectKind,
+    ExamReconciliationAction,
+    Route,
+)
 
 _EXAM = """## [Next_Knowledge_Point]
 01. 化学平衡
@@ -114,6 +120,16 @@ def test_parse_audit_defect_kind_valid_values():
 def test_parse_audit_defect_kind_invalid_value_raises():
     with pytest.raises(ParseError, match="Invalid EXAM_DEFECT"):
         parse_audit_defect_kind(_AUDIT + "\nEXAM_DEFECT: STUDENT_ERROR\n")
+
+
+def test_parse_planner_defect_kind_is_strict_and_optional():
+    assert parse_planner_defect_kind(_AUDIT) is None
+    assert (
+        parse_planner_defect_kind(_AUDIT + "\nPLANNER_DEFECT: MISSING_PREREQUISITE\n")
+        is AuditPlannerDefectKind.MISSING_PREREQUISITE
+    )
+    with pytest.raises(ParseError, match="Invalid PLANNER_DEFECT"):
+        parse_planner_defect_kind(_AUDIT + "\nPLANNER_DEFECT: UNKNOWN\n")
 
 
 def test_extract_bottleneck_report_stops_before_route():

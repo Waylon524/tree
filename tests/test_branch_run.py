@@ -10,6 +10,7 @@ import pytest
 
 from tree.engine.node_run import (
     NodeRunner,
+    NodeRunPrerequisiteError,
     NodeRunStagnationError,
     ledger_covered_node_ids,
     reconcile_ledger_generation,
@@ -21,8 +22,10 @@ from tree.state.manager import StateManager
 from tree.state.models import (
     AuditResult,
     AuditExamDefectKind,
+    AuditPlannerDefectKind,
     CoverageSnapshot,
     ExamReconciliationAction,
+    ExamReconciliationTrigger,
     ExamReconciliationResult,
     ExamSections,
     NodeExecutionRecord,
@@ -60,9 +63,11 @@ class _ReconcilingExaminer(_FakeExaminer):
         super().__init__(fail_then_pass=0)
         self.action = action
         self.reconcile_calls = 0
+        self.reconcile_kwargs = []
 
     async def reconcile_exam(self, **kw):
         self.reconcile_calls += 1
+        self.reconcile_kwargs.append(kw)
         if self.action is ExamReconciliationAction.KEEP_FAIL:
             return ExamReconciliationResult(
                 action=ExamReconciliationAction.KEEP_FAIL,
@@ -82,8 +87,13 @@ class _ReconcilingExaminer(_FakeExaminer):
 
 
 class _AuditDefectExaminer(_ReconcilingExaminer):
-    def __init__(self, defect_kind: AuditExamDefectKind):
-        super().__init__(action=ExamReconciliationAction.REVISE_EXAM)
+    def __init__(
+        self,
+        defect_kind: AuditExamDefectKind,
+        *,
+        action: ExamReconciliationAction = ExamReconciliationAction.REVISE_EXAM,
+    ):
+        super().__init__(action=action)
         self.defect_kind = defect_kind
 
     async def audit(self, **kw):
@@ -108,6 +118,17 @@ class _StagnatingReconcilingExaminer(_ReconcilingExaminer):
                 bottleneck_report="# Bottleneck Report\nStill missing the same formula.",
             )
         return AuditResult(route=Route.PASS, exam_id="化学平衡", bottleneck_report="ok")
+
+
+class _PlannerDefectExaminer(_FakeExaminer):
+    async def audit(self, **kw):
+        self.audit_calls += 1
+        return AuditResult(
+            route=Route.FAIL_KNOWLEDGE_GAP,
+            exam_id="化学平衡",
+            bottleneck_report="# Bottleneck Report\nMissing internal prerequisite outside ActiveNode.",
+            planner_defect_kind=AuditPlannerDefectKind.MISSING_PREREQUISITE,
+        )
 
 
 class _FakeStudent:
@@ -258,6 +279,31 @@ async def test_node_run_fail_then_pass_records_single_node_output(tmp_path):
     assert execution.status == "completed"
     assert execution.outputs_completed == ["002.化学平衡.md"]
     assert state.node_runs[0].status == "complete"
+
+
+async def test_node_run_planner_prerequisite_defect_stops_before_writer(tmp_path):
+    _seed(tmp_path)
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    examiner = _PlannerDefectExaminer()
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    with pytest.raises(NodeRunPrerequisiteError, match="Regrow the knowledge graph"):
+        await runner.run_one("n1")
+
+    run = state_mgr.load().node_runs[0]
+    assert examiner.audit_calls == 1
+    assert writer.calls == 0
+    assert run.status == "failed"
+    assert "prerequisite planning defect" in (run.last_error or "")
 
 
 async def test_node_run_recovers_output_transaction_after_index_failure(tmp_path):
@@ -544,6 +590,11 @@ async def test_node_run_answer_key_defect_reconciles_without_rewriting_question(
     assert exam.answer_key == "Revised A"
     assert exam.writer_instructions == "Scope: original"
     assert state.node_runs[0].exam_repair_count == 1
+    history = state.node_runs[0].exam_reconciliation_history
+    assert len(history) == 1
+    assert history[0].trigger is ExamReconciliationTrigger.AUDIT_DEFECT
+    assert history[0].defect_kind is AuditExamDefectKind.ANSWER_KEY_DEFECT
+    assert history[0].action is ExamReconciliationAction.REVISE_EXAM
 
 
 async def test_node_run_exam_defect_reconciles_full_exam(tmp_path):
@@ -592,10 +643,50 @@ async def test_node_run_exam_defect_reconciles_full_exam(tmp_path):
     assert exam.answer_key == "Revised A"
     assert exam.writer_instructions == "Scope: revised"
     assert state.node_runs[0].exam_repair_count == 1
+    history = state.node_runs[0].exam_reconciliation_history
+    assert len(history) == 1
+    assert history[0].trigger is ExamReconciliationTrigger.AUDIT_DEFECT
+    assert history[0].defect_kind is AuditExamDefectKind.EXAM_DEFECT
+    assert examiner.reconcile_kwargs[0]["iteration"] == 2
     assert student.calls[1]["blind_exam"] == "Revised Q"
 
 
-async def test_node_run_exam_defect_after_repair_does_not_call_writer(tmp_path):
+async def test_node_run_keep_fail_for_audit_defect_continues_to_writer(tmp_path):
+    _seed(tmp_path)
+    state_mgr = StateManager(paths.pipeline_state_path(tmp_path))
+    examiner = _AuditDefectExaminer(
+        AuditExamDefectKind.EXAM_DEFECT,
+        action=ExamReconciliationAction.KEEP_FAIL,
+    )
+    writer = _FakeWriter()
+    runner = NodeRunner(
+        root=tmp_path,
+        settings=SimpleNamespace(max_iterations=5),
+        examiner=examiner,
+        student=_FakeStudent(),
+        writer=writer,
+        retriever=_FakeRetriever(),
+        state_mgr=state_mgr,
+    )
+
+    assert await runner.run_one("n1") == "node_complete"
+
+    run = state_mgr.load().node_runs[0]
+    assert examiner.reconcile_calls == 1
+    assert examiner.audit_calls == 2
+    assert writer.calls == 1
+    assert run.status == "complete"
+    assert run.last_error is None
+    assert run.exam_repair_count == 1
+    assert len(run.exam_reconciliation_history) == 1
+    record = run.exam_reconciliation_history[0]
+    assert record.trigger is ExamReconciliationTrigger.AUDIT_DEFECT
+    assert record.defect_kind is AuditExamDefectKind.EXAM_DEFECT
+    assert record.action is ExamReconciliationAction.KEEP_FAIL
+    assert record.reason == "draft is still missing a method"
+
+
+async def test_node_run_exam_defect_after_repair_continues_to_writer(tmp_path):
     _seed(tmp_path)
     draft = paths.drafts_root(tmp_path) / "n1" / "002.化学平衡.md"
     draft.parent.mkdir(parents=True)
@@ -629,14 +720,14 @@ async def test_node_run_exam_defect_after_repair_does_not_call_writer(tmp_path):
         state_mgr=state_mgr,
     )
 
-    with pytest.raises(RuntimeError, match="Exam repair already used"):
-        await runner.run_one("n1")
+    assert await runner.run_one("n1") == "node_complete"
 
     assert examiner.reconcile_calls == 0
-    assert writer.calls == 0
+    assert examiner.audit_calls == 2
+    assert writer.calls == 1
     state = state_mgr.load()
-    assert state.node_runs[0].status == "failed"
-    assert "Exam repair already used" in (state.node_runs[0].last_error or "")
+    assert state.node_runs[0].status == "complete"
+    assert state.node_runs[0].last_error is None
 
 
 async def test_node_run_reconciles_bad_answer_key_at_iteration_limit(tmp_path):
@@ -684,6 +775,10 @@ async def test_node_run_reconciles_bad_answer_key_at_iteration_limit(tmp_path):
     assert examiner.audit_calls == 1
     state = state_mgr.load()
     assert state.node_runs[0].exam_repair_count == 1
+    history = state.node_runs[0].exam_reconciliation_history
+    assert len(history) == 1
+    assert history[0].trigger is ExamReconciliationTrigger.ITERATION_LIMIT
+    assert history[0].action is ExamReconciliationAction.REVISE_EXAM
     assert state.node_runs[0].exam_sections is not None
     assert state.node_runs[0].exam_sections.answer_key == "Revised A"
     assert state.node_runs[0].status == "complete"
@@ -729,6 +824,11 @@ async def test_node_run_keep_fail_reconciliation_still_raises_iteration_limit(tm
     state = state_mgr.load()
     assert examiner.reconcile_calls == 1
     assert state.node_runs[0].exam_repair_count == 1
+    history = state.node_runs[0].exam_reconciliation_history
+    assert len(history) == 1
+    assert history[0].trigger is ExamReconciliationTrigger.ITERATION_LIMIT
+    assert history[0].action is ExamReconciliationAction.KEEP_FAIL
+    assert history[0].reason == "draft is still missing a method"
 
 
 async def test_node_run_reconciles_after_repeated_equivalent_bottleneck(tmp_path):
@@ -754,6 +854,7 @@ async def test_node_run_reconciles_after_repeated_equivalent_bottleneck(tmp_path
     assert examiner.audit_calls == 3
     assert writer.calls == 1
     assert run.exam_repair_count == 1
+    assert run.exam_reconciliation_history[0].trigger is ExamReconciliationTrigger.STAGNATION
     assert run.bottleneck_repeat_count == 0
     assert len(run.bottleneck_history) == 2
 

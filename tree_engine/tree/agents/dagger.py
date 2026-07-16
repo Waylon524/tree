@@ -29,7 +29,7 @@ class DaggerAgent(Agent):
         operation: str = "dagger.build_nodes",
     ) -> dict[str, Any]:
         """Send MTU metadata, return parsed ``{"nodes": [...]}``."""
-        user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
+        user_prompt = _dagger_user_prompt(operation, payload)
         raw = await self.complete(
             user_prompt,
             operation=operation,
@@ -46,7 +46,7 @@ class DaggerAgent(Agent):
         operation: str = "dagger.select_prerequisites",
     ) -> dict[str, Any]:
         """Send nodes + define dictionary, return ``{"node_prerequisites": [...]}``."""
-        user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
+        user_prompt = _dagger_user_prompt(operation, payload)
         raw = await self.complete(
             user_prompt,
             operation=operation,
@@ -88,3 +88,40 @@ class DaggerAgent(Agent):
     ) -> dict[str, Any]:
         """Compatibility shim for older tests/callers."""
         return await self.build_nodes(payload, timeout_sec=timeout_sec)
+
+
+def _dagger_user_prompt(operation: str, payload: object) -> str:
+    controls: dict[str, Any] = {"operation": operation}
+    if isinstance(payload, list):
+        data: list[object] = []
+        tasks: list[str] = []
+        repair_feedback: list[str] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                data.append(item)
+                continue
+            clone = dict(item)
+            task = str(clone.pop("task", "") or "").strip()
+            note = str(clone.pop("_note", "") or "").strip()
+            if task:
+                tasks.append(task)
+            if note:
+                repair_feedback.append(note)
+            data.append(clone)
+        controls["request_tasks"] = tasks or ["BUILD_NODES_LEGACY"]
+        if repair_feedback:
+            controls["repair_feedback"] = repair_feedback
+    elif isinstance(payload, dict):
+        data = dict(payload)
+        controls["request_task"] = str(data.pop("task", "") or "SELECT_PREREQUISITES")
+        instructions = str(data.pop("instructions", "") or "").strip()
+        if instructions:
+            controls["instructions"] = instructions
+    else:
+        data = payload
+    return (
+        "CODE_DECLARED_DAGGER_TASK_JSON\n"
+        + json.dumps(controls, ensure_ascii=False, indent=2)
+        + "\n\nTREE_UNTRUSTED_DATA_JSON\n"
+        + json.dumps({"payload": data}, ensure_ascii=False, indent=2, default=str)
+    )

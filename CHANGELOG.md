@@ -17,6 +17,9 @@
 
 - 将全部 AI operation 的 Max Tokens 上限提高到原配置的十六倍：`512→8192`、`2048→32768`、`4096→65536`、`8192→131072`；默认角色级输出上限同步提高到 `131072`，默认 DeepSeek V4 Flash context window 校准为 `1000000`，在保持短修复请求分档的同时降低长输出截断概率。
 - LLM 响应现在统一验证 choices、message、content、refusal、tool calls 与 `finish_reason`，仅在完整响应通过契约后记录 provider 成功；异常退出会把流水线、当前阶段和 active 状态统一收敛到失败或停止终态。
+- 全部 Agent prompt 和调用入口明确分离代码任务控制与不可信材料；OCR、RAG、草稿、试卷、答案、反馈及格式修复原响应中的控制语句不再具有任务权限，格式修复也保留完整原始任务而不静默截断中间内容。
+- Writer 明确以 Dagger 固定的 `member_mtu_ids` 与 `defines` 为知识单元边界，材料外基础在当前节点补最小解释桥，材料内先修引用必须有实际完成文件证据；反馈修订复用同一教学契约并由程序恢复 H1、先修前置和来源追溯区块。
+- Archivist 只负责抽取与归属 MTU，不再暗示其承担最终节点合并；例题单元统一写为 `exercise`，同时兼容并规范化历史 `excercise` 数据；Archivist 与 Dagger 的算法版本同步更新，使新的调用边界在自定义 prompt 未变化时也会失效旧 Planner 缓存。
 - Examiner 要求完整且唯一的五段试卷、路由与 reconciliation 标记，并验证 `Covered_Node_IDs`；Writer 拒绝空教学正文和带项目符号/编号/引用变体的试卷或答案区块。
 - Writer 的规则优先级固定为代码硬约束、结构化 Writer Instructions、动态上下文；草稿、Bottleneck、RAG 和反馈统一作为不可信数据传入，已完成先修默认只引用而不重教。
 - Dagger 的每个目标节点必须显式返回 `internal_prerequisite_decision=selected|none`，不再把缺失返回静默解释为无前置；建图会验证覆盖、define 来源和自依赖，并对异常高根节点比例执行一次全局复核而不强制补边。
@@ -25,6 +28,10 @@
 
 ### Fixed
 
+- 修复 Examiner 把材料内部缺失先修交给 Writer 越界补写的静默语义错误；确认属于图谱的缺口现在返回 `PLANNER_DEFECT: MISSING_PREREQUISITE`，NodeRun 在 Writer 调用前以可行动错误终止并提示重新生长。
+- 修复 Student 在推理完整时仍被要求编造“缺失逻辑”、外部基础名称被误当成已学证据，以及 Dagger 因相同 define 自动合并节点、REFINE 越出候选簇和环修复改动未报告环的问题。
+- 修复 Dagger 前置理由 schema 与 prompt 对 `none` 分支要求不一致、用抽象“更高层”概念代替最直接先修，以及 Writer 把 RAG chunk 当成完整节点成员或虚构前置文件锚点的问题。
+- 修复 Phase B 首轮报告 `EXAM_DEFECT` 后，Phase C 仍被错误告知“已到迭代上限”，并把合法 `KEEP_FAIL` 立即升级为 NodeRun 失败的问题；即时缺陷复核现在收到缺陷类型和真实迭代上下文，确认试卷无误时继续 Writer，重复缺陷仍由停滞与迭代上限门禁兜底，同时持久化复核触发原因、动作和模型理由。
 - 修复并行 PDF OCR 用分块序号推算累计页数导致进度提前和倒退的问题；现在逐分块保存单调最大页数后求和，兼容乱序、重复、重试、下载恢复和结果复用事件。
 - 修复主动暂停后持久化 `in_progress` 检查点被 CLI 和 GUI 错当成实时 active 的问题；停止现在统一收敛 phase/stage 状态、取消尚未结束的 NodeRun 子任务，同时保留完整检查点供下次续跑。
 - 修复可恢复的 pypdf 缺失对象和重复 `/Filter` 警告重复刷屏的问题；页数检查和分块作用域内只输出带文件名与分类计数的摘要，未知警告与完整性错误仍正常报告。

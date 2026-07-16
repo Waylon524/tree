@@ -346,10 +346,16 @@ def test_dagger_prompts_use_defines_and_required_defines_not_edges():
     assert "required_defines" in DAGGER_PREREQUISITES_PROMPT
     assert "external_prerequisites" in DAGGER_PREREQUISITES_PROMPT
     assert "at most 24" in DAGGER_PREREQUISITES_PROMPT
-    assert "higher-level" in DAGGER_PREREQUISITES_PROMPT
+    assert "including both `selected` and `none`" in DAGGER_PREREQUISITES_PROMPT
+    assert "only on declared material-external foundations" in DAGGER_PREREQUISITES_PROMPT
+    assert "most direct, context-specific upstream defines" in DAGGER_PREREQUISITES_PROMPT
+    assert "higher-level" not in DAGGER_PREREQUISITES_PROMPT
     assert "closest to the current node" in DAGGER_PREREQUISITES_PROMPT
     assert "smallest necessary change" in DAGGER_PREREQUISITES_PROMPT
     assert "does not need to be a linear or total order" in DAGGER_PREREQUISITES_PROMPT
+    assert "Remove the reported cycle only" in DAGGER_PREREQUISITES_PROMPT
+    assert "not automatic proof" in DAGGER_PROMPT
+    assert "never reach outside the cluster" in DAGGER_PROMPT
 
 
 def test_node_defines_are_limited_to_eight():

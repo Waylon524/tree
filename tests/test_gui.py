@@ -13,6 +13,10 @@ from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
     CoverageSnapshot,
+    AuditExamDefectKind,
+    ExamReconciliationAction,
+    ExamReconciliationRecord,
+    ExamReconciliationTrigger,
     ExamSections,
     NodeExecutionRecord,
     NodeRunRecord,
@@ -554,6 +558,15 @@ def test_regrow_resets_generation_state_instead_of_resuming_it(workspace, monkey
                     bottleneck_history=["old gap", "old gap"],
                     last_error="writer failed",
                     exam_repair_count=2,
+                    exam_reconciliation_history=[
+                        ExamReconciliationRecord(
+                            trigger=ExamReconciliationTrigger.AUDIT_DEFECT,
+                            iteration=1,
+                            defect_kind=AuditExamDefectKind.EXAM_DEFECT,
+                            action=ExamReconciliationAction.KEEP_FAIL,
+                            reason="exam is sound",
+                        )
+                    ],
                 )
             ],
         )
@@ -579,6 +592,7 @@ def test_regrow_resets_generation_state_instead_of_resuming_it(workspace, monkey
     assert run.bottleneck_history == []
     assert run.last_error is None
     assert run.exam_repair_count == 0
+    assert run.exam_reconciliation_history == []
     assert run.coverage_snapshot == snapshot
     assert starts == [workspace]
 

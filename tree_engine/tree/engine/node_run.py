@@ -17,7 +17,10 @@ from tree.planner.store import read_envelope_data, read_json, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
     AuditExamDefectKind,
+    AuditPlannerDefectKind,
     ExamReconciliationAction,
+    ExamReconciliationRecord,
+    ExamReconciliationTrigger,
     ExamSections,
     IterationState,
     Route,
@@ -38,6 +41,10 @@ class Retriever(Protocol):
 
 class NodeRunStagnationError(RuntimeError):
     """Raised when repeated audit feedback no longer produces progress."""
+
+
+class NodeRunPrerequisiteError(RuntimeError):
+    """Raised when audit identifies a missing planner prerequisite outside the active node."""
 
 
 class NodeRunner:
@@ -203,6 +210,19 @@ class NodeRunner:
                 )
             else:
                 bottleneck_report = audit.bottleneck_report
+                if audit.planner_defect_kind is AuditPlannerDefectKind.MISSING_PREREQUISITE:
+                    error = (
+                        f"NodeRun prerequisite planning defect for {execution.node_id}: the audit "
+                        "requires material-internal knowledge outside the ActiveNode that is not "
+                        "available from completed DAG ancestors. Regrow the knowledge graph after "
+                        "repairing the prerequisite relation."
+                    )
+                    self._persist_run_state(
+                        execution.node_run_id,
+                        status="failed",
+                        last_error=error,
+                    )
+                    raise NodeRunPrerequisiteError(error)
                 if audit.exam_defect_kind is not None:
                     repaired = await self._try_reconcile_exam_from_audit_defect(
                         iter_state,
@@ -232,6 +252,7 @@ class NodeRunner:
                     node_context,
                     bottleneck_report=bottleneck_report,
                     answer_key_only=False,
+                    trigger=ExamReconciliationTrigger.STAGNATION,
                     require_draft=True,
                     require_bottleneck=True,
                 )
@@ -250,6 +271,7 @@ class NodeRunner:
                 raise NodeRunStagnationError(error)
 
             wq = f"{exam.knowledge_point}\n{bottleneck_report}"
+            active_node = self._node_for_id(node_id)
             result = await self.writer.draft(
                 span_title=exam.knowledge_point,
                 file_seq=iter_state.file_seq,
@@ -261,10 +283,13 @@ class NodeRunner:
                 writer_instructions=exam.writer_instruction_spec or exam.writer_instructions,
                 covered_node_ids=[node_id],
                 retrieved=self._source_evidence_hits(
-                    self._node_for_id(node_id), wq, collections, top_k=5
+                    active_node, wq, collections, top_k=5
                 )
                 + self.retriever.finished_hits(wq, allowed_paths=allowed_paths, top_k=8),
                 node_context=node_context,
+                member_mtu_ids=list(active_node.get("member_mtu_ids") or []),
+                node_defines=list(active_node.get("defines") or []),
+                external_prerequisites=list(active_node.get("external_prerequisites") or []),
             )
             iter_state.draft_path = self._persist_draft(
                 node_id, iter_state.file_seq, exam.knowledge_point, result.draft_content
@@ -309,14 +334,9 @@ class NodeRunner:
     ) -> bool:
         repair_count = self._exam_repair_count(execution)
         if repair_count > 0:
-            error = (
-                f"Exam repair already used for {execution.node_id}; audit still reported "
-                f"{defect_kind.value}."
-            )
-            self._persist_run_state(execution.node_run_id, status="failed", last_error=error)
-            raise RuntimeError(error)
+            return False
 
-        repaired = await self._reconcile_exam(
+        return await self._reconcile_exam(
             iter_state,
             execution,
             collections,
@@ -325,16 +345,9 @@ class NodeRunner:
             node_context,
             bottleneck_report=bottleneck_report,
             answer_key_only=defect_kind is AuditExamDefectKind.ANSWER_KEY_DEFECT,
+            trigger=ExamReconciliationTrigger.AUDIT_DEFECT,
+            defect_kind=defect_kind,
         )
-        if repaired:
-            return True
-
-        error = (
-            f"Exam repair failed for {execution.node_id} after audit reported "
-            f"{defect_kind.value}."
-        )
-        self._persist_run_state(execution.node_run_id, status="failed", last_error=error)
-        raise RuntimeError(error)
 
     async def _try_reconcile_exam_at_limit(
         self,
@@ -354,6 +367,7 @@ class NodeRunner:
             node_context,
             bottleneck_report=iter_state.previous_bottleneck or "",
             answer_key_only=False,
+            trigger=ExamReconciliationTrigger.ITERATION_LIMIT,
             require_draft=True,
             require_bottleneck=True,
         )
@@ -369,6 +383,8 @@ class NodeRunner:
         *,
         bottleneck_report: str,
         answer_key_only: bool,
+        trigger: ExamReconciliationTrigger,
+        defect_kind: AuditExamDefectKind | None = None,
         require_draft: bool = False,
         require_bottleneck: bool = False,
     ) -> bool:
@@ -403,15 +419,28 @@ class NodeRunner:
             + self.retriever.source_hits(query, collections=collections, node_ids=[node_id], top_k=5),
             node_context=node_context,
             expected_covered_node_ids=[node_id],
+            trigger=trigger,
+            defect_kind=defect_kind,
+            iteration=iter_state.iteration,
         )
         repair_count += 1
+        self._record_exam_reconciliation(
+            execution.node_run_id,
+            ExamReconciliationRecord(
+                trigger=trigger,
+                iteration=iter_state.iteration,
+                defect_kind=defect_kind,
+                action=result.action,
+                reason=result.reason,
+            ),
+        )
         revised = result.exam_sections
         if result.action is not ExamReconciliationAction.REVISE_EXAM or revised is None:
             self._persist_run_state(
                 execution.node_run_id,
                 exam_repair_count=repair_count,
                 status="running",
-                last_error=f"Exam reconciliation kept failure: {result.reason}",
+                last_error=None,
             )
             return False
         if revised.covered_node_ids != [node_id]:
@@ -443,6 +472,24 @@ class NodeRunner:
             last_error=None,
         )
         return True
+
+    def _record_exam_reconciliation(
+        self,
+        run_id: str | None,
+        record: ExamReconciliationRecord,
+    ) -> None:
+        if not run_id:
+            return
+        state = self.state_mgr.load()
+        run = self.state_mgr.find_run(state, run_id)
+        history = list(run.exam_reconciliation_history if run else [])
+        history.append(record)
+        state = self.state_mgr.update_node_run(
+            state,
+            run_id,
+            exam_reconciliation_history=history[-20:],
+        )
+        self.state_mgr.save(state)
 
     def _exam_repair_count(self, execution: Any) -> int:
         state = self.state_mgr.load()
@@ -842,6 +889,7 @@ def _node_context(node_id: str, dag: dict[str, Any], nodes_by_id: dict[str, dict
     lines = [
         "ActiveNode Context — teach exactly one KnowledgeNode.",
         f"TARGET {node_id} | {node.get('title', node_id)} | {_defines_text(node)}",
+        "Dagger-fixed member MTU ids: " + ", ".join(node.get("member_mtu_ids") or []),
     ]
     if direct:
         lines.append("Direct prerequisite nodes already completed: " + ", ".join(_node_label(n, nodes_by_id) for n in direct))
@@ -849,6 +897,12 @@ def _node_context(node_id: str, dag: dict[str, Any], nodes_by_id: dict[str, dict
         lines.append("Visible ancestor nodes for learned RAG only: " + ", ".join(ancestors))
     if future:
         lines.append("Forbidden future descendant nodes: " + ", ".join(future))
+    external = list(node.get("external_prerequisites") or [])
+    if external:
+        lines.append(
+            "Material-external prerequisite bridges required inside this node: "
+            + ", ".join(str(item) for item in external)
+        )
     lines.append("Covered_Node_IDs must be exactly: " + node_id)
     lines.append("Do not cover sibling, future, or multiple KnowledgeNodes in this NodeRun.")
     return "\n".join(lines)

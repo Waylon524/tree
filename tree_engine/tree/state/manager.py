@@ -89,6 +89,7 @@ class StateManager:
         run.bottleneck_repeat_count = 0
         run.bottleneck_history = []
         run.exam_repair_count = 0
+        run.exam_reconciliation_history = []
         run.last_error = None
         return run
 

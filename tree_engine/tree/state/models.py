@@ -40,9 +40,19 @@ class ExamReconciliationAction(str, Enum):
     REVISE_EXAM = "REVISE_EXAM"
 
 
+class ExamReconciliationTrigger(str, Enum):
+    AUDIT_DEFECT = "audit_defect"
+    STAGNATION = "stagnation"
+    ITERATION_LIMIT = "iteration_limit"
+
+
 class AuditExamDefectKind(str, Enum):
     ANSWER_KEY_DEFECT = "ANSWER_KEY_DEFECT"
     EXAM_DEFECT = "EXAM_DEFECT"
+
+
+class AuditPlannerDefectKind(str, Enum):
+    MISSING_PREREQUISITE = "MISSING_PREREQUISITE"
 
 
 class WriterInstructions(BaseModel):
@@ -219,6 +229,14 @@ class ExamReconciliationResult(BaseModel):
     exam_sections: ExamSections | None = None
 
 
+class ExamReconciliationRecord(BaseModel):
+    trigger: ExamReconciliationTrigger
+    iteration: int = 0
+    defect_kind: AuditExamDefectKind | None = None
+    action: ExamReconciliationAction
+    reason: str = ""
+
+
 class NodeRunRecord(BaseModel):
     node_id: str
     run_id: str
@@ -233,6 +251,7 @@ class NodeRunRecord(BaseModel):
     bottleneck_history: list[str] = Field(default_factory=list)
     last_error: str | None = None
     exam_repair_count: int = 0
+    exam_reconciliation_history: list[ExamReconciliationRecord] = Field(default_factory=list)
 
 
 class PipelineState(BaseModel):
@@ -255,6 +274,7 @@ class AuditResult(BaseModel):
     exam_id: str
     bottleneck_report: str
     exam_defect_kind: AuditExamDefectKind | None = None
+    planner_defect_kind: AuditPlannerDefectKind | None = None
 
 
 class WriterResult(BaseModel):

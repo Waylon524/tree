@@ -7,6 +7,7 @@ import re
 
 from tree.state.models import (
     AuditExamDefectKind,
+    AuditPlannerDefectKind,
     ExamReconciliationAction,
     ExamReconciliationResult,
     ExamSections,
@@ -22,6 +23,7 @@ class ParseError(Exception):
 _ROUTE_PATTERN = re.compile(r"^ROUTE:\s*(PASS|FAIL_KNOWLEDGE_GAP)\s*$", re.MULTILINE)
 _EXAM_ID_PATTERN = re.compile(r"^EXAM_ID:\s*(.+)$", re.MULTILINE)
 _AUDIT_DEFECT_PATTERN = re.compile(r"^EXAM_DEFECT:\s*(\S+)\s*$", re.MULTILINE)
+_PLANNER_DEFECT_PATTERN = re.compile(r"^PLANNER_DEFECT:\s*(\S+)\s*$", re.MULTILINE)
 _RECONCILIATION_ACTION_PATTERN = re.compile(
     r"^ACTION:\s*(KEEP_FAIL|REVISE_EXAM)\s*$", re.MULTILINE
 )
@@ -72,6 +74,19 @@ def parse_audit_defect_kind(text: str) -> AuditExamDefectKind | None:
         return AuditExamDefectKind(value)
     except ValueError as exc:
         raise ParseError(f"Invalid EXAM_DEFECT value: {value}") from exc
+
+
+def parse_planner_defect_kind(text: str) -> AuditPlannerDefectKind | None:
+    matches = list(_PLANNER_DEFECT_PATTERN.finditer(text))
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ParseError(f"PLANNER_DEFECT must appear at most once; found {len(matches)}")
+    value = matches[0].group(1).strip()
+    try:
+        return AuditPlannerDefectKind(value)
+    except ValueError as exc:
+        raise ParseError(f"Invalid PLANNER_DEFECT value: {value}") from exc
 
 
 def parse_exam_sections(text: str) -> ExamSections:
