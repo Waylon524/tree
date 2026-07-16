@@ -32,6 +32,7 @@ class Agent:
         self,
         user_prompt: str,
         *,
+        operation: str,
         system_prompt: str | None = None,
         timeout_sec: float | None = None,
     ) -> str:
@@ -39,5 +40,6 @@ class Agent:
             self.role,
             system_prompt or self.system_prompt,
             user_prompt,
+            operation=operation,
             timeout_sec=timeout_sec,
         )

@@ -13,7 +13,14 @@ import logging
 from typing import Any
 
 from tree.agents.base import Agent
-from tree.agents.parsers import extract_json_object
+from tree.agents.schemas import (
+    ArchivistDeletePlan,
+    ArchivistMtuPlan,
+    DuplicateDefineRepairPlan,
+    MtuAssignmentDecision,
+    metadata_repair_schema,
+    parse_agent_json,
+)
 from tree.planner.ids import normalize_text_key
 from tree.planner.models import MTU
 from tree.planner.mtu import (
@@ -53,10 +60,11 @@ class ArchivistAgent(Agent):
             try:
                 raw_plan = await self.complete(
                     prompt_body + malformed_feedback,
+                    operation="archivist.clean",
                     system_prompt=self.prompt_text("archivist_clean"),
                     timeout_sec=timeout_sec,
                 )
-                plan = extract_json_object(raw_plan)
+                plan = parse_agent_json(raw_plan, ArchivistDeletePlan).model_dump(exclude_none=True)
                 break
             except ValueError as exc:
                 last_error = exc
@@ -79,10 +87,13 @@ class ArchivistAgent(Agent):
                     valid_ranges=deleted_ranges,
                     invalid_ranges=invalid_ranges,
                 ),
+                operation="archivist.clean_range_repair",
                 system_prompt=self.prompt_text("archivist_clean"),
                 timeout_sec=timeout_sec,
             )
-            repair_plan = extract_json_object(raw_repair)
+            repair_plan = parse_agent_json(raw_repair, ArchivistDeletePlan).model_dump(
+                exclude_none=True
+            )
             repaired_ranges, invalid_ranges = _partition_deleted_ranges(
                 repair_plan,
                 line_count=line_count,
@@ -119,10 +130,11 @@ class ArchivistAgent(Agent):
                 try:
                     raw = await self.complete(
                         prompt_body + malformed_feedback,
+                        operation="archivist.mtu_segment",
                         system_prompt=self.prompt_text("archivist_mtu"),
                         timeout_sec=timeout_sec,
                     )
-                    plan = extract_json_object(raw)
+                    plan = parse_agent_json(raw, ArchivistMtuPlan).model_dump(exclude_none=True)
                     partition = _partition_mtu_plan(plan, line_count=line_count)
                 except (ValueError, MtuCoverageError) as exc:
                     last_error = exc
@@ -274,10 +286,13 @@ class ArchivistAgent(Agent):
                     previous=previous,
                     next_unit=next_unit,
                 ),
+                operation="archivist.mtu_assignment",
                 system_prompt=self.prompt_text("archivist_mtu"),
                 timeout_sec=timeout_sec,
             )
-            decision = extract_json_object(raw_repair)
+            decision = parse_agent_json(raw_repair, MtuAssignmentDecision).model_dump(
+                exclude_none=True
+            )
             _apply_assignment_decision(partition["valid_units"], problem, decision)
             _sync_invalid_unit_ranges(partition)
         _refresh_mtu_partition_problems(partition, line_count=line_count)
@@ -309,10 +324,13 @@ class ArchivistAgent(Agent):
                     line_range=original_range,
                     metadata_error=field_error,
                 ),
+                operation="archivist.mtu_metadata_repair",
                 system_prompt=self.prompt_text("archivist_mtu"),
                 timeout_sec=timeout_sec,
             )
-            repair = extract_json_object(raw_repair)
+            repair = parse_agent_json(
+                raw_repair, metadata_repair_schema(field)
+            ).model_dump(exclude_none=True)
             repaired_block = _apply_metadata_field_repair(item["block"], repair, field)
             try:
                 normalized = _normalize_mtu_unit(repaired_block, int(item["index"]))
@@ -374,10 +392,11 @@ class ArchivistAgent(Agent):
                     window_start=window_start,
                     window_end=window_end,
                 ),
+                operation="archivist.mtu_units_repair",
                 system_prompt=self.prompt_text("archivist_mtu"),
                 timeout_sec=timeout_sec,
             )
-            repair = extract_json_object(raw_repair)
+            repair = parse_agent_json(raw_repair, ArchivistMtuPlan).model_dump(exclude_none=True)
             repaired_units = _normalize_repair_units(
                 repair,
                 line_count=line_count,
@@ -415,10 +434,13 @@ class ArchivistAgent(Agent):
                 problem=problem,
                 duplicate_units=duplicate_units,
             ),
+            operation="archivist.mtu_duplicate_define_repair",
             system_prompt=self.prompt_text("archivist_mtu"),
             timeout_sec=timeout_sec,
         )
-        repair = extract_json_object(raw_repair)
+        repair = parse_agent_json(raw_repair, DuplicateDefineRepairPlan).model_dump(
+            exclude_none=True
+        )
         repaired_units = _normalize_duplicate_define_repair_units(repair, duplicate_units)
         expected_ranges = {
             (int(unit["start_line"]), int(unit["end_line"]))

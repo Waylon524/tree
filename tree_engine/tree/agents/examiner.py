@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from tree.agents.base import Agent
+from tree.agents.context import bounded_rag_hits, bounded_text
 from tree.agents.parsers import (
     ParseError,
     extract_bottleneck_report,
@@ -47,6 +48,7 @@ class ExaminerAgent(Agent):
         retrieved: list[dict] | None = None,
         node_context: str | None = None,
         branch_context: str | None = None,
+        expected_covered_node_ids: list[str] | None = None,
     ) -> ExamSections:
         parts = [
             "## Task: Exam Assembly (Phase A)\n",
@@ -67,8 +69,12 @@ class ExaminerAgent(Agent):
                 parts.append(f"--- File {i + 1} ---\n{content}\n")
 
         user = "\n".join(parts)
-        raw = await self.complete(user)
-        raw = await self._repair_exam_format(user, raw)
+        raw = await self.complete(user, operation="examiner.compose")
+        raw = await self._repair_exam_format(
+            user,
+            raw,
+            expected_covered_node_ids=expected_covered_node_ids,
+        )
         return parse_exam_sections(raw)
 
     async def audit(
@@ -118,7 +124,7 @@ class ExaminerAgent(Agent):
         )
 
         user = "\n".join(parts)
-        raw = await self.complete(user)
+        raw = await self.complete(user, operation="examiner.audit")
         raw = await self._repair_audit_format(user, raw)
         return AuditResult(
             route=parse_route(raw),
@@ -139,6 +145,7 @@ class ExaminerAgent(Agent):
         retrieved: list[dict] | None = None,
         node_context: str | None = None,
         branch_context: str | None = None,
+        expected_covered_node_ids: list[str] | None = None,
     ) -> ExamReconciliationResult:
         parts = [
             "## Task: Exam Reconciliation (Phase C)\n",
@@ -173,14 +180,24 @@ class ExaminerAgent(Agent):
         )
 
         user = "\n".join(parts)
-        raw = await self.complete(user)
-        raw = await self._repair_reconciliation_format(user, raw)
+        raw = await self.complete(user, operation="examiner.reconcile")
+        raw = await self._repair_reconciliation_format(
+            user,
+            raw,
+            expected_covered_node_ids=expected_covered_node_ids,
+        )
         return parse_exam_reconciliation(raw)
 
-    async def _repair_exam_format(self, original_user: str, raw: str) -> str:
+    async def _repair_exam_format(
+        self,
+        original_user: str,
+        raw: str,
+        *,
+        expected_covered_node_ids: list[str] | None = None,
+    ) -> str:
         for _ in range(self._max_format_retries):
             try:
-                parse_exam_sections(raw)
+                _validated_exam_sections(raw, expected_covered_node_ids)
                 return raw
             except ParseError as exc:
                 raw = await self.complete(
@@ -189,11 +206,14 @@ class ExaminerAgent(Agent):
                     "response with exactly these five sections:\n"
                     "## [Next_Knowledge_Point]\n## [Covered_Node_IDs]\n## [Blind_Exam]\n"
                     "## [Answer_Key]\n## [Writer_Instructions]\n\n"
-                    f"Parser error: {exc}\n\nOriginal task:\n{original_user}\n\n"
-                    f"Previous unparseable output:\n{raw}\n"
+                    f"Parser error: {exc}\n\nOriginal task summary:\n"
+                    f"{bounded_text(original_user, max_chars=20_000, label='repair task')}\n\n"
+                    "Previous unparseable output:\n"
+                    f"{bounded_text(raw, max_chars=12_000, label='previous response')}\n",
+                    operation="examiner.compose_format_repair",
                 )
         try:
-            parse_exam_sections(raw)
+            _validated_exam_sections(raw, expected_covered_node_ids)
         except ParseError as exc:
             self._write_format_failure("exam assembly", original_user, raw, str(exc))
             raise
@@ -214,14 +234,24 @@ class ExaminerAgent(Agent):
                     "EXAM_DEFECT: EXAM_DEFECT when the original judgment included one. End with "
                     "exactly:\n"
                     "ROUTE: PASS\nEXAM_ID: <title>\nor:\nROUTE: FAIL_KNOWLEDGE_GAP\nEXAM_ID: <title>\n\n"
-                    f"Original task:\n{original_user}\n\nPrevious unparseable output:\n{raw}\n"
+                    "Original task summary:\n"
+                    f"{bounded_text(original_user, max_chars=20_000, label='repair task')}\n\n"
+                    "Previous unparseable output:\n"
+                    f"{bounded_text(raw, max_chars=12_000, label='previous response')}\n",
+                    operation="examiner.audit_format_repair",
                 )
         return raw
 
-    async def _repair_reconciliation_format(self, original_user: str, raw: str) -> str:
+    async def _repair_reconciliation_format(
+        self,
+        original_user: str,
+        raw: str,
+        *,
+        expected_covered_node_ids: list[str] | None = None,
+    ) -> str:
         for _ in range(self._max_format_retries):
             try:
-                parse_exam_reconciliation(raw)
+                _validated_reconciliation(raw, expected_covered_node_ids)
                 return raw
             except ParseError as exc:
                 raw = await self.complete(
@@ -230,9 +260,13 @@ class ExaminerAgent(Agent):
                     "ACTION: REVISE_EXAM with REASON and complete sections:\n"
                     "## [Next_Knowledge_Point]\n## [Covered_Node_IDs]\n## [Blind_Exam]\n"
                     "## [Answer_Key]\n## [Writer_Instructions]\n\n"
-                    f"Parser error: {exc}\n\nOriginal task:\n{original_user}\n\n"
-                    f"Previous unparseable output:\n{raw}\n"
+                    f"Parser error: {exc}\n\nOriginal task summary:\n"
+                    f"{bounded_text(original_user, max_chars=20_000, label='repair task')}\n\n"
+                    "Previous unparseable output:\n"
+                    f"{bounded_text(raw, max_chars=12_000, label='previous response')}\n",
+                    operation="examiner.reconcile_format_repair",
                 )
+        _validated_reconciliation(raw, expected_covered_node_ids)
         return raw
 
     def _write_format_failure(self, task: str, original_user: str, raw: str, error: str) -> None:
@@ -248,6 +282,31 @@ class ExaminerAgent(Agent):
         )
 
 
+def _validated_exam_sections(
+    raw: str, expected_covered_node_ids: list[str] | None
+) -> ExamSections:
+    sections = parse_exam_sections(raw)
+    if expected_covered_node_ids is not None and sections.covered_node_ids != expected_covered_node_ids:
+        raise ParseError(
+            "Covered_Node_IDs must exactly match the active node boundary: "
+            + ", ".join(expected_covered_node_ids)
+        )
+    return sections
+
+
+def _validated_reconciliation(
+    raw: str, expected_covered_node_ids: list[str] | None
+) -> ExamReconciliationResult:
+    result = parse_exam_reconciliation(raw)
+    if result.exam_sections is not None and expected_covered_node_ids is not None:
+        if result.exam_sections.covered_node_ids != expected_covered_node_ids:
+            raise ParseError(
+                "Covered_Node_IDs must exactly match the active node boundary: "
+                + ", ".join(expected_covered_node_ids)
+            )
+    return result
+
+
 def _format_retrieved(retrieved: list[dict]) -> str:
     parts = [
         "Retrieved RAG context:\n"
@@ -256,7 +315,7 @@ def _format_retrieved(retrieved: list[dict]) -> str:
         "no-duplicate boundary.\n"
         "- content_kind=ledger hits summarize finished outputs and possible duplicate overlap.\n"
     ]
-    for i, hit in enumerate(retrieved, start=1):
+    for i, hit in enumerate(bounded_rag_hits(retrieved), start=1):
         meta = hit.get("metadata") or {}
         kind = meta.get("content_kind") or "unknown"
         source = meta.get("path") or meta.get("filename") or meta.get("doc_id") or "unknown"

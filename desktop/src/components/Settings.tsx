@@ -51,6 +51,9 @@ const EMPTY_ADVANCED_FIELDS: AdvancedSettings = {
   max_format_retries: "2",
   llm_timeout_sec: "480",
   llm_provider_concurrency: "4",
+  llm_context_window: "128000",
+  llm_max_output_tokens: "8192",
+  llm_prompt_safety_tokens: "1024",
   pro_degradation_threshold: "3",
   pro_degradation_cooldown_sec: "600",
   source_ingest_concurrency: "4",
@@ -77,6 +80,7 @@ const EMPTY_FIELDS: SettingsSave = {
   llm_api_key: "",
   llm_base_url: "",
   llm_model: "",
+  llm_provider_profile: "auto",
   role_models: EMPTY_ROLE_MODELS,
   paddleocr_api_token: "",
   paddleocr_api_url: "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
@@ -162,6 +166,9 @@ const ADVANCED_GROUPS: AdvancedGroup[] = [
       { key: "max_format_retries", kind: "number", min: "0", max: "10" },
       { key: "llm_timeout_sec", kind: "number", min: "10", max: "3600", step: "1" },
       { key: "llm_provider_concurrency", kind: "number", min: "1", max: "32" },
+      { key: "llm_context_window", kind: "number", min: "1024", max: "2000000" },
+      { key: "llm_max_output_tokens", kind: "number", min: "1", max: "1000000" },
+      { key: "llm_prompt_safety_tokens", kind: "number", min: "0", max: "100000" },
       { key: "pro_degradation_threshold", kind: "number", min: "1", max: "20" },
       { key: "pro_degradation_cooldown_sec", kind: "number", min: "0", max: "86400" },
     ],
@@ -210,6 +217,9 @@ function advancedFieldsFromSettings(settings: SettingsData): AdvancedSettings {
     max_format_retries: String(settings.max_format_retries),
     llm_timeout_sec: String(settings.llm_timeout_sec),
     llm_provider_concurrency: String(settings.llm_provider_concurrency),
+    llm_context_window: String(settings.llm_context_window),
+    llm_max_output_tokens: String(settings.llm_max_output_tokens),
+    llm_prompt_safety_tokens: String(settings.llm_prompt_safety_tokens),
     pro_degradation_threshold: String(settings.pro_degradation_threshold),
     pro_degradation_cooldown_sec: String(settings.pro_degradation_cooldown_sec),
     source_ingest_concurrency: String(settings.source_ingest_concurrency),
@@ -238,6 +248,7 @@ function fieldsFromSettings(settings: SettingsData): SettingsSave {
     llm_api_key: settings.llm_api_key_configured ? MASKED_SECRET : "",
     llm_base_url: settings.llm_base_url,
     llm_model: settings.llm_model,
+    llm_provider_profile: settings.llm_provider_profile,
     role_models: settings.role_models,
     paddleocr_api_token: settings.paddleocr_api_token_configured ? MASKED_SECRET : "",
     paddleocr_api_url: settings.paddleocr_api_url,
@@ -427,6 +438,11 @@ export function Settings() {
                 label={t("settings.defaultModel")}
                 value={fields.llm_model}
                 onChange={setText("llm_model")}
+              />
+              <Field
+                label={t("settings.providerProfile")}
+                value={fields.llm_provider_profile}
+                onChange={setText("llm_provider_profile")}
               />
             </div>
 

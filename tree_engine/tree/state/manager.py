@@ -81,6 +81,7 @@ class StateManager:
     def reset_node_run(self, run: NodeRunRecord) -> NodeRunRecord:
         """Wipe a run back to a clean slate so it re-composes a fresh exam/draft."""
         run.status = "running"
+        run.outputs_completed = []
         run.exam_sections = None
         run.draft_path = None
         run.current_iteration = 0

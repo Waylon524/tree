@@ -212,9 +212,10 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         if execution is None:
             raise HTTPException(status_code=404, detail=f"No run state for node: {node_id}")
         execution.status = "in_progress"
+        execution.outputs_completed = []
         run = manager.find_run(state, execution.node_run_id)
         if run is not None:
-            manager.resume_node_run(run)
+            manager.reset_node_run(run)
         manager.save(state)
         start_engine(root)
         return {"node_id": node_id, "status": "regrowing"}
@@ -748,12 +749,26 @@ def _dag_output_paths(root: Path) -> dict[str, list[str]]:
 def _stage_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
     stages = model.get("stages") or {}
     labels = model.get("node_display_labels") or {}
+    phase = str(model.get("phase") or "").strip().lower()
+    terminal = phase in {"blocked", "failed", "error"}
+    failed_current: dict[str, str] = {}
+    progress = model.get("progress") or {}
+    for item in progress.get("errors") or []:
+        if not isinstance(item, dict):
+            continue
+        failed_stage = str(item.get("stage") or "")
+        if failed_stage:
+            failed_current[failed_stage] = str(item.get("resource") or item.get("message") or "")
     rows = []
     for key, label in STAGES:
         stage = stages.get(key) or {}
         done = int(stage.get("done") or 0)
         total = int(stage.get("total") or 0)
         status = str(stage.get("status") or "pending")
+        if terminal and key in failed_current:
+            status = "failed"
+        elif terminal and status in {"running", "in_progress", "active"}:
+            status = "partial" if done > 0 else "pending"
         if total:
             pct = max(0, min(100, round(done / total * 100)))
         else:
@@ -769,7 +784,9 @@ def _stage_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
                 "total": total,
                 "pct": pct,
                 "badge": _BADGES.get(status, "wait"),
-                "current": str(stage.get("message") or "") or ", ".join(active),
+                "current": failed_current.get(key, "")
+                or str(stage.get("message") or "")
+                or ", ".join(active),
             }
         )
     return rows

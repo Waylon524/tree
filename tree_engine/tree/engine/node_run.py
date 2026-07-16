@@ -99,6 +99,7 @@ class NodeRunner:
                 retrieved=self._source_evidence_hits(node, compose_query, collections, top_k=5)
                 + self.retriever.finished_hits(compose_query, allowed_paths=allowed_paths, top_k=8),
                 node_context=node_context,
+                expected_covered_node_ids=[node_id],
             )
             exam.covered_node_ids = [node_id]
             self._persist_run_state(
@@ -257,7 +258,8 @@ class NodeRunner:
                 prior_contents=[],
                 draft_text=draft_text,
                 previous_bottleneck=previous_bottleneck,
-                writer_instructions=exam.writer_instructions,
+                writer_instructions=exam.writer_instruction_spec or exam.writer_instructions,
+                covered_node_ids=[node_id],
                 retrieved=self._source_evidence_hits(
                     self._node_for_id(node_id), wq, collections, top_k=5
                 )
@@ -400,6 +402,7 @@ class NodeRunner:
             retrieved=self.retriever.finished_hits(query, allowed_paths=allowed_paths, top_k=6)
             + self.retriever.source_hits(query, collections=collections, node_ids=[node_id], top_k=5),
             node_context=node_context,
+            expected_covered_node_ids=[node_id],
         )
         repair_count += 1
         revised = result.exam_sections

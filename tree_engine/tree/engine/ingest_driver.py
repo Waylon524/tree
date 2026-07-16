@@ -737,11 +737,21 @@ def _complete_stage(engine: object, stage: str, message: str) -> None:
 
 
 def _fail_stage(engine: object, stage: str, message: str, *, active: str = "") -> None:
-    _set_stage(engine, stage, status="failed", message=message, active=active)
     progress = _progress(engine)
-    if progress is None or not hasattr(progress, "update"):
+    if progress is None:
         return
     try:
+        if hasattr(progress, "fail_stage"):
+            progress.fail_stage(
+                stage,
+                message,
+                code=f"{stage}_failed",
+                resource=active,
+                recoverable=True,
+                action=f"Fix the reported {stage} input or dependency, then resume the pipeline.",
+            )
+            return
+        _set_stage(engine, stage, status="failed", message=message, active=active)
         if hasattr(progress, "record_error"):
             progress.record_error(
                 stage=stage,
@@ -751,6 +761,7 @@ def _fail_stage(engine: object, stage: str, message: str, *, active: str = "") -
                 recoverable=True,
                 action=f"Fix the reported {stage} input or dependency, then resume the pipeline.",
             )
-        progress.update({"phase": "failed", "message": message})
+        if hasattr(progress, "update"):
+            progress.update({"phase": "failed", "message": message})
     except Exception:
         return

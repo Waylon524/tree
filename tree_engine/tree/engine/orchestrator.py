@@ -93,6 +93,19 @@ class TreeEngine:
     async def run(self) -> None:
         """Run until all DAG nodes are covered, or until the planner is blocked."""
         self.progress.begin_run()
+        try:
+            await self._run_foreground()
+        except asyncio.CancelledError:
+            self.progress.stop()
+            raise
+        except Exception as exc:
+            self.progress.fail_active_stage(
+                f"{type(exc).__name__}: {exc}",
+                code="engine_run_failed",
+            )
+            raise
+
+    async def _run_foreground(self) -> None:
         _clear_stale_run_logs(self.root)
         await self.prepare_sources()
         reconcile_ledger_generation(self.root)

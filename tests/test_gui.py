@@ -10,7 +10,14 @@ from fastapi.testclient import TestClient
 from tree.io import paths
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
-from tree.state.models import NodeExecutionRecord, NodeRunRecord, PipelineState, WriterResult
+from tree.state.models import (
+    CoverageSnapshot,
+    ExamSections,
+    NodeExecutionRecord,
+    NodeRunRecord,
+    PipelineState,
+    WriterResult,
+)
 
 TOKEN = "test-token"
 
@@ -43,13 +50,41 @@ def test_index_requires_token(workspace):
 def test_zero_total_complete_stage_does_not_render_fake_100_percent():
     from tree.gui.server import _stage_rows
 
-    rows = _stage_rows(
-        {"stages": {"clean": {"status": "complete", "done": 0, "total": 0}}}
-    )
+    rows = _stage_rows({"stages": {"clean": {"status": "complete", "done": 0, "total": 0}}})
 
     clean = next(row for row in rows if row["key"] == "clean")
     assert clean["pct"] == 0
     assert clean["done"] == clean["total"] == 0
+
+
+def test_failed_run_rows_do_not_render_stale_running_stages():
+    from tree.gui.server import _stage_rows
+
+    rows = _stage_rows(
+        {
+            "phase": "failed",
+            "progress": {
+                "errors": [
+                    {
+                        "stage": "ocr",
+                        "resource": "default/chapter-2.pdf",
+                        "message": "PDF stream is invalid",
+                    }
+                ]
+            },
+            "stages": {
+                "ocr": {"status": "running", "done": 0, "total": 3, "message": "pending"},
+                "clean": {"status": "running", "done": 1, "total": 3},
+                "cut": {"status": "running", "done": 0, "total": 3},
+            },
+        }
+    )
+    by_key = {row["key"]: row for row in rows}
+
+    assert by_key["ocr"]["badge"] == "failed"
+    assert by_key["ocr"]["current"] == "default/chapter-2.pdf"
+    assert by_key["clean"]["badge"] == "partial"
+    assert by_key["cut"]["badge"] == "wait"
 
 
 def test_index_with_token_sets_cookie(workspace):
@@ -479,6 +514,73 @@ def test_run_requires_token(workspace):
     assert client.post("/api/run").status_code == 403
 
 
+def test_regrow_resets_generation_state_instead_of_resuming_it(workspace, monkeypatch):
+    manager = StateManager(paths.pipeline_state_path(workspace))
+    snapshot = CoverageSnapshot(
+        started_at="2026-07-16T00:00:00Z",
+        covered_node_ids=["n1"],
+        snapshot_visible_ancestor_node_ids=["root"],
+    )
+    manager.save(
+        PipelineState(
+            node_executions=[
+                NodeExecutionRecord(
+                    node_id="n1",
+                    node_run_id="n1::run",
+                    status="failed",
+                    outputs_completed=["001.old.md"],
+                )
+            ],
+            node_runs=[
+                NodeRunRecord(
+                    node_id="n1",
+                    run_id="n1::run",
+                    status="failed",
+                    coverage_snapshot=snapshot,
+                    outputs_completed=["001.old.md"],
+                    current_iteration=3,
+                    exam_sections=ExamSections(
+                        knowledge_point="old exam",
+                        covered_node_ids=["n1"],
+                        blind_exam="question",
+                        answer_key="answer",
+                        writer_instructions="instructions",
+                    ),
+                    draft_path=workspace / "runtime" / "old.md",
+                    previous_bottleneck="old gap",
+                    bottleneck_repeat_count=2,
+                    bottleneck_history=["old gap", "old gap"],
+                    last_error="writer failed",
+                    exam_repair_count=2,
+                )
+            ],
+        )
+    )
+    starts = []
+    monkeypatch.setattr("tree.gui.server.start_engine", lambda root: starts.append(root))
+
+    response = _authed_client(workspace).post("/api/nodes/n1/regrow")
+
+    assert response.status_code == 200
+    state = manager.load()
+    execution = state.node_executions[0]
+    run = state.node_runs[0]
+    assert execution.status == "in_progress"
+    assert execution.outputs_completed == []
+    assert run.status == "running"
+    assert run.outputs_completed == []
+    assert run.exam_sections is None
+    assert run.draft_path is None
+    assert run.current_iteration == 0
+    assert run.previous_bottleneck is None
+    assert run.bottleneck_repeat_count == 0
+    assert run.bottleneck_history == []
+    assert run.last_error is None
+    assert run.exam_repair_count == 0
+    assert run.coverage_snapshot == snapshot
+    assert starts == [workspace]
+
+
 def test_dag_svg_404_then_served(workspace):
     client = _authed_client(workspace)
     assert client.get("/dag.svg").status_code == 404
@@ -628,6 +730,10 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["llm_api_key_configured"] is False
     assert data["llm_base_url"] == "https://api.deepseek.com"
     assert data["llm_model"] == "deepseek-v4-flash"
+    assert data["llm_provider_profile"] == "auto"
+    assert data["llm_context_window"] == 128_000
+    assert data["llm_max_output_tokens"] == 8_192
+    assert data["llm_prompt_safety_tokens"] == 1_024
     assert data["role_models"] == {
         "examiner": "deepseek-v4-flash",
         "student": "deepseek-v4-flash",
@@ -663,6 +769,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
             "llm_api_key": "sk-new",
             "llm_base_url": "https://llm.test",
             "llm_model": "default-model",
+            "llm_provider_profile": "generic",
             "role_models": {
                 "examiner": "exam-model",
                 "student": "student-model",
@@ -680,6 +787,9 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
             "max_retries": "4",
             "llm_timeout_sec": "600",
             "llm_provider_concurrency": "6",
+            "llm_context_window": "64000",
+            "llm_max_output_tokens": "4096",
+            "llm_prompt_safety_tokens": "512",
             "archivist_chunk_concurrency": "3",
             "source_ocr_upload_interval_sec": "2.5",
             "dagger_embed_cluster_enabled": False,
@@ -694,6 +804,10 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert data["role_models"]["dagger"] == "dagger-model"
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
+    assert data["llm_provider_profile"] == "generic"
+    assert data["llm_context_window"] == 64_000
+    assert data["llm_max_output_tokens"] == 4_096
+    assert data["llm_prompt_safety_tokens"] == 512
     assert data["max_iterations"] == 7
     assert data["dagger_embed_cluster_enabled"] is False
     assert data["dagger_cluster_similarity_threshold"] == 0.72
@@ -710,6 +824,10 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert "LLM_API_KEY=sk-new" in written
     assert "LLM_BASE_URL=https://llm.test" in written
     assert "LLM_MODEL=default-model" in written
+    assert "LLM_PROVIDER_PROFILE=generic" in written
+    assert "LLM_CONTEXT_WINDOW=64000" in written
+    assert "LLM_MAX_OUTPUT_TOKENS=4096" in written
+    assert "LLM_PROMPT_SAFETY_TOKENS=512" in written
     assert "EXAMINER_MODEL=exam-model" in written
     assert "STUDENT_MODEL=student-model" in written
     assert "WRITER_MODEL=writer-model" in written

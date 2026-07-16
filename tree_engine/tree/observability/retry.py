@@ -18,9 +18,30 @@ class MalformedLLMResponseError(Exception):
     """Raised when an LLM response cannot be parsed into the expected shape."""
 
 
+class LLMOutputTruncatedError(MalformedLLMResponseError):
+    """Raised when the provider stopped because the output token limit was reached."""
+
+
+class LLMContentFilteredError(MalformedLLMResponseError):
+    """Raised when the provider filtered the response instead of completing it."""
+
+
+class LLMRefusalError(MalformedLLMResponseError):
+    """Raised when the model explicitly refused the request."""
+
+
+class LLMToolCallError(MalformedLLMResponseError):
+    """Raised when a text-only TREE operation unexpectedly requests a tool call."""
+
+
 def is_retryable_error(exc: Exception) -> bool:
     """Return whether retrying ``exc`` can plausibly succeed without changing input."""
-    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+    if isinstance(
+        exc,
+        (LLMOutputTruncatedError, LLMContentFilteredError, LLMRefusalError, LLMToolCallError),
+    ):
+        return False
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, MalformedLLMResponseError)):
         return True
 
     status_code = getattr(exc, "status_code", None)

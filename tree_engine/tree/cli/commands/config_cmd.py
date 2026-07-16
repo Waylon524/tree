@@ -13,6 +13,9 @@ from rich import print as rprint
 from tree.cli import theme
 from tree.config import (
     DEFAULT_LLAMA_SERVER_CTX,
+    DEFAULT_LLM_CONTEXT_WINDOW,
+    DEFAULT_LLM_MAX_OUTPUT_TOKENS,
+    DEFAULT_LLM_PROMPT_SAFETY_TOKENS,
     DEFAULT_SOURCE_MTU_CHUNK_TOKENS,
     LLAMA_SERVER_CTX_MAX,
     LLAMA_SERVER_CTX_MIN,
@@ -26,6 +29,10 @@ from tree.io import paths
 _DEFAULT_ENV = {
     "LLM_BASE_URL": "https://api.deepseek.com",
     "LLM_MODEL": "deepseek-v4-flash",
+    "LLM_PROVIDER_PROFILE": "auto",
+    "LLM_CONTEXT_WINDOW": str(DEFAULT_LLM_CONTEXT_WINDOW),
+    "LLM_MAX_OUTPUT_TOKENS": str(DEFAULT_LLM_MAX_OUTPUT_TOKENS),
+    "LLM_PROMPT_SAFETY_TOKENS": str(DEFAULT_LLM_PROMPT_SAFETY_TOKENS),
     "PADDLEOCR_API_URL": "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs",
     "PADDLEOCR_MODEL": "PaddleOCR-VL-1.6",
     "LLAMA_SERVER_CTX": str(DEFAULT_LLAMA_SERVER_CTX),
@@ -63,6 +70,10 @@ _WRITE_ORDER = (
     "LLM_API_KEY",
     "LLM_BASE_URL",
     "LLM_MODEL",
+    "LLM_PROVIDER_PROFILE",
+    "LLM_CONTEXT_WINDOW",
+    "LLM_MAX_OUTPUT_TOKENS",
+    "LLM_PROMPT_SAFETY_TOKENS",
     "EXAMINER_MODEL",
     "STUDENT_MODEL",
     "WRITER_MODEL",
@@ -108,6 +119,9 @@ _INT_SETTINGS = {
     "max_examiner_span_nodes": ("MAX_EXAMINER_SPAN_NODES", 1, 20),
     "max_retries": ("MAX_RETRIES", 0, 20),
     "llm_provider_concurrency": ("LLM_PROVIDER_CONCURRENCY", 1, 32),
+    "llm_context_window": ("LLM_CONTEXT_WINDOW", 1_024, 2_000_000),
+    "llm_max_output_tokens": ("LLM_MAX_OUTPUT_TOKENS", 1, 1_000_000),
+    "llm_prompt_safety_tokens": ("LLM_PROMPT_SAFETY_TOKENS", 0, 100_000),
     "max_format_retries": ("MAX_FORMAT_RETRIES", 0, 10),
     "pro_degradation_threshold": ("PRO_DEGRADATION_THRESHOLD", 1, 20),
     "pro_degradation_cooldown_sec": ("PRO_DEGRADATION_COOLDOWN_SEC", 0, 86_400),
@@ -178,6 +192,7 @@ def read_settings_config(root: Path, *, env_path: Path | None = None) -> dict[st
         "llm_api_key_configured": bool(existing.get("LLM_API_KEY")),
         "llm_base_url": values.get("LLM_BASE_URL", _DEFAULT_ENV["LLM_BASE_URL"]),
         "llm_model": default_model,
+        "llm_provider_profile": values.get("LLM_PROVIDER_PROFILE", "auto"),
         "role_models": role_models,
         "paddleocr_api_token_configured": bool(existing.get("PADDLEOCR_API_TOKEN")),
         "paddleocr_api_url": values.get("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"]),
@@ -214,6 +229,7 @@ def write_settings_config(
         "llm_api_key": "LLM_API_KEY",
         "llm_base_url": "LLM_BASE_URL",
         "llm_model": "LLM_MODEL",
+        "llm_provider_profile": "LLM_PROVIDER_PROFILE",
         "paddleocr_api_token": "PADDLEOCR_API_TOKEN",
         "paddleocr_api_url": "PADDLEOCR_API_URL",
         "paddleocr_model": "PADDLEOCR_MODEL",
@@ -222,6 +238,10 @@ def write_settings_config(
         value = _settings_str(settings.get(field))
         if value:
             existing[key] = value
+
+    profile = existing.get("LLM_PROVIDER_PROFILE", "auto").lower()
+    if profile not in {"auto", "deepseek", "openai", "generic"}:
+        raise ValueError("llm_provider_profile must be auto, deepseek, openai, or generic.")
 
     role_models = settings.get("role_models")
     if isinstance(role_models, dict):
@@ -276,6 +296,21 @@ def write_settings_config(
         value = _settings_bool(settings.get(field), field=field)
         if value is not None:
             existing[key] = "true" if value else "false"
+
+    context_window = _config_int(
+        existing, "LLM_CONTEXT_WINDOW", DEFAULT_LLM_CONTEXT_WINDOW
+    )
+    max_output_tokens = _config_int(
+        existing, "LLM_MAX_OUTPUT_TOKENS", DEFAULT_LLM_MAX_OUTPUT_TOKENS
+    )
+    safety_tokens = _config_int(
+        existing, "LLM_PROMPT_SAFETY_TOKENS", DEFAULT_LLM_PROMPT_SAFETY_TOKENS
+    )
+    if max_output_tokens + safety_tokens >= context_window:
+        raise ValueError(
+            "llm_max_output_tokens + llm_prompt_safety_tokens must be smaller than "
+            "llm_context_window."
+        )
 
     if existing.get("PADDLEOCR_API_TOKEN"):
         existing.setdefault("PADDLEOCR_API_URL", _DEFAULT_ENV["PADDLEOCR_API_URL"])

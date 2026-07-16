@@ -11,6 +11,7 @@ from tree.state.models import (
     ExamReconciliationResult,
     ExamSections,
     Route,
+    WriterInstructions,
 )
 
 
@@ -47,23 +48,25 @@ def extract_optional_section(text: str, header: str) -> str:
 
 
 def parse_route(text: str) -> Route:
-    match = _ROUTE_PATTERN.search(text)
-    if not match:
-        raise ParseError("No ROUTE: found in examiner output")
+    match = _unique_match(_ROUTE_PATTERN, text, "ROUTE")
     return Route(match.group(1))
 
 
 def parse_exam_id(text: str) -> str:
-    match = _EXAM_ID_PATTERN.search(text)
-    if not match:
-        raise ParseError("No EXAM_ID: found in examiner output")
-    return match.group(1).strip()
+    match = _unique_match(_EXAM_ID_PATTERN, text, "EXAM_ID")
+    value = match.group(1).strip()
+    if not value:
+        raise ParseError("EXAM_ID must not be empty")
+    return value
 
 
 def parse_audit_defect_kind(text: str) -> AuditExamDefectKind | None:
-    match = _AUDIT_DEFECT_PATTERN.search(text)
-    if not match:
+    matches = list(_AUDIT_DEFECT_PATTERN.finditer(text))
+    if not matches:
         return None
+    if len(matches) != 1:
+        raise ParseError(f"EXAM_DEFECT must appear at most once; found {len(matches)}")
+    match = matches[0]
     value = match.group(1).strip()
     try:
         return AuditExamDefectKind(value)
@@ -73,25 +76,35 @@ def parse_audit_defect_kind(text: str) -> AuditExamDefectKind | None:
 
 def parse_exam_sections(text: str) -> ExamSections:
     """Parse examiner Phase A output into structured sections."""
+    covered_node_ids = _split_required_list(
+        _required_section(text, "Covered_Node_IDs"), "Covered_Node_IDs"
+    )
+    writer_instructions = _required_section(text, "Writer_Instructions")
+    try:
+        writer_instruction_spec = WriterInstructions.from_text(
+            writer_instructions,
+            expected_covered_node_ids=covered_node_ids,
+        )
+    except ValueError as exc:
+        raise ParseError(f"Writer_Instructions schema invalid: {exc}") from exc
     return ExamSections(
-        knowledge_point=extract_section(text, "Next_Knowledge_Point"),
-        covered_node_ids=_split_required_list(
-            extract_section(text, "Covered_Node_IDs"), "Covered_Node_IDs"
-        ),
-        blind_exam=extract_section(text, "Blind_Exam"),
-        answer_key=extract_section(text, "Answer_Key"),
-        writer_instructions=extract_section(text, "Writer_Instructions"),
+        knowledge_point=_required_section(text, "Next_Knowledge_Point"),
+        covered_node_ids=covered_node_ids,
+        blind_exam=_required_section(text, "Blind_Exam"),
+        answer_key=_required_section(text, "Answer_Key"),
+        writer_instructions=writer_instructions,
+        writer_instruction_spec=writer_instruction_spec,
     )
 
 
 def parse_exam_reconciliation(text: str) -> ExamReconciliationResult:
     """Parse examiner Phase C output into a keep/revise decision."""
-    match = _RECONCILIATION_ACTION_PATTERN.search(text)
-    if not match:
-        raise ParseError("No ACTION: KEEP_FAIL or ACTION: REVISE_EXAM found")
+    match = _unique_match(_RECONCILIATION_ACTION_PATTERN, text, "ACTION")
     action = ExamReconciliationAction(match.group(1))
-    reason_match = _REASON_PATTERN.search(text)
-    reason = reason_match.group(1).strip() if reason_match else ""
+    reason_match = _unique_match(_REASON_PATTERN, text, "REASON")
+    reason = reason_match.group(1).strip()
+    if not reason:
+        raise ParseError("REASON must not be empty")
     exam_sections = parse_exam_sections(text) if action is ExamReconciliationAction.REVISE_EXAM else None
     return ExamReconciliationResult(action=action, reason=reason, exam_sections=exam_sections)
 
@@ -108,16 +121,20 @@ def extract_bottleneck_report(text: str) -> str:
 
 
 def extract_json_object(raw: str) -> dict:
-    """Best-effort extraction of the first top-level JSON object in `raw`."""
+    """Decode exactly one top-level JSON object, tolerating only a full code fence."""
     text = raw.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("No JSON object found in response")
-    return json.loads(text[start : end + 1])
+    try:
+        value, end = json.JSONDecoder().raw_decode(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"No valid JSON object found in response: {exc.msg}") from exc
+    if text[end:].strip():
+        raise ValueError("Unexpected content after the JSON object")
+    if not isinstance(value, dict):
+        raise ValueError("Agent response must be one top-level JSON object")
+    return value
 
 
 def _split_optional_list(value: str) -> list[str]:
@@ -133,3 +150,19 @@ def _split_required_list(value: str, header: str) -> list[str]:
     if not items:
         raise ParseError(f"Section ## [{header}] must contain at least one item")
     return items
+
+
+def _required_section(text: str, header: str) -> str:
+    value = extract_section(text, header)
+    if not value:
+        raise ParseError(f"Section ## [{header}] must not be empty")
+    return value
+
+
+def _unique_match(pattern: re.Pattern[str], text: str, label: str) -> re.Match[str]:
+    matches = list(pattern.finditer(text))
+    if not matches:
+        raise ParseError(f"No {label}: found in examiner output")
+    if len(matches) != 1:
+        raise ParseError(f"{label} must appear exactly once; found {len(matches)}")
+    return matches[0]

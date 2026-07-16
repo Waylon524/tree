@@ -91,6 +91,9 @@ For each node, choose which previously defined internal concepts are genuinely r
 learning that node. Choose from the provided define dictionary only.
 
 ## Required Defines Rules
+- Return `internal_prerequisite_decision` as `selected` or `none` for every target node.
+- `selected` requires at least one `required_defines` item. `none` requires an empty
+  `required_defines` list and a concrete reason why no material-internal prerequisite is needed.
 - Return `required_defines` using exact strings from the provided define dictionary.
 - Each non-foundational node must choose at least one `required_defines` item.
 - A truly foundational node may return an empty list, but it must include a clear `reason`.
@@ -106,8 +109,11 @@ learning that node. Choose from the provided define dictionary only.
   `external_prerequisites`; these do not create graph links.
 
 ## Cycle Repair
-If the request is a repair request for a cycle, return a corrected linear learning order through
-the involved nodes by changing their `required_defines` so the resulting prerequisite graph is acyclic.
+If the request is a repair request for a cycle, remove the cycle with the smallest necessary change
+to `required_defines`. You may remove only prerequisite defines that create an edge listed in
+`cycle_edges`; do not add new prerequisite defines or change unrelated prerequisite decisions.
+Preserve all nodes and prerequisite defines outside the reported cycle, including legitimate roots
+and parallel branches. The result must be acyclic, but it does not need to be a linear or total order.
 
 ## Output
 Return strict JSON only. No prose. No markdown fence.
@@ -115,6 +121,7 @@ Return strict JSON only. No prose. No markdown fence.
   "node_prerequisites": [
     {
       "node_id": "kn:abc",
+      "internal_prerequisite_decision": "selected",
       "required_defines": ["相干光", "光程差"],
       "reason": "双缝干涉 requires coherent sources and optical path difference.",
       "external_prerequisites": ["basic trigonometry"]

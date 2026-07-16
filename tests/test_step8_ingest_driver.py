@@ -107,15 +107,19 @@ class _EchoDagger:
         }
 
     async def build_prerequisites(self, payload, *, timeout_sec=None):
-        nodes = list(payload.get("nodes") or [])
+        all_nodes = list(payload.get("nodes") or [])
+        nodes = [payload["target_node"]]
         return {
             "node_prerequisites": [
                 {
                     "node_id": node["node_id"],
-                    "required_defines": [] if index == 0 else [nodes[index - 1]["defines"][0]],
-                    "reason": "first node" if index == 0 else "continues the previous node",
+                    "internal_prerequisite_decision": "none" if node == all_nodes[0] else "selected",
+                    "required_defines": []
+                    if node == all_nodes[0]
+                    else [all_nodes[all_nodes.index(node) - 1]["defines"][0]],
+                    "reason": "first node" if node == all_nodes[0] else "continues the previous node",
                 }
-                for index, node in enumerate(nodes)
+                for node in nodes
             ]
         }
 

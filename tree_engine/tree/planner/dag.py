@@ -13,12 +13,19 @@ import logging
 import inspect
 from typing import Any
 
+from tree.agents.schemas import (
+    DaggerNodesResponse,
+    DaggerPrerequisitesResponse,
+    validate_agent_payload,
+)
 from tree.planner.cluster import (
     build_candidate_clusters,
     cluster_refinement_payload,
     cluster_to_raw_node,
 )
 from tree.planner.ids import normalize_concepts, normalize_text_key, prefixed_id
+from tree.model.budget import PromptBudgetExceededError
+from tree.observability.retry import LLMOutputTruncatedError
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +85,14 @@ async def build_dag(
         )
     else:
         logger.info("Dagger batched node build: %d MTUs > %d per call", len(mtus), max_nodes)
-        nodes_raw = await _build_nodes_batched(agent, mtus, timeout=timeout, repair=repair, progress=progress)
+        nodes_raw = await _build_nodes_batched(
+            agent,
+            mtus,
+            timeout=timeout,
+            repair=repair,
+            progress=progress,
+            max_nodes=max_nodes,
+        )
 
     nodes, diagnostics = await _canonicalize_nodes_with_define_repair(
         agent, mtus, nodes_raw, timeout=timeout, repair=repair
@@ -100,6 +114,7 @@ async def build_dag(
         repair=repair,
         progress=progress,
         concurrency=prerequisite_concurrency,
+        diagnostics=diagnostics,
     )
     nodes, edges, diagnostics = await _build_edges_with_cycle_repair(
         agent, nodes, prerequisites, diagnostics=diagnostics, timeout=timeout, repair=repair
@@ -220,6 +235,8 @@ async def _build_cluster_nodes_with_repair(
 def _validate_cluster_nodes(
     nodes: list[dict[str, Any]], allowed: set[str], allowed_defines_by_mtu: dict[str, set[str]]
 ) -> None:
+    if not nodes:
+        raise ValueError("cluster node response must not be empty")
     _validate_node_replacements(
         nodes,
         allowed,
@@ -282,29 +299,56 @@ async def _build_nodes_with_repair(
     agent: Any, payload: list[dict], *, timeout: float, repair: int
 ) -> list[dict[str, Any]]:
     feedback = ""
+    last_error: Exception | None = None
     for attempt in range(repair + 1):
         try:
             extra = [{"_note": feedback}] if feedback else []
             raw = await _agent_build_nodes(agent, payload + extra, timeout_sec=timeout)
-            return list(raw.get("nodes") or [])
+            nodes = list(raw.get("nodes") or [])
+            if not nodes:
+                raise ValueError("Dagger node response must not be empty")
+            return nodes
+        except (PromptBudgetExceededError, LLMOutputTruncatedError) as exc:
+            if len(payload) <= 1:
+                raise
+            midpoint = len(payload) // 2
+            logger.info(
+                "Dagger batch split after %s: %d inputs -> %d + %d",
+                type(exc).__name__,
+                len(payload),
+                midpoint,
+                len(payload) - midpoint,
+            )
+            left = await _build_nodes_with_repair(
+                agent, payload[:midpoint], timeout=timeout, repair=repair
+            )
+            right = await _build_nodes_with_repair(
+                agent, payload[midpoint:], timeout=timeout, repair=repair
+            )
+            return left + right
         except (ValueError, KeyError) as exc:
+            last_error = exc
             logger.warning("Dagger node build invalid (attempt %d): %s", attempt + 1, exc)
             feedback = f"Previous output was invalid JSON ({exc}); re-emit the strict nodes schema."
-    return []
+    raise ValueError(f"Dagger node build failed after {repair + 1} attempt(s): {last_error}")
 
 
 async def _agent_build_nodes(agent: Any, payload: list[dict], *, timeout_sec: float) -> dict:
     if hasattr(agent, "build_nodes"):
-        return await agent.build_nodes(payload, timeout_sec=timeout_sec)
-    raw = await agent.build(payload, timeout_sec=timeout_sec)
-    for node in raw.get("nodes") or []:
-        if "defines" not in node:
-            node["defines"] = node.get("keywords") or []
-    return {"nodes": raw.get("nodes") or []}
+        raw = await agent.build_nodes(payload, timeout_sec=timeout_sec)
+    else:
+        raw = await agent.build(payload, timeout_sec=timeout_sec)
+    return validate_agent_payload(raw, DaggerNodesResponse).model_dump(exclude_none=True)
 
 
 async def _build_nodes_batched(
-    agent: Any, mtus: list[Any], *, timeout: float, repair: int, progress: Any | None
+    agent: Any,
+    mtus: list[Any],
+    *,
+    timeout: float,
+    repair: int,
+    progress: Any | None,
+    max_nodes: int,
 ) -> list[dict[str, Any]]:
     by_collection: dict[str, list[Any]] = {}
     for mtu in mtus:
@@ -319,12 +363,15 @@ async def _build_nodes_batched(
         status="running",
         message="Building nodes by collection",
     )
+    batch_limit = max(1, int(max_nodes))
     for group in by_collection.values():
         _set_progress_stage(progress, "cluster", status="running", active=group[0].collection)
-        raw = await _build_nodes_with_repair(
-            agent, [_meta(m) for m in group], timeout=timeout, repair=repair
-        )
-        nodes_raw.extend(raw)
+        for start in range(0, len(group), batch_limit):
+            batch = group[start : start + batch_limit]
+            raw = await _build_nodes_with_repair(
+                agent, [_meta(m) for m in batch], timeout=timeout, repair=repair
+            )
+            nodes_raw.extend(raw)
         _advance_progress_stage(progress, "cluster", message=f"Built {group[0].collection}")
     return _merge_raw_nodes_by_title(nodes_raw)
 
@@ -388,8 +435,10 @@ async def _canonicalize_nodes_with_define_repair(
 
 async def _agent_repair_defines(agent: Any, payload: dict[str, Any], *, timeout_sec: float) -> dict:
     if hasattr(agent, "repair_defines"):
-        return await agent.repair_defines(payload, timeout_sec=timeout_sec)
-    return {"nodes": payload.get("nodes") or []}
+        raw = await agent.repair_defines(payload, timeout_sec=timeout_sec)
+    else:
+        raw = {"nodes": payload.get("nodes") or []}
+    return validate_agent_payload(raw, DaggerNodesResponse).model_dump(exclude_none=True)
 
 
 async def _repair_define_conflict_pair(
@@ -675,6 +724,7 @@ async def _build_prerequisites_with_repair(
     repair: int,
     progress: Any | None = None,
     concurrency: int = 5,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     define_dictionary = _define_dictionary(nodes)
     prereqs: list[dict[str, Any] | None] = [None] * len(nodes)
@@ -714,8 +764,93 @@ async def _build_prerequisites_with_repair(
 
     await asyncio.gather(*(build_one(index, node) for index, node in enumerate(nodes)))
     completed = [item for item in prereqs if item is not None]
-    _validate_prerequisites(completed, nodes, define_dictionary)
+    _validate_prerequisites(completed, nodes, define_dictionary, require_all_nodes=True)
+    completed = await _review_suspicious_root_decisions(
+        agent,
+        nodes,
+        completed,
+        node_meta,
+        define_dictionary,
+        timeout=timeout,
+        repair=repair,
+        concurrency=concurrency,
+        diagnostics=diagnostics,
+    )
     return completed
+
+
+async def _review_suspicious_root_decisions(
+    agent: Any,
+    nodes: list[dict[str, Any]],
+    prerequisites: list[dict[str, Any]],
+    node_meta: list[dict[str, Any]],
+    define_dictionary: dict[str, Any],
+    *,
+    timeout: float,
+    repair: int,
+    concurrency: int,
+    diagnostics: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    root_indices = [
+        index
+        for index, item in enumerate(prerequisites)
+        if not normalize_concepts(item.get("required_defines") or [])
+    ]
+    node_count = len(nodes)
+    root_ratio = len(root_indices) / node_count if node_count else 0.0
+    suspicious = node_count > 1 and (
+        len(root_indices) == node_count or (node_count >= 5 and root_ratio >= 0.80)
+    )
+    if not suspicious:
+        return prerequisites
+
+    logger.warning(
+        "Dagger high-root-ratio review: %d/%d nodes declared no internal prerequisite",
+        len(root_indices),
+        node_count,
+    )
+    reviewed = list(prerequisites)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def review(index: int) -> None:
+        node = nodes[index]
+        instruction = (
+            f"Global graph review: {len(root_indices)}/{node_count} nodes were declared internal "
+            "roots. Re-evaluate this target against the complete define dictionary. Keep "
+            "decision=none only when it is genuinely independent, and explain why; do not add "
+            "an edge merely to reduce the root count."
+        )
+        async with semaphore:
+            reviewed[index] = await _build_one_prerequisite_with_repair(
+                agent,
+                node,
+                node_meta,
+                nodes,
+                define_dictionary,
+                timeout=timeout,
+                repair=repair,
+                review_instruction=instruction,
+            )
+
+    await asyncio.gather(*(review(index) for index in root_indices))
+    _validate_prerequisites(reviewed, nodes, define_dictionary, require_all_nodes=True)
+    roots_after = sum(
+        1
+        for item in reviewed
+        if not normalize_concepts(item.get("required_defines") or [])
+    )
+    if diagnostics is not None:
+        diagnostics.append(
+            {
+                "reason_code": "high_root_ratio_reviewed",
+                "severity": "info",
+                "roots_before": len(root_indices),
+                "roots_after": roots_after,
+                "node_count": node_count,
+                "message": "Re-reviewed explicit root decisions against the global define dictionary.",
+            }
+        )
+    return reviewed
 
 
 def _node_sequence_labels(nodes: list[dict[str, Any]]) -> dict[str, str]:
@@ -732,6 +867,7 @@ async def _build_one_prerequisite_with_repair(
     *,
     timeout: float,
     repair: int,
+    review_instruction: str = "",
 ) -> dict[str, Any]:
     feedback = ""
     last_error: Exception | None = None
@@ -744,16 +880,19 @@ async def _build_one_prerequisite_with_repair(
                 "target_node": target,
                 "instructions": (
                     "Return exactly one node_prerequisites item for target_node. "
+                    + review_instruction
+                    + " "
                     + feedback
                 ).strip(),
             }
             raw = await _agent_build_prerequisites(agent, payload, timeout_sec=timeout)
             items = list(raw.get("node_prerequisites") or [])
-            prereq = (
-                _empty_prerequisite(node)
-                if not items
-                else _target_prerequisite(items, node, nodes)
-            )
+            if len(items) != 1:
+                raise ValueError(
+                    f"expected exactly one prerequisite block for {node['node_id']}; "
+                    f"got {len(items)}"
+                )
+            prereq = _target_prerequisite(items, node, nodes)
             _validate_prerequisites([prereq], nodes, define_dictionary)
             return prereq
         except (ValueError, KeyError) as exc:
@@ -774,15 +913,6 @@ async def _build_one_prerequisite_with_repair(
     )
 
 
-def _empty_prerequisite(node: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "node_id": node["node_id"],
-        "required_defines": [],
-        "external_prerequisites": [],
-        "reason": "No prerequisite defines selected.",
-    }
-
-
 def _target_prerequisite(
     prereqs: list[dict[str, Any]],
     node: dict[str, Any],
@@ -799,23 +929,43 @@ def _target_prerequisite(
 
 async def _agent_build_prerequisites(agent: Any, payload: dict[str, Any], *, timeout_sec: float) -> dict:
     if hasattr(agent, "build_prerequisites"):
-        return await agent.build_prerequisites(payload, timeout_sec=timeout_sec)
-    return {"node_prerequisites": []}
+        raw = await agent.build_prerequisites(payload, timeout_sec=timeout_sec)
+    else:
+        raise ValueError("Dagger agent does not implement build_prerequisites")
+    return validate_agent_payload(raw, DaggerPrerequisitesResponse).model_dump(exclude_none=True)
 
 
 def _validate_prerequisites(
     prereqs: list[dict[str, Any]],
     nodes: list[dict[str, Any]],
     define_dictionary: dict[str, Any],
+    *,
+    require_all_nodes: bool = False,
 ) -> None:
     node_ids = {n["node_id"] for n in nodes}
     title_to_id = {normalize_text_key(n["title"]): n["node_id"] for n in nodes}
     define_keys = {normalize_text_key(k) for k in define_dictionary}
+    define_sources = {
+        normalize_text_key(key): set(value.get("defined_by") or [value.get("node_id")])
+        for key, value in define_dictionary.items()
+        if isinstance(value, dict)
+    }
+    seen_node_ids: set[str] = set()
     for item in prereqs:
         node_id = _prereq_node_id(item, title_to_id)
         if node_id not in node_ids:
             raise ValueError(f"unknown prerequisite node: {item.get('node_id') or item.get('node_title')}")
+        if node_id in seen_node_ids:
+            raise ValueError(f"duplicate prerequisite block for node: {node_id}")
+        seen_node_ids.add(node_id)
         required = normalize_concepts(item.get("required_defines") or [])
+        decision = str(item.get("internal_prerequisite_decision") or "")
+        if decision == "selected" and not required:
+            raise ValueError(f"{node_id} selected prerequisites but required_defines is empty")
+        if decision == "none" and required:
+            raise ValueError(f"{node_id} declared no prerequisites but returned required_defines")
+        if decision not in {"selected", "none"}:
+            raise ValueError(f"{node_id} missing internal_prerequisite_decision")
         if len(required) > _MAX_REQUIRED_DEFINES:
             raise ValueError(f"{node_id} required_defines exceeds {_MAX_REQUIRED_DEFINES}")
         if not required and not str(item.get("reason") or "").strip():
@@ -823,6 +973,17 @@ def _validate_prerequisites(
         unknown = [d for d in required if normalize_text_key(d) not in define_keys]
         if unknown:
             raise ValueError(f"{node_id} required unknown defines: {unknown}")
+        self_only = [
+            define
+            for define in required
+            if define_sources.get(normalize_text_key(define), set()) == {node_id}
+        ]
+        if self_only:
+            raise ValueError(f"{node_id} required defines are only defined by itself: {self_only}")
+    if require_all_nodes:
+        missing = sorted(node_ids - seen_node_ids)
+        if missing:
+            raise ValueError(f"missing prerequisite blocks for nodes: {missing}")
 
 
 async def _build_edges_with_cycle_repair(
@@ -835,6 +996,7 @@ async def _build_edges_with_cycle_repair(
     repair: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     current = prerequisites
+    repair_feedback = ""
     for attempt in range(repair + 1):
         _attach_external_prerequisites(nodes, current)
         edges = _edges_from_prerequisites(nodes, current)
@@ -864,24 +1026,103 @@ async def _build_edges_with_cycle_repair(
                 }
             )
             return nodes, safe_edges, diagnostics
+        allowed_targets = sorted({target for _source, target in cycle})
         raw = await _agent_repair_prerequisites(
             agent,
             {
                 "cycle_edges": sorted(cycle),
+                "allowed_target_node_ids": allowed_targets,
                 "nodes": [_node_prereq_meta(n) for n in nodes],
                 "node_prerequisites": current,
+                "instructions": (
+                    "Remove the cycle with the smallest necessary deletion of required_defines. "
+                    "Do not add prerequisites, change external_prerequisites, or modify nodes outside "
+                    "allowed_target_node_ids. Preserve legitimate roots and parallel branches. "
+                    + repair_feedback
+                ).strip(),
             },
             timeout_sec=timeout,
         )
-        current = list(raw.get("node_prerequisites") or [])
-        _validate_prerequisites(current, nodes, _define_dictionary(nodes))
+        candidate = list(raw.get("node_prerequisites") or [])
+        try:
+            _validate_prerequisites(
+                candidate,
+                nodes,
+                _define_dictionary(nodes),
+                require_all_nodes=True,
+            )
+            _validate_cycle_repair_scope(current, candidate, nodes, cycle)
+        except ValueError as exc:
+            logger.warning("Dagger cycle repair rejected (attempt %d): %s", attempt + 1, exc)
+            repair_feedback = f"Previous cycle repair was rejected: {exc}."
+            continue
+        current = candidate
+        repair_feedback = ""
     return nodes, [], diagnostics
+
+
+def _validate_cycle_repair_scope(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    cycle: set[tuple[str, str]],
+) -> None:
+    """Allow cycle repair to remove cycle-causing defines and nothing else."""
+    title_to_id = {normalize_text_key(n["title"]): n["node_id"] for n in nodes}
+    before_by_id = {_prereq_node_id(item, title_to_id): item for item in before}
+    after_by_id = {_prereq_node_id(item, title_to_id): item for item in after}
+    cycle_targets = {target for _source, target in cycle}
+    define_sources = _define_index(nodes)
+
+    for node in nodes:
+        node_id = node["node_id"]
+        original = before_by_id[node_id]
+        repaired = after_by_id[node_id]
+        original_required = {
+            normalize_text_key(value): value
+            for value in normalize_concepts(original.get("required_defines") or [])
+        }
+        repaired_required = {
+            normalize_text_key(value): value
+            for value in normalize_concepts(repaired.get("required_defines") or [])
+        }
+        if normalize_concepts(original.get("external_prerequisites") or []) != normalize_concepts(
+            repaired.get("external_prerequisites") or []
+        ):
+            raise ValueError(f"cycle repair changed external prerequisites for {node_id}")
+
+        if node_id not in cycle_targets:
+            if set(repaired_required) != set(original_required):
+                raise ValueError(f"cycle repair changed non-cycle node {node_id}")
+            if repaired.get("internal_prerequisite_decision") != original.get(
+                "internal_prerequisite_decision"
+            ):
+                raise ValueError(f"cycle repair changed non-cycle decision for {node_id}")
+            continue
+
+        added = sorted(set(repaired_required) - set(original_required))
+        if added:
+            raise ValueError(f"cycle repair added prerequisites for {node_id}: {added}")
+        removable = {
+            key
+            for key in original_required
+            if any((source, node_id) in cycle for source in define_sources.get(key, []))
+        }
+        removed_non_cycle = sorted(
+            set(original_required) - set(repaired_required) - removable
+        )
+        if removed_non_cycle:
+            raise ValueError(
+                f"cycle repair removed non-cycle prerequisites for {node_id}: {removed_non_cycle}"
+            )
 
 
 async def _agent_repair_prerequisites(agent: Any, payload: dict[str, Any], *, timeout_sec: float) -> dict:
     if hasattr(agent, "repair_prerequisites"):
-        return await agent.repair_prerequisites(payload, timeout_sec=timeout_sec)
-    return {"node_prerequisites": payload.get("node_prerequisites") or []}
+        raw = await agent.repair_prerequisites(payload, timeout_sec=timeout_sec)
+    else:
+        raw = {"node_prerequisites": payload.get("node_prerequisites") or []}
+    return validate_agent_payload(raw, DaggerPrerequisitesResponse).model_dump(exclude_none=True)
 
 
 def _attach_external_prerequisites(nodes: list[dict[str, Any]], prereqs: list[dict[str, Any]]) -> None:

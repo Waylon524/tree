@@ -12,6 +12,7 @@ from tree.ingest.ocr_engine import (
     OCREngine,
     PdfCryptoDependencyError,
     PdfPasswordRequiredError,
+    _allow_local_pdf_streams,
     pdf_crypto_runtime_status,
     set_job_store_root,
 )
@@ -62,7 +63,9 @@ def test_pdf_chunks_are_ocrd_with_max_five_concurrent_files(tmp_path, monkeypatc
     monkeypatch.setattr(engine, "_ocr_single_local", fake_ocr_single)
 
     result_holder: dict[str, str] = {}
-    worker = threading.Thread(target=lambda: result_holder.setdefault("text", engine._ocr_local_pdf(pdf)))
+    worker = threading.Thread(
+        target=lambda: result_holder.setdefault("text", engine._ocr_local_pdf(pdf))
+    )
     worker.start()
     try:
         assert five_started.wait(timeout=0.2)
@@ -144,7 +147,9 @@ def test_pdf_chunk_retry_waits_for_completed_file_after_concurrency_error(tmp_pa
     overload_failed = threading.Event()
 
     monkeypatch.setattr(engine, "_pdf_page_count", lambda path: 2 if Path(path) == pdf else 1)
-    monkeypatch.setattr(engine, "_split_pdf", lambda pdf_path, output_dir, max_pages: [overloaded, slow])
+    monkeypatch.setattr(
+        engine, "_split_pdf", lambda pdf_path, output_dir, max_pages: [overloaded, slow]
+    )
 
     def fake_ocr_single(path, context=None):
         name = Path(path).stem
@@ -250,6 +255,19 @@ def test_pdf_page_count_names_file_when_password_is_required(tmp_path, monkeypat
 
     with pytest.raises(PdfPasswordRequiredError, match="locked handout.pdf"):
         OCREngine._pdf_page_count(pdf)
+
+
+def test_local_pdf_stream_limit_is_bounded_by_file_size_and_restored(tmp_path, monkeypatch):
+    from pypdf import filters
+
+    pdf = tmp_path / "large-resource.pdf"
+    pdf.write_bytes(b"%PDF-1.7\n" + b"x" * 2048)
+    monkeypatch.setattr(filters, "MAX_DECLARED_STREAM_LENGTH", 128)
+
+    with _allow_local_pdf_streams(pdf):
+        assert filters.MAX_DECLARED_STREAM_LENGTH == pdf.stat().st_size
+
+    assert filters.MAX_DECLARED_STREAM_LENGTH == 128
 
 
 def test_remote_job_id_is_resumed_after_poll_timeout(tmp_path, monkeypatch):

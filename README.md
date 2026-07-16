@@ -10,7 +10,7 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 | --- | --- |
 | 桌面架构 | Tauri 原生壳加载 React 前端，并为当前项目启动一个本机、令牌保护的 Python engine sidecar。 |
 | 项目管理 | 桌面 App 以项目为中心；受管理项目保存在 `~/.tree/projects/`，可创建、导入、重命名、导出、迁移和删除。 |
-| 生成与学习 | 支持资料导入、AES PDF/OCR、清洗/切分/RAG、知识图谱、生成 Markdown 学习文件、阅读推荐、完成标记和基于反馈的定向修订。七阶段支持累计进度、断点续跑和局部失败。 |
+| 生成与学习 | 支持资料导入、AES PDF、大资源 PDF/OCR、清洗/切分/RAG、知识图谱、生成 Markdown 学习文件、阅读推荐、完成标记和基于反馈的定向修订。七阶段支持累计进度、断点续跑和局部失败。 |
 | 运行环境 | LLM 与 PaddleOCR 可在 App 中配置；本地 embedding 扩展会在需要时安装运行时和模型，也可改用外部 OpenAI-compatible embedding endpoint。 |
 | 已发布安装包 | macOS Apple Silicon DMG，以及 Windows x64 NSIS 和 MSI 安装包。 |
 
@@ -68,7 +68,7 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 照料页用于准备项目和配置运行环境。
 
 - 导入或移除资料。
-- 配置 LLM API、Base URL、默认模型和角色模型。
+- 配置 LLM API、Base URL、provider profile、默认模型和角色模型。
 - 配置 PaddleOCR token、API URL 和 OCR 模型。
 - 调整运行参数，例如 llama-server context 和 MTU chunk 阈值。
 - 在高级设置中调整 NodeRun、LLM retry/timeout、Source/OCR、Archivist 和 Dagger 参数。
@@ -91,9 +91,13 @@ TREE 的目标不是简单总结资料，而是把一批学习材料整理成可
 | Link / 生枝 | 建立知识节点之间的先修依赖。 |
 | NodeRun / 结果 | 为每个知识节点生成最终学习文件。 |
 
-Run 支持续跑。进度条始终显示项目累计完成量；缓存命中和重启后会继承真实的 `done/total`，与一次性跑完保持相同显示，不使用“已复用”或 `0/0 = 100%` 的伪进度。单个 NodeRun 失败时，已完成结果继续可用，项目显示为部分完成，并可从保留的试卷、草稿和 Bottleneck 精准重试。
+Run 支持续跑。进度条始终显示项目累计完成量；缓存命中和重启后会继承真实的 `done/total`，与一次性跑完保持相同显示，不使用“已复用”或 `0/0 = 100%` 的伪进度。阶段失败时，TREE 会冻结一致的终止快照，后台迟到事件不会把页面重新标成“进行中”；再次 Run 会从保留检查点继续。单个 NodeRun 失败时，已完成结果继续可用，项目显示为部分完成，并可从保留的试卷、草稿和 Bottleneck 精准重试。
 
-TREE 会按实际 LLM 服务商共享并发预算，遇到 429、超时、服务繁忙和可恢复 5xx 时自动降速并遵守 `Retry-After`。Embed 会定向修复缺失 MTU，聚类降级会保留来源完整的 singleton，Link 修复耗尽后会按可审计规则移除最低置信环边，最终 DAG 仍保持无环。
+TREE 会按实际 LLM 服务商共享并发预算，遇到 429、超时、服务繁忙和可恢复 5xx 时自动降速并遵守 `Retry-After`。每次 AI 请求都有稳定的 operation id，并按具体任务选择输出上限、超时、推理模式、JSON 能力和重试次数；角色级配置仍是用户可调的总上限。日志记录 operation、provider、模型、token 估算与实际 usage、耗时、重试、终止原因和降级状态，但不会记录 prompt 正文或密钥。
+
+模型返回在进入业务逻辑前会验证完整响应契约；Archivist 和 Dagger 的 JSON 经过严格 schema，输出截断、内容过滤、拒答、意外 tool call 和空响应具有不同终态。Dagger 只有在模型显式选择 `selected` 或 `none` 后才接受先修结论；大批量节点输出超限时会递归拆批，环修复只能最小删除环上依赖，不能改写无关边或强制多根、并行分支串行化。Examiner 交给 Writer 的指令也会先解析为严格结构，硬约束始终高于指令、草稿、RAG、Bottleneck 和用户反馈等动态内容。Embed 会定向修复缺失 MTU，Link 模型修复耗尽后会按可审计规则移除最低置信边，最终 DAG 仍保持无环。
+
+枯果的 **重新生长** 与普通断点恢复语义不同：重新生长会清空旧试卷、草稿引用、迭代和 Bottleneck 历史，从新试卷开始；普通再次 Run 则保留检查点继续。
 
 ### 收获 / 知识图谱
 
@@ -135,7 +139,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 
 - **LLM API**：需要 OpenAI-compatible Chat API。可在照料页配置。
 - **PaddleOCR**：用于扫描 PDF、图片和复杂版式资料。
-- **PDF crypto**：安装包内置 `pypdf` AES 支持；无需密码的 AES PDF 可直接读取，需要密码的文件会显示文件名和处理建议。
+- **PDF 运行时**：安装包内置 `pypdf` AES 支持；无需密码的 AES PDF 可直接读取，需要密码的文件会显示文件名和处理建议。包含超过 pypdf 默认 75 MB 单流阈值的本地 PDF 会按文件实际大小受控读取后再分块，其他解压与图片安全限制保持启用。
 - **Embedding**：桌面 App 可使用本地 embedding 扩展，基于 `llama-server` 和 Qwen3 embedding GGUF 模型。
 - **本地存储**：受管理项目保存在 TREE 项目库中；项目迁移使用 zip archive。
 
@@ -152,6 +156,10 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | `LLAMA_SERVER_CTX` | `22000` | llama-server 上下文长度。UI/API 限制为 `1024..32768`。Stop/Run 或重启 embedding 后生效。 |
 | `SOURCE_MTU_CHUNK_TOKENS` | `20000` | Source MTU chunk 阈值。UI/API 限制为 `500..32768`。 |
 | `LLM_PROVIDER_CONCURRENCY` | `4` | 同一 LLM 端点与凭据共享的并发上限；限流时会自动降低。 |
+| `LLM_PROVIDER_PROFILE` | `auto` | 能力 profile：`auto`、`deepseek`、`openai` 或 `generic`；未知兼容端点自动采用 `generic`，不发送 DeepSeek 专属参数。 |
+| `LLM_CONTEXT_WINDOW` | `128000` | 每个角色默认的总上下文预算；必须与所选 provider/model 的真实限制一致。 |
+| `LLM_MAX_OUTPUT_TOKENS` | `8192` | 从 context window 中预留的最大输出 token。 |
+| `LLM_PROMPT_SAFETY_TOKENS` | `1024` | 为 tokenizer 估算误差和消息封装保留的安全余量。 |
 | `SOURCE_INGEST_CONCURRENCY` | `4` | 并行处理的材料数。 |
 | `ARCHIVIST_CHUNK_CONCURRENCY` | `2` | 单次材料清洗/切分的并行分块数。 |
 | `DAGGER_PREREQUISITE_CONCURRENCY` | `3` | Dagger 先修关系请求并发数。 |
@@ -162,9 +170,11 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | `EMBED_AUTO_START` | App 管理 | 如果你自己管理 embedding 服务，可设为 `false`。 |
 | `LLAMA_SERVER_BIN` | App 管理 | 指定自定义 `llama-server` 可执行文件。 |
 
-照料页还开放了更多高级运行参数，包括 `MAX_ITERATIONS`、`MAX_EXAMINER_SPAN_NODES`、`MAX_RETRIES`、`MAX_FORMAT_RETRIES`、`LLM_TIMEOUT_SEC`、`SOURCE_OCR_CONCURRENCY`、`SOURCE_EMBEDDING_CONCURRENCY`、`ARCHIVIST_MTU_REPAIR_ATTEMPTS`、`DAGGER_REPAIR_ATTEMPTS` 和 Dagger cluster 相关阈值。界面默认值与引擎一致，保存后会说明下次运行需要重算的最早阶段；普通项目建议保留自适应并发的默认设置。
+照料页还开放了更多高级运行参数，包括 `MAX_ITERATIONS`、`MAX_EXAMINER_SPAN_NODES`、`MAX_RETRIES`、`MAX_FORMAT_RETRIES`、`LLM_TIMEOUT_SEC`、token 预算、`SOURCE_OCR_CONCURRENCY`、`SOURCE_EMBEDDING_CONCURRENCY`、`ARCHIVIST_MTU_REPAIR_ATTEMPTS`、`DAGGER_REPAIR_ATTEMPTS` 和 Dagger cluster 相关阈值。界面默认值与引擎一致，保存后会说明下次运行需要重算的最早阶段；普通项目建议保留自适应并发的默认设置。
 
-Agent prompt 是项目级设置。修改 prompt 会影响 JSON 格式稳定性、知识图谱生成和审核结果；每个 prompt 都可以单独恢复默认，也可以一键全部恢复默认。
+每个角色都可以通过 `<ROLE>_PROVIDER_PROFILE`、`<ROLE>_CONTEXT_WINDOW` 和 `<ROLE>_MAX_OUTPUT_TOKENS` 覆盖全局值，例如 `DAGGER_CONTEXT_WINDOW=160000`。调用前 TREE 会估算 system + user 输入；operation 的输出预算只会在角色上限以内收紧，短 JSON 修复不会默认占用与长文生成相同的输出额度和推理强度。超出输入预算时会先缩减低优先级 RAG/repair 上下文或为 Dagger 覆盖输入分批，仍无法容纳时在请求 provider 前返回包含 operation、角色和预算数字的错误。
+
+Agent prompt 是项目级设置。修改 prompt 会影响 JSON 格式稳定性、知识图谱生成和审核结果；每个 prompt 都可以单独恢复默认，也可以一键全部恢复默认。有效的 Archivist/Dagger prompt 哈希和语义配置会进入对应 Planner 缓存签名，因此只失效真正受影响的阶段，不包含 API key 或 prompt 正文。
 
 `SOURCE_MTU_CHUNK_TOKENS` 不强制小于 `LLAMA_SERVER_CTX`，因为 TREE 的 token 估算和 llama.cpp 实际 tokenization 不完全一致。默认组合是 `LLAMA_SERVER_CTX=22000`、`SOURCE_MTU_CHUNK_TOKENS=20000`。
 

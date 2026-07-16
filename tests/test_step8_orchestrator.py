@@ -6,6 +6,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from tree.engine.orchestrator import TreeEngine
 from tree.io import paths
 from tree.planner.store import envelope, write_json_atomic
@@ -92,6 +94,31 @@ async def test_tree_engine_run_schedules_ready_node_and_finishes(tmp_path, monke
     assert noderun["done"] == 1
     assert noderun["total"] == 1
     assert noderun["status"] == "complete"
+
+
+async def test_tree_engine_prepare_failure_closes_active_stage(tmp_path, monkeypatch):
+    paths.ensure_workspace_dirs(tmp_path)
+
+    async def _failing_prepare(engine):
+        engine.progress.set_stage(
+            "cluster", total=1, status="running", active="cluster-1", message="Building nodes"
+        )
+        raise RuntimeError("provider protocol failure")
+
+    monkeypatch.setattr("tree.engine.orchestrator.prepare_sources", _failing_prepare)
+    engine = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1),
+        node_runner=_FakeRunner(tmp_path),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+
+    with pytest.raises(RuntimeError, match="provider protocol failure"):
+        await engine.run()
+
+    progress = engine.progress.load()
+    assert progress["phase"] == "failed"
+    assert progress["stages"]["cluster"]["status"] == "failed"
+    assert progress["errors"][-1]["code"] == "engine_run_failed"
 
 
 async def test_tree_engine_refills_node_pool_after_each_node_completion(tmp_path, monkeypatch):

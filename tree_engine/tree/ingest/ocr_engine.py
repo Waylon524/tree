@@ -20,15 +20,17 @@ import re
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, Iterator
 
 import httpx
 
 logger = logging.getLogger(__name__)
 _progress_callback: Callable[[dict[str, Any]], None] | None = None
 _job_store_root: Path | None = None
+_PDF_READER_LOCK = threading.RLock()
 
 _DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 _DEFAULT_MODEL = "PaddleOCR-VL-1.6"
@@ -69,6 +71,36 @@ class PdfCryptoDependencyError(RuntimeError):
 
 class PdfPasswordRequiredError(RuntimeError):
     """A PDF cannot be opened without a user-supplied password."""
+
+
+class PdfStreamLimitError(RuntimeError):
+    """A PDF declares a stream larger than the local file can safely contain."""
+
+
+@contextmanager
+def _allow_local_pdf_streams(pdf_path: Path) -> Iterator[None]:
+    """Allow a legitimate raw PDF stream up to the local file's byte size.
+
+    pypdf intentionally defaults declared streams to 75 MB. Slide decks and
+    scanned textbooks can legitimately contain a single embedded resource over
+    that limit, which otherwise makes page-level OCR splitting fail. Raising
+    only this raw-stream limit to the already-present file size keeps malformed
+    declarations larger than the file blocked and leaves all decompression and
+    image safety limits unchanged.
+
+    The pypdf limit is process-global, so page inspection/splitting is serialized
+    and the original value is restored before another reader can observe it.
+    """
+    from pypdf import filters
+
+    file_size = max(0, pdf_path.stat().st_size)
+    with _PDF_READER_LOCK:
+        original_limit = filters.MAX_DECLARED_STREAM_LENGTH
+        filters.MAX_DECLARED_STREAM_LENGTH = max(original_limit, file_size)
+        try:
+            yield
+        finally:
+            filters.MAX_DECLARED_STREAM_LENGTH = original_limit
 
 
 def pdf_crypto_runtime_status() -> tuple[bool, str]:
@@ -411,7 +443,12 @@ class OCREngine:
     def _pdf_page_count(pdf_path: Path) -> int:
         try:
             from pypdf import PdfReader
-            from pypdf.errors import DependencyError, FileNotDecryptedError, WrongPasswordError
+            from pypdf.errors import (
+                DependencyError,
+                FileNotDecryptedError,
+                LimitReachedError,
+                WrongPasswordError,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "PDF page counting and splitting requires pypdf. "
@@ -419,8 +456,9 @@ class OCREngine:
             ) from exc
 
         try:
-            reader = PdfReader(str(pdf_path))
-            return len(reader.pages)
+            with _allow_local_pdf_streams(pdf_path):
+                reader = PdfReader(str(pdf_path))
+                return len(reader.pages)
         except DependencyError as exc:
             raise PdfCryptoDependencyError(
                 f"Cannot read AES-encrypted PDF '{pdf_path.name}': the TREE runtime is missing "
@@ -431,12 +469,22 @@ class OCREngine:
                 f"Encrypted PDF '{pdf_path.name}' requires a password. Remove the password "
                 "protection or import an unlocked copy."
             ) from exc
+        except LimitReachedError as exc:
+            raise PdfStreamLimitError(
+                f"PDF '{pdf_path.name}' contains a declared stream larger than the file itself. "
+                "Export or print it to a repaired PDF, then import the repaired copy."
+            ) from exc
 
     @staticmethod
     def _split_pdf(pdf_path: Path, output_dir: Path, max_pages: int) -> list[Path]:
         try:
             from pypdf import PdfReader, PdfWriter
-            from pypdf.errors import DependencyError, FileNotDecryptedError, WrongPasswordError
+            from pypdf.errors import (
+                DependencyError,
+                FileNotDecryptedError,
+                LimitReachedError,
+                WrongPasswordError,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "PDF page counting and splitting requires pypdf. "
@@ -444,20 +492,23 @@ class OCREngine:
             ) from exc
 
         try:
-            reader = PdfReader(str(pdf_path))
-            output_dir.mkdir(parents=True, exist_ok=True)
-            chunk_paths = []
-            total_pages = len(reader.pages)
-            for start in range(0, total_pages, max_pages):
-                writer = PdfWriter()
-                end = min(start + max_pages, total_pages)
-                for page_index in range(start, end):
-                    writer.add_page(reader.pages[page_index])
-                chunk_path = output_dir / f"{pdf_path.stem}__pages-{start + 1:04d}-{end:04d}.pdf"
-                with chunk_path.open("wb") as file:
-                    writer.write(file)
-                chunk_paths.append(chunk_path)
-            return chunk_paths
+            with _allow_local_pdf_streams(pdf_path):
+                reader = PdfReader(str(pdf_path))
+                output_dir.mkdir(parents=True, exist_ok=True)
+                chunk_paths = []
+                total_pages = len(reader.pages)
+                for start in range(0, total_pages, max_pages):
+                    writer = PdfWriter()
+                    end = min(start + max_pages, total_pages)
+                    for page_index in range(start, end):
+                        writer.add_page(reader.pages[page_index])
+                    chunk_path = (
+                        output_dir / f"{pdf_path.stem}__pages-{start + 1:04d}-{end:04d}.pdf"
+                    )
+                    with chunk_path.open("wb") as file:
+                        writer.write(file)
+                    chunk_paths.append(chunk_path)
+                return chunk_paths
         except DependencyError as exc:
             raise PdfCryptoDependencyError(
                 f"Cannot split AES-encrypted PDF '{pdf_path.name}': the TREE runtime is missing "
@@ -467,6 +518,11 @@ class OCREngine:
             raise PdfPasswordRequiredError(
                 f"Encrypted PDF '{pdf_path.name}' requires a password. Remove the password "
                 "protection or import an unlocked copy."
+            ) from exc
+        except LimitReachedError as exc:
+            raise PdfStreamLimitError(
+                f"PDF '{pdf_path.name}' contains a declared stream larger than the file itself. "
+                "Export or print it to a repaired PDF, then import the repaired copy."
             ) from exc
 
     def _submit_url(self, file_url: str) -> str:

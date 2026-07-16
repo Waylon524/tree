@@ -296,24 +296,43 @@ textarea {
   background: var(--bar-bg);
   color: var(--muted);
 }
-table.stages {
-  width: 100%;
-  border-collapse: collapse;
+.pipeline-message {
+  margin: 0 0 8px;
 }
-table.stages td {
+.stages {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+}
+.stage-row {
+  display: grid;
+  grid-template-columns:
+    minmax(96px, 112px)
+    minmax(120px, 1fr)
+    48px
+    52px
+    68px
+    minmax(140px, 1.65fr);
+  grid-template-areas: "name bar pct count badge current";
+  align-items: center;
+  min-height: 40px;
+  column-gap: 12px;
   padding: 5px 6px;
-  vertical-align: middle;
+  border-radius: 8px;
+}
+.stage-row:nth-child(odd) {
+  background: color-mix(in srgb, var(--bar-bg) 20%, transparent);
 }
 .stage-name {
+  grid-area: name;
   font-weight: 600;
-  width: 72px;
 }
 .stage-bar {
-  width: 40%;
+  grid-area: bar;
+  min-width: 0;
 }
 .track {
-  width: 160px;
-  max-width: 100%;
+  width: 100%;
   background: var(--bar-bg);
   border-radius: 99px;
   height: 8px;
@@ -329,21 +348,38 @@ table.stages td {
 .stage-count {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
-  width: 56px;
+  white-space: nowrap;
+}
+.stage-pct {
+  grid-area: pct;
+}
+.stage-count {
+  grid-area: count;
+}
+.stage-badge {
+  grid-area: badge;
+  min-width: 0;
 }
 .stage-current {
+  grid-area: current;
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
-  max-width: 320px;
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-height: 1.35;
 }
 .badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 99px;
   color: #fff;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .badge-done {
   background: var(--done);
@@ -376,13 +412,62 @@ table.stages td {
   background: var(--wait);
 }
 .errors {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--failed) 30%, var(--border));
+  border-radius: 9px;
   color: var(--failed);
+  background: color-mix(in srgb, var(--failed) 7%, var(--card));
   font-size: 13px;
+}
+.errors-title {
+  font-weight: 700;
+}
+.errors p {
+  margin: 2px 0 7px;
+  color: color-mix(in srgb, var(--failed) 72%, var(--text));
+}
+.errors ul {
+  margin: 0;
+  padding-left: 20px;
 }
 .errors li {
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.error-item {
+  display: grid;
+  gap: 3px;
+}
+.error-action {
+  color: color-mix(in srgb, var(--failed) 68%, var(--text));
+}
+@media (max-width: 1050px) {
+  .stage-row {
+    grid-template-columns: minmax(96px, 110px) minmax(110px, 1fr) 44px 48px 64px;
+    grid-template-areas:
+      "name bar pct count badge"
+      "current current current current current";
+    row-gap: 3px;
+  }
+  .stage-current {
+    padding-left: 32px;
+  }
+}
+@media (max-width: 600px) {
+  .stage-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "name count badge"
+      "bar bar pct"
+      "current current current";
+    row-gap: 5px;
+    padding-block: 7px;
+  }
+  .stage-current {
+    padding-left: 0;
+  }
 }
 .dag {
   width: 100%;
@@ -1682,7 +1767,6 @@ table.stages td {
 }
 
 .stage-name {
-  width: auto;
   min-width: 96px;
 }
 .stage-name-cell {

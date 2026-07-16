@@ -153,6 +153,121 @@ class ProgressTracker:
             state["updated_at"] = _now()
             write_json_atomic(self.path, state)
 
+    def fail_stage(
+        self,
+        stage: str,
+        message: str,
+        *,
+        code: str = "pipeline_error",
+        resource: str = "",
+        recoverable: bool = False,
+        action: str = "",
+    ) -> None:
+        """Atomically stop the run and freeze coherent terminal stage states."""
+        with self._lock:
+            state = self.load()
+            if not self._may_update(state):
+                return
+
+            failed = _stage_data(state, stage)
+            failed["status"] = "failed"
+            failed["message"] = str(message)
+            failed["active"] = _active_items(resource)
+
+            for key, data in state["stages"].items():
+                if key == stage or str(data.get("status") or "").lower() != "running":
+                    continue
+                data["status"] = "partial" if int(data.get("done") or 0) > 0 else "pending"
+                data["active"] = []
+
+            record = {
+                "run_id": str(state.get("run_id") or ""),
+                "generation_id": str(state.get("generation_id") or ""),
+                "stage": str(stage),
+                "code": str(code),
+                "resource": str(resource),
+                "message": str(message),
+                "retry_count": 0,
+                "recoverable": bool(recoverable),
+                "action": str(action),
+                "timestamp": _now(),
+            }
+            errors = [item for item in state.get("errors", []) if isinstance(item, dict)]
+            key = _error_key(record)
+            state["errors"] = [item for item in errors if _error_key(item) != key][-19:] + [record]
+            state["phase"] = "failed"
+            state["message"] = str(message)
+            state["updated_at"] = _now()
+            write_json_atomic(self.path, state)
+
+    def fail_active_stage(
+        self,
+        message: str,
+        *,
+        code: str = "pipeline_error",
+        action: str = "Inspect the reported error, fix the dependency or input, then resume.",
+    ) -> None:
+        """Fail the currently running stage without overwriting an existing terminal error."""
+        with self._lock:
+            state = self.load()
+            if not self._may_update(state) or _phase_is_terminal(state):
+                return
+
+            running = [
+                key
+                for key, _label in STAGES
+                if str(state["stages"][key].get("status") or "").lower() == "running"
+            ]
+            stage = running[-1] if running else "pipeline"
+            resource = ""
+            if running:
+                failed = state["stages"][stage]
+                resource = ", ".join(_active_items(failed.get("active") or []))
+                failed["status"] = "failed"
+                failed["message"] = str(message)
+
+            for key, data in state["stages"].items():
+                if key == stage or str(data.get("status") or "").lower() != "running":
+                    continue
+                data["status"] = "partial" if int(data.get("done") or 0) > 0 else "pending"
+                data["active"] = []
+
+            record = {
+                "run_id": str(state.get("run_id") or ""),
+                "generation_id": str(state.get("generation_id") or ""),
+                "stage": stage,
+                "code": str(code),
+                "resource": resource,
+                "message": str(message),
+                "retry_count": 0,
+                "recoverable": False,
+                "action": str(action),
+                "timestamp": _now(),
+            }
+            errors = [item for item in state.get("errors", []) if isinstance(item, dict)]
+            key = _error_key(record)
+            state["errors"] = [item for item in errors if _error_key(item) != key][-19:] + [record]
+            state["phase"] = "failed"
+            state["message"] = str(message)
+            state["updated_at"] = _now()
+            write_json_atomic(self.path, state)
+
+    def stop(self, message: str = "TREE_STOPPED — run cancelled.") -> None:
+        """Record an intentional cancellation separately from a pipeline failure."""
+        with self._lock:
+            state = self.load()
+            if not self._may_update(state) or _phase_is_terminal(state):
+                return
+            for data in state["stages"].values():
+                if str(data.get("status") or "").lower() != "running":
+                    continue
+                data["status"] = "partial" if int(data.get("done") or 0) > 0 else "pending"
+                data["active"] = []
+            state["phase"] = "stopped"
+            state["message"] = str(message)
+            state["updated_at"] = _now()
+            write_json_atomic(self.path, state)
+
     def set_stage(
         self,
         stage: str,
@@ -166,6 +281,8 @@ class ProgressTracker:
         with self._lock:
             state = self.load()
             if not self._may_update(state):
+                return
+            if _phase_is_terminal(state) and str(status or "").lower() == "running":
                 return
             data = _stage_data(state, stage)
             if total is not None:
@@ -196,6 +313,8 @@ class ProgressTracker:
             state = self.load()
             if not self._may_update(state):
                 return
+            if _phase_is_terminal(state):
+                return
             data = _stage_data(state, stage)
             data["total"] = max(0, int(data.get("total", 0)) + int(amount))
             if status is not None:
@@ -219,6 +338,8 @@ class ProgressTracker:
             state = self.load()
             if not self._may_update(state):
                 return
+            if _phase_is_terminal(state):
+                return
             data = _stage_data(state, stage)
             total = int(data.get("total", 0))
             done = int(data.get("done", 0)) + int(step)
@@ -239,6 +360,8 @@ class ProgressTracker:
         with self._lock:
             state = self.load()
             if not self._may_update(state):
+                return
+            if _phase_is_terminal(state):
                 return
             data = _stage_data(state, stage)
             total = int(data.get("total", 0))
@@ -315,3 +438,14 @@ def _error_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
         str(item.get("resource") or ""),
         str(item.get("message") or ""),
     )
+
+
+def _phase_is_terminal(state: dict[str, Any]) -> bool:
+    return str(state.get("phase") or "").strip().lower() in {
+        "blocked",
+        "complete",
+        "error",
+        "failed",
+        "partial",
+        "stopped",
+    }

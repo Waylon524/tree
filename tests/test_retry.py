@@ -33,6 +33,23 @@ async def test_retry_rejects_non_transient_error_without_sleep(monkeypatch):
     assert calls == 1
 
 
+def test_malformed_llm_response_is_retryable():
+    assert retry.is_retryable_error(retry.MalformedLLMResponseError("empty content")) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        retry.LLMOutputTruncatedError("length"),
+        retry.LLMContentFilteredError("filtered"),
+        retry.LLMRefusalError("refused"),
+        retry.LLMToolCallError("tool call"),
+    ],
+)
+def test_terminal_llm_responses_are_not_retried(error):
+    assert retry.is_retryable_error(error) is False
+
+
 async def test_retry_honors_retry_after_and_reports_attempt(monkeypatch):
     calls = 0
     sleeps: list[float] = []
@@ -69,4 +86,3 @@ async def test_adaptive_limiter_reduces_then_recovers_gradually():
     assert limiter.limit == 2
     await limiter.record_success()
     assert limiter.limit == 3
-

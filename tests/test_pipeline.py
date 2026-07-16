@@ -8,10 +8,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from tree.agents.prompts import save_prompt_override
 from tree.io import paths
 from tree.observability.progress import ProgressTracker
 from tree.planner.mtu import build_mtus
-from tree.planner.pipeline import PlannerError, load_dag, load_nodes, rebuild_planner
+from tree.planner.pipeline import (
+    PlannerError,
+    load_dag,
+    load_nodes,
+    planner_generation_id,
+    planner_producer_signature,
+    rebuild_planner,
+)
 
 _SETTINGS = SimpleNamespace(
     dagger_build_timeout_sec=1.0, dagger_repair_attempts=0, dagger_max_nodes_per_call=400
@@ -39,15 +47,18 @@ class _EchoDagger:
         }
 
     async def build_prerequisites(self, payload, *, timeout_sec=None):
-        nodes = list(payload.get("nodes") or [])
+        all_nodes = list(payload.get("nodes") or [])
+        nodes = [payload["target_node"]]
         prerequisites = []
-        for index, node in enumerate(nodes):
+        for node in nodes:
+            index = all_nodes.index(node)
             required = []
             if index > 0:
-                required = [nodes[index - 1]["defines"][0]]
+                required = [all_nodes[index - 1]["defines"][0]]
             prerequisites.append(
                 {
                     "node_id": node["node_id"],
+                    "internal_prerequisite_decision": "selected" if required else "none",
                     "required_defines": required,
                     "reason": "first node" if not required else "continues the previous node",
                 }
@@ -340,7 +351,41 @@ async def test_archivist_model_change_invalidates_mtu_cache(tmp_path):
         )
 
 
-async def test_rebuild_keeps_singletons_and_warns_on_excessive_dagger_fallback(tmp_path):
+def test_archivist_prompt_override_invalidates_producer_signature(tmp_path):
+    settings = SimpleNamespace(
+        project_root=tmp_path,
+        archivist=SimpleNamespace(model="archivist", base_url="https://llm.test"),
+    )
+    before = planner_producer_signature(settings)
+
+    save_prompt_override(tmp_path, "archivist_mtu", "CUSTOM MTU CONTRACT")
+
+    assert planner_producer_signature(settings) != before
+
+
+def test_dagger_prompt_and_semantic_config_invalidate_generation_id(tmp_path):
+    manifest = {"materials": []}
+    base = {
+        "project_root": tmp_path,
+        "dagger": SimpleNamespace(model="dagger", base_url="https://llm.test"),
+        "dagger_repair_attempts": 2,
+        "dagger_max_nodes_per_call": 400,
+    }
+    settings = SimpleNamespace(**base)
+    before = planner_generation_id(manifest, settings)
+
+    save_prompt_override(tmp_path, "dagger", "CUSTOM DAGGER CONTRACT")
+    after_prompt = planner_generation_id(manifest, settings)
+    changed_config = planner_generation_id(
+        manifest,
+        SimpleNamespace(**{**base, "dagger_max_nodes_per_call": 200}),
+    )
+
+    assert after_prompt != before
+    assert changed_config != after_prompt
+
+
+async def test_rebuild_fails_closed_on_completely_empty_dagger_response(tmp_path):
     _seed_material(tmp_path)
     settings = SimpleNamespace(
         dagger_build_timeout_sec=1.0,
@@ -349,16 +394,10 @@ async def test_rebuild_keeps_singletons_and_warns_on_excessive_dagger_fallback(t
         dagger_max_unassigned_ratio=0.10,
     )
 
-    result = await rebuild_planner(
-        tmp_path,
-        settings=settings,
-        agents=SimpleNamespace(dagger=_EmptyDagger()),
-        mtu_producer=_make_producer({"calls": 0}),
-    )
-
-    assert result["node_count"] == 2
-    nodes_envelope = json.loads(paths.knowledge_nodes_path(tmp_path).read_text(encoding="utf-8"))
-    assert any(
-        item.get("reason_code") == "high_unassigned_ratio"
-        for item in nodes_envelope.get("diagnostics", [])
-    )
+    with pytest.raises(ValueError, match="Dagger node response must not be empty"):
+        await rebuild_planner(
+            tmp_path,
+            settings=settings,
+            agents=SimpleNamespace(dagger=_EmptyDagger()),
+            mtu_producer=_make_producer({"calls": 0}),
+        )

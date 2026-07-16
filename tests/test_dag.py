@@ -8,8 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from tree.agents.prompts import DAGGER_PREREQUISITES_PROMPT, DAGGER_PROMPT
+from tree.model.budget import PromptBudgetExceededError
+from tree.observability.retry import LLMOutputTruncatedError
 from tree.planner.cluster import build_candidate_clusters
 from tree.planner.dag import (
+    _build_nodes_batched,
+    _build_nodes_with_repair,
     _find_cycle,
     _validate_node_replacements,
     _validate_prerequisites,
@@ -31,6 +35,120 @@ def _mtu(mtu_id, title, collection, order, keywords=None):
         unit_kind="concept",
         source_order_index=order,
     )
+
+
+async def test_dagger_coverage_payload_splits_when_token_budget_is_exceeded():
+    class BudgetedDagger:
+        def __init__(self):
+            self.batch_sizes = []
+
+        async def build_nodes(self, payload, *, timeout_sec=None):
+            metas = [item for item in payload if "mtu_id" in item]
+            self.batch_sizes.append(len(metas))
+            if len(metas) > 2:
+                raise PromptBudgetExceededError(
+                    role="dagger",
+                    estimated_input_tokens=2_000,
+                    input_budget_tokens=1_000,
+                    context_window=2_000,
+                    reserved_output_tokens=800,
+                    safety_tokens=200,
+                )
+            return {
+                "nodes": [
+                    {
+                        "title": item["title"],
+                        "member_mtu_ids": [item["mtu_id"]],
+                        "defines": item["defines"],
+                    }
+                    for item in metas
+                ]
+            }
+
+    dagger = BudgetedDagger()
+    payload = [
+        {"mtu_id": f"m{index}", "title": f"Node {index}", "defines": [f"d{index}"]}
+        for index in range(5)
+    ]
+
+    nodes = await _build_nodes_with_repair(dagger, payload, timeout=1.0, repair=0)
+
+    assert [node["member_mtu_ids"][0] for node in nodes] == ["m0", "m1", "m2", "m3", "m4"]
+    assert dagger.batch_sizes == [5, 2, 3, 1, 2]
+
+
+async def test_dagger_coverage_payload_splits_when_output_is_truncated():
+    class TruncatedDagger:
+        def __init__(self):
+            self.batch_sizes = []
+
+        async def build_nodes(self, payload, *, timeout_sec=None):
+            metas = [item for item in payload if "mtu_id" in item]
+            self.batch_sizes.append(len(metas))
+            if len(metas) > 2:
+                raise LLMOutputTruncatedError("finish_reason=length")
+            return {
+                "nodes": [
+                    {
+                        "title": item["title"],
+                        "member_mtu_ids": [item["mtu_id"]],
+                        "defines": item["defines"],
+                    }
+                    for item in metas
+                ]
+            }
+
+    dagger = TruncatedDagger()
+    payload = [
+        {"mtu_id": f"m{index}", "title": f"Node {index}", "defines": [f"d{index}"]}
+        for index in range(5)
+    ]
+
+    nodes = await _build_nodes_with_repair(dagger, payload, timeout=1.0, repair=3)
+
+    assert [node["member_mtu_ids"][0] for node in nodes] == ["m0", "m1", "m2", "m3", "m4"]
+    assert dagger.batch_sizes == [5, 2, 3, 1, 2]
+
+
+async def test_dagger_collection_batches_respect_configured_node_limit():
+    class RecordingDagger:
+        def __init__(self):
+            self.batch_sizes = []
+
+        async def build_nodes(self, payload, *, timeout_sec=None):
+            metas = [item for item in payload if "mtu_id" in item]
+            self.batch_sizes.append(len(metas))
+            return {
+                "nodes": [
+                    {
+                        "title": item["title"],
+                        "member_mtu_ids": [item["mtu_id"]],
+                        "defines": item["defines"],
+                    }
+                    for item in metas
+                ]
+            }
+
+    dagger = RecordingDagger()
+    mtus = [_mtu(f"mtu:{index}", f"N{index}", "same", index, [f"D{index}"]) for index in range(5)]
+
+    nodes = await _build_nodes_batched(
+        dagger,
+        mtus,
+        timeout=1.0,
+        repair=0,
+        progress=None,
+        max_nodes=2,
+    )
+
+    assert dagger.batch_sizes == [2, 2, 1]
+    assert sorted(member for node in nodes for member in node["member_mtu_ids"]) == [
+        "mtu:0",
+        "mtu:1",
+        "mtu:2",
+        "mtu:3",
+        "mtu:4",
+    ]
 
 
 class _FakeAgent:
@@ -59,7 +177,15 @@ class _DefinesAgent:
 
     async def build_prerequisites(self, payload, *, timeout_sec=None):
         self.prerequisite_calls += 1
-        return {"node_prerequisites": self.prerequisites}
+        target = payload.get("target_node") or {}
+        selected = [
+            item
+            for item in self.prerequisites
+            if item.get("node_id") == target.get("node_id")
+            or item.get("node_title") == target.get("title")
+            or item.get("title") == target.get("title")
+        ]
+        return {"node_prerequisites": [_with_decision(item) for item in selected]}
 
     async def repair_defines(self, payload, *, timeout_sec=None):
         self.repair_calls += 1
@@ -71,8 +197,17 @@ class _DefinesAgent:
     async def repair_prerequisites(self, payload, *, timeout_sec=None):
         self.repair_calls += 1
         if not self.repairs:
-            return {"node_prerequisites": self.prerequisites}
-        return {"node_prerequisites": self.repairs.pop(0)}
+            return {"node_prerequisites": [_with_decision(item) for item in self.prerequisites]}
+        return {"node_prerequisites": [_with_decision(item) for item in self.repairs.pop(0)]}
+
+
+def _with_decision(item):
+    value = dict(item)
+    value.setdefault(
+        "internal_prerequisite_decision",
+        "selected" if value.get("required_defines") else "none",
+    )
+    return value
 
 
 _SETTINGS = SimpleNamespace(
@@ -213,6 +348,8 @@ def test_dagger_prompts_use_defines_and_required_defines_not_edges():
     assert "at most 24" in DAGGER_PREREQUISITES_PROMPT
     assert "higher-level" in DAGGER_PREREQUISITES_PROMPT
     assert "closest to the current node" in DAGGER_PREREQUISITES_PROMPT
+    assert "smallest necessary change" in DAGGER_PREREQUISITES_PROMPT
+    assert "does not need to be a linear or total order" in DAGGER_PREREQUISITES_PROMPT
 
 
 def test_node_defines_are_limited_to_eight():
@@ -236,32 +373,189 @@ def test_required_defines_are_limited_to_twenty_four():
     nodes = [{"node_id": "kn:a", "title": "A"}]
     define_dictionary = {f"D{i}": {"node_id": "kn:src"} for i in range(25)}
     _validate_prerequisites(
-        [{"node_id": "kn:a", "required_defines": [f"D{i}" for i in range(24)], "reason": "needs them"}],
+        [{
+            "node_id": "kn:a",
+            "internal_prerequisite_decision": "selected",
+            "required_defines": [f"D{i}" for i in range(24)],
+            "reason": "needs them",
+        }],
         nodes,
         define_dictionary,
     )
 
     with pytest.raises(ValueError, match="required_defines exceeds 24"):
         _validate_prerequisites(
-            [{"node_id": "kn:a", "required_defines": [f"D{i}" for i in range(25)], "reason": "too many"}],
+            [{
+                "node_id": "kn:a",
+                "internal_prerequisite_decision": "selected",
+                "required_defines": [f"D{i}" for i in range(25)],
+                "reason": "too many",
+            }],
             nodes,
             define_dictionary,
         )
 
 
-async def test_build_dag_falls_back_when_llm_unusable():
-    # Agent raises -> _build_with_repair returns empty -> all MTUs become singletons.
+def test_prerequisite_decision_must_match_required_defines():
+    nodes = [{"node_id": "kn:a", "title": "A"}]
+    with pytest.raises(ValueError, match="declared no prerequisites"):
+        _validate_prerequisites(
+            [{
+                "node_id": "kn:a",
+                "internal_prerequisite_decision": "none",
+                "required_defines": ["D"],
+                "reason": "contradictory",
+            }],
+            nodes,
+            {"D": {"defined_by": ["kn:source"]}},
+        )
+
+
+def test_prerequisite_rejects_self_only_define():
+    nodes = [{"node_id": "kn:a", "title": "A"}]
+    with pytest.raises(ValueError, match="only defined by itself"):
+        _validate_prerequisites(
+            [{
+                "node_id": "kn:a",
+                "internal_prerequisite_decision": "selected",
+                "required_defines": ["A"],
+                "reason": "self dependency",
+            }],
+            nodes,
+            {"A": {"defined_by": ["kn:a"]}},
+        )
+
+
+def test_full_prerequisite_set_requires_unique_coverage_of_every_node():
+    nodes = [
+        {"node_id": "kn:a", "title": "A"},
+        {"node_id": "kn:b", "title": "B"},
+    ]
+    root = {
+        "node_id": "kn:a",
+        "internal_prerequisite_decision": "none",
+        "required_defines": [],
+        "reason": "foundational",
+    }
+
+    with pytest.raises(ValueError, match="missing prerequisite blocks"):
+        _validate_prerequisites(
+            [root],
+            nodes,
+            {},
+            require_all_nodes=True,
+        )
+    with pytest.raises(ValueError, match="duplicate prerequisite block"):
+        _validate_prerequisites(
+            [root, root],
+            nodes,
+            {},
+            require_all_nodes=True,
+        )
+
+
+async def test_empty_prerequisite_response_is_repaired_not_treated_as_root():
+    mtu = _mtu("mtu:1", "A", "c", 0)
+
+    class _RepairingAgent:
+        def __init__(self):
+            self.prerequisite_calls = 0
+
+        async def build_nodes(self, payload, *, timeout_sec=None):
+            return {"nodes": [{"title": "A", "member_mtu_ids": ["mtu:1"], "defines": ["A"]}]}
+
+        async def build_prerequisites(self, payload, *, timeout_sec=None):
+            self.prerequisite_calls += 1
+            if self.prerequisite_calls == 1:
+                return {"node_prerequisites": []}
+            return {
+                "node_prerequisites": [{
+                    "node_id": payload["target_node"]["node_id"],
+                    "internal_prerequisite_decision": "none",
+                    "required_defines": [],
+                    "reason": "This is the first foundational concept in the material.",
+                }]
+            }
+
+    agent = _RepairingAgent()
+    dag = await build_dag(
+        agent,
+        [mtu],
+        settings=SimpleNamespace(**{**_SETTINGS.__dict__, "dagger_repair_attempts": 1}),
+    )
+
+    assert agent.prerequisite_calls == 2
+    assert dag["roots"] == [dag["nodes"][0]["node_id"]]
+
+
+async def test_all_root_graph_gets_one_global_review_without_forcing_edges():
+    mtus = [
+        _mtu("mtu:1", "A", "c", 0, keywords=["A"]),
+        _mtu("mtu:2", "B", "c", 1, keywords=["B"]),
+        _mtu("mtu:3", "C", "c", 2, keywords=["C"]),
+    ]
+
+    class ReviewingAgent:
+        def __init__(self):
+            self.prerequisite_calls = 0
+
+        async def build_nodes(self, payload, *, timeout_sec=None):
+            return {
+                "nodes": [
+                    {
+                        "title": item["title"],
+                        "member_mtu_ids": [item["mtu_id"]],
+                        "defines": item["defines"],
+                    }
+                    for item in payload
+                    if "mtu_id" in item
+                ]
+            }
+
+        async def build_prerequisites(self, payload, *, timeout_sec=None):
+            self.prerequisite_calls += 1
+            target = payload["target_node"]
+            review = "Global graph review" in payload["instructions"]
+            required = []
+            if review and target["title"] == "B":
+                required = ["A"]
+            elif review and target["title"] == "C":
+                required = ["B"]
+            return {
+                "node_prerequisites": [
+                    {
+                        "node_id": target["node_id"],
+                        "internal_prerequisite_decision": "selected" if required else "none",
+                        "required_defines": required,
+                        "reason": "reviewed against all definitions",
+                    }
+                ]
+            }
+
+    agent = ReviewingAgent()
+
+    dag = await build_dag(agent, mtus, settings=_SETTINGS)
+
+    assert agent.prerequisite_calls == 6
+    assert len(dag["roots"]) == 1
+    review = next(
+        item for item in dag["diagnostics"] if item["reason_code"] == "high_root_ratio_reviewed"
+    )
+    assert review["roots_before"] == 3
+    assert review["roots_after"] == 1
+
+
+async def test_build_dag_fails_closed_when_prerequisite_agent_is_unusable():
     class _BadAgent:
         async def build(self, payload, *, timeout_sec=None):
             raise ValueError("bad json")
 
     mtus = [_mtu("mtu:1", "A", "c", 0), _mtu("mtu:2", "B", "c", 1)]
-    dag = await build_dag(_BadAgent(), mtus, settings=_SETTINGS)
-    assert len(dag["nodes"]) == 2  # singletons
-    assert len(dag["diagnostics"]) == 2
+    with pytest.raises(ValueError, match="Dagger node build failed"):
+        await build_dag(_BadAgent(), mtus, settings=_SETTINGS)
 
 
-async def test_build_dag_ignores_self_dependency_and_records_external_prerequisites():
+async def test_build_dag_records_external_prerequisites_without_self_dependency():
     mtus = [_mtu("mtu:1", "A", "c", 0), _mtu("mtu:2", "B", "c", 1)]
     agent = _DefinesAgent(
         nodes=[
@@ -269,11 +563,11 @@ async def test_build_dag_ignores_self_dependency_and_records_external_prerequisi
             {"title": "B", "member_mtu_ids": ["mtu:2"], "defines": ["B"]},
         ],
         prerequisites=[
-            {
-                "node_title": "A",
-                "required_defines": ["A"],
-                "reason": "self should be ignored",
-                "external_prerequisites": ["代数"],
+                {
+                    "node_title": "A",
+                    "required_defines": [],
+                    "reason": "A is a material-internal root",
+                    "external_prerequisites": ["代数"],
             },
             {"node_title": "B", "required_defines": ["A"], "reason": "B needs A"},
         ],
@@ -719,10 +1013,11 @@ async def test_build_dag_refines_embedding_candidate_clusters_with_dagger():
                 "node_prerequisites": [
                     {
                         "node_id": node["node_id"],
+                        "internal_prerequisite_decision": "none",
                         "required_defines": [],
                         "reason": "foundational node",
                     }
-                    for node in payload["nodes"]
+                    for node in [payload["target_node"]]
                 ]
             }
 
@@ -815,10 +1110,11 @@ async def test_build_dag_allows_cluster_split_with_member_mtu_defines_only():
                 "node_prerequisites": [
                     {
                         "node_id": node["node_id"],
+                        "internal_prerequisite_decision": "none",
                         "required_defines": [],
                         "reason": "foundational node",
                     }
-                    for node in payload["nodes"]
+                    for node in [payload["target_node"]]
                 ]
             }
 
@@ -879,6 +1175,7 @@ async def test_build_dag_links_prerequisites_with_bounded_concurrency_and_sequen
                 "node_prerequisites": [
                     {
                         "node_id": target["node_id"],
+                        "internal_prerequisite_decision": "selected" if required else "none",
                         "required_defines": required,
                         "reason": "ordered prerequisite",
                     }
@@ -947,10 +1244,11 @@ async def test_build_dag_calls_dagger_once_per_candidate_cluster():
                 "node_prerequisites": [
                     {
                         "node_id": node["node_id"],
+                        "internal_prerequisite_decision": "none",
                         "required_defines": [],
                         "reason": "foundational node",
                     }
-                    for node in payload["nodes"]
+                    for node in [payload["target_node"]]
                 ]
             }
 
@@ -1012,10 +1310,11 @@ async def test_build_dag_sends_same_collection_multi_mtu_cluster_to_dagger_even_
                 "node_prerequisites": [
                     {
                         "node_id": node["node_id"],
+                        "internal_prerequisite_decision": "none",
                         "required_defines": [],
                         "reason": "foundational node",
                     }
-                    for node in payload["nodes"]
+                    for node in [payload["target_node"]]
                 ]
             }
 
@@ -1082,7 +1381,7 @@ async def test_build_dag_merges_first_node_without_defines_into_next_same_collec
     assert set(dag["nodes"][0]["member_mtu_ids"]) == {"mtu:1", "mtu:2"}
 
 
-async def test_build_dag_repairs_cycle_with_llm_linear_order():
+async def test_build_dag_repairs_cycle_with_minimal_edge_removal():
     mtus = [_mtu("mtu:1", "A", "c", 0), _mtu("mtu:2", "B", "c", 1)]
     agent = _DefinesAgent(
         nodes=[
@@ -1106,6 +1405,91 @@ async def test_build_dag_repairs_cycle_with_llm_linear_order():
     titles_by_id = {n["node_id"]: n["title"] for n in dag["nodes"]}
     assert [(titles_by_id[e["from_node_id"]], titles_by_id[e["to_node_id"]]) for e in dag["edges"]] == [("A", "B")]
     assert agent.repair_calls == 1
+
+
+async def test_cycle_repair_preserves_unrelated_root_and_parallel_branch():
+    mtus = [
+        _mtu("mtu:1", "A", "c", 0),
+        _mtu("mtu:2", "B", "c", 1),
+        _mtu("mtu:3", "C", "c", 2),
+        _mtu("mtu:4", "D", "c", 3),
+    ]
+    agent = _DefinesAgent(
+        nodes=[
+            {"title": "A", "member_mtu_ids": ["mtu:1"], "defines": ["A"]},
+            {"title": "B", "member_mtu_ids": ["mtu:2"], "defines": ["B"]},
+            {"title": "C", "member_mtu_ids": ["mtu:3"], "defines": ["C"]},
+            {"title": "D", "member_mtu_ids": ["mtu:4"], "defines": ["D"]},
+        ],
+        prerequisites=[
+            {"node_title": "A", "required_defines": ["B"], "reason": "bad cycle"},
+            {"node_title": "B", "required_defines": ["A"], "reason": "bad cycle"},
+            {"node_title": "C", "required_defines": [], "reason": "independent root"},
+            {"node_title": "D", "required_defines": ["C"], "reason": "parallel branch"},
+        ],
+        repairs=[
+            [
+                {"node_title": "A", "required_defines": [], "reason": "remove one cycle edge"},
+                {"node_title": "B", "required_defines": ["A"], "reason": "keep valid edge"},
+                {"node_title": "C", "required_defines": [], "reason": "independent root"},
+                {"node_title": "D", "required_defines": ["C"], "reason": "parallel branch"},
+            ]
+        ],
+    )
+
+    dag = await build_dag(
+        agent,
+        mtus,
+        settings=SimpleNamespace(**{**_SETTINGS.__dict__, "dagger_repair_attempts": 1}),
+    )
+
+    titles_by_id = {n["node_id"]: n["title"] for n in dag["nodes"]}
+    edges = {
+        (titles_by_id[edge["from_node_id"]], titles_by_id[edge["to_node_id"]])
+        for edge in dag["edges"]
+    }
+    roots = {titles_by_id[node_id] for node_id in dag["roots"]}
+    assert edges == {("A", "B"), ("C", "D")}
+    assert roots == {"A", "C"}
+
+
+async def test_cycle_repair_rejects_changes_to_non_cycle_nodes():
+    mtus = [
+        _mtu("mtu:1", "A", "c", 0),
+        _mtu("mtu:2", "B", "c", 1),
+        _mtu("mtu:3", "C", "c", 2),
+    ]
+    cyclic = [
+        {"node_title": "A", "required_defines": ["B"], "reason": "bad cycle"},
+        {"node_title": "B", "required_defines": ["A"], "reason": "bad cycle"},
+        {"node_title": "C", "required_defines": [], "reason": "independent root"},
+    ]
+    agent = _DefinesAgent(
+        nodes=[
+            {"title": "A", "member_mtu_ids": ["mtu:1"], "defines": ["A"]},
+            {"title": "B", "member_mtu_ids": ["mtu:2"], "defines": ["B"]},
+            {"title": "C", "member_mtu_ids": ["mtu:3"], "defines": ["C"]},
+        ],
+        prerequisites=cyclic,
+        repairs=[
+            [
+                {"node_title": "A", "required_defines": [], "reason": "remove cycle edge"},
+                {"node_title": "B", "required_defines": ["A"], "reason": "keep edge"},
+                {"node_title": "C", "required_defines": ["A"], "reason": "invalid new edge"},
+            ]
+        ],
+    )
+
+    dag = await build_dag(
+        agent,
+        mtus,
+        settings=SimpleNamespace(**{**_SETTINGS.__dict__, "dagger_repair_attempts": 1}),
+    )
+
+    titles_by_id = {n["node_id"]: n["title"] for n in dag["nodes"]}
+    assert all(titles_by_id[edge["to_node_id"]] != "C" for edge in dag["edges"])
+    assert "C" in {titles_by_id[node_id] for node_id in dag["roots"]}
+    assert any(item["reason_code"] == "cycle_edges_removed" for item in dag["diagnostics"])
 
 
 async def test_build_dag_drops_cycle_edge_when_llm_repairs_are_exhausted():

@@ -24,6 +24,9 @@ ROLES = ("examiner", "student", "writer", "archivist", "dagger")
 
 DEFAULT_LLAMA_SERVER_CTX = 22_000
 DEFAULT_SOURCE_MTU_CHUNK_TOKENS = 20_000
+DEFAULT_LLM_CONTEXT_WINDOW = 128_000
+DEFAULT_LLM_MAX_OUTPUT_TOKENS = 8_192
+DEFAULT_LLM_PROMPT_SAFETY_TOKENS = 1_024
 LLAMA_SERVER_CTX_MIN = 1_024
 LLAMA_SERVER_CTX_MAX = 32_768
 SOURCE_MTU_CHUNK_TOKENS_MIN = 500
@@ -48,6 +51,9 @@ class RoleConfig:
     api_key: str
     base_url: str
     model: str
+    provider_profile: str = "auto"
+    context_window: int = DEFAULT_LLM_CONTEXT_WINDOW
+    max_output_tokens: int = DEFAULT_LLM_MAX_OUTPUT_TOKENS
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,7 @@ class Settings:
     max_format_retries: int = 2
     llm_timeout_sec: float = 480.0
     llm_provider_concurrency: int = 4
+    llm_prompt_safety_tokens: int = DEFAULT_LLM_PROMPT_SAFETY_TOKENS
     pro_degradation_threshold: int = 3
     pro_degradation_cooldown_sec: int = 600
 
@@ -113,6 +120,11 @@ class Settings:
         default_key = os.environ.get("LLM_API_KEY", "")
         default_url = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         default_model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
+        default_provider_profile = os.environ.get("LLM_PROVIDER_PROFILE", "auto")
+        default_context_window = _env_int("LLM_CONTEXT_WINDOW", DEFAULT_LLM_CONTEXT_WINDOW)
+        default_max_output_tokens = _env_int(
+            "LLM_MAX_OUTPUT_TOKENS", DEFAULT_LLM_MAX_OUTPUT_TOKENS
+        )
 
         if require_llm and not default_key:
             any_key = any(os.environ.get(f"{r.upper()}_API_KEY") for r in ROLES)
@@ -123,7 +135,15 @@ class Settings:
                 )
 
         roles = {
-            name: _role_config(name.upper(), default_key, default_url, default_model)
+            name: _role_config(
+                name.upper(),
+                default_key,
+                default_url,
+                default_model,
+                default_provider_profile,
+                default_context_window,
+                default_max_output_tokens,
+            )
             for name in ROLES
         }
 
@@ -141,6 +161,9 @@ class Settings:
             max_format_retries=_env_int("MAX_FORMAT_RETRIES", 2),
             llm_timeout_sec=_env_float("LLM_TIMEOUT_SEC", 480.0),
             llm_provider_concurrency=max(1, _env_int("LLM_PROVIDER_CONCURRENCY", 4)),
+            llm_prompt_safety_tokens=max(
+                0, _env_int("LLM_PROMPT_SAFETY_TOKENS", DEFAULT_LLM_PROMPT_SAFETY_TOKENS)
+            ),
             pro_degradation_threshold=_env_int("PRO_DEGRADATION_THRESHOLD", 3),
             pro_degradation_cooldown_sec=_env_int("PRO_DEGRADATION_COOLDOWN_SEC", 600),
             source_ingest_concurrency=_env_int("SOURCE_INGEST_CONCURRENCY", 4),
@@ -182,11 +205,37 @@ def load_runtime_env(project_root: Path | None = None) -> None:
     _load_env_file(paths.workspace_config_path(root), trusted=False)
 
 
-def _role_config(role: str, default_key: str, default_url: str, default_model: str) -> RoleConfig:
+def _role_config(
+    role: str,
+    default_key: str,
+    default_url: str,
+    default_model: str,
+    default_provider_profile: str,
+    default_context_window: int,
+    default_max_output_tokens: int,
+) -> RoleConfig:
+    profile = os.environ.get(f"{role}_PROVIDER_PROFILE", default_provider_profile).strip().lower()
+    if profile not in {"auto", "deepseek", "openai", "generic"}:
+        raise ConfigurationError(
+            f"{role}_PROVIDER_PROFILE must be auto, deepseek, openai, or generic; got {profile!r}."
+        )
+    context_window = _env_int(f"{role}_CONTEXT_WINDOW", default_context_window)
+    max_output_tokens = _env_int(f"{role}_MAX_OUTPUT_TOKENS", default_max_output_tokens)
+    if context_window < 1_024:
+        raise ConfigurationError(f"{role}_CONTEXT_WINDOW must be at least 1024.")
+    if max_output_tokens < 1:
+        raise ConfigurationError(f"{role}_MAX_OUTPUT_TOKENS must be positive.")
+    if max_output_tokens >= context_window:
+        raise ConfigurationError(
+            f"{role}_MAX_OUTPUT_TOKENS must be smaller than {role}_CONTEXT_WINDOW."
+        )
     return RoleConfig(
         api_key=os.environ.get(f"{role}_API_KEY", default_key),
         base_url=os.environ.get(f"{role}_BASE_URL", default_url),
         model=os.environ.get(f"{role}_MODEL", default_model),
+        provider_profile=profile,
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
     )
 
 

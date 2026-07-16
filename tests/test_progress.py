@@ -21,7 +21,9 @@ def test_progress_tracker_updates_and_clamps_stage_counts(tmp_path):
     progress = ProgressTracker(tmp_path)
     progress.reset()
 
-    progress.set_stage("ocr", total=2, done=0, status="running", active=["a", "b", "c", "d", "e", "f"])
+    progress.set_stage(
+        "ocr", total=2, done=0, status="running", active=["a", "b", "c", "d", "e", "f"]
+    )
     progress.advance_stage("ocr", step=3, message="done")
 
     stage = progress.load()["stages"]["ocr"]
@@ -110,3 +112,69 @@ def test_record_error_is_structured_and_deduplicated(tmp_path):
         "action": "Install the crypto runtime and resume.",
         "timestamp": errors[0]["timestamp"],
     }
+
+
+def test_fail_stage_freezes_a_coherent_terminal_snapshot(tmp_path):
+    progress = ProgressTracker(tmp_path)
+    progress.reset()
+    progress.begin_run()
+    progress.set_stage("ocr", total=3, status="running", active="chapter-3.pdf")
+    progress.set_stage("clean", total=3, done=1, status="running", active="chapter-1.pdf")
+    progress.set_stage("cut", total=3, status="running", active="chapter-1.pdf")
+
+    progress.fail_stage(
+        "ocr",
+        "PDF stream is invalid",
+        code="ocr_failed",
+        resource="chapter-2.pdf",
+        recoverable=True,
+        action="Repair the PDF and resume.",
+    )
+    # Work already dispatched to a thread may report progress after cancellation;
+    # it must not turn a stopped run back into a visually active one.
+    progress.set_stage("ocr", status="running", active="chapter-3.pdf", message="pending")
+    progress.set_stage("clean", status="running", active="chapter-3.pdf")
+    progress.advance_stage("clean")
+    progress.complete_stage("cut")
+
+    state = progress.load()
+    assert state["phase"] == "failed"
+    assert state["stages"]["ocr"]["status"] == "failed"
+    assert state["stages"]["ocr"]["active"] == ["chapter-2.pdf"]
+    assert state["stages"]["clean"]["status"] == "partial"
+    assert state["stages"]["clean"]["done"] == 1
+    assert state["stages"]["clean"]["active"] == []
+    assert state["stages"]["cut"]["status"] == "pending"
+    assert state["stages"]["cut"]["active"] == []
+    assert state["errors"][-1]["resource"] == "chapter-2.pdf"
+
+
+def test_fail_active_stage_closes_running_planner_stage(tmp_path):
+    progress = ProgressTracker(tmp_path)
+    progress.reset()
+    progress.begin_run()
+    progress.set_stage("cluster", total=2, done=1, status="running", active="cluster-2")
+
+    progress.fail_active_stage("RuntimeError: provider failed", code="engine_run_failed")
+
+    state = progress.load()
+    assert state["phase"] == "failed"
+    assert state["stages"]["cluster"]["status"] == "failed"
+    assert state["stages"]["cluster"]["active"] == ["cluster-2"]
+    assert state["errors"][-1]["stage"] == "cluster"
+    assert state["errors"][-1]["resource"] == "cluster-2"
+
+
+def test_stop_records_cancellation_without_error(tmp_path):
+    progress = ProgressTracker(tmp_path)
+    progress.reset()
+    progress.begin_run()
+    progress.set_stage("link", total=3, done=1, status="running", active="node-2")
+
+    progress.stop()
+
+    state = progress.load()
+    assert state["phase"] == "stopped"
+    assert state["stages"]["link"]["status"] == "partial"
+    assert state["stages"]["link"]["active"] == []
+    assert state["errors"] == []

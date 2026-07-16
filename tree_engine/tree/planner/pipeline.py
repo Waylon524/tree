@@ -11,6 +11,7 @@ import inspect
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
+from tree.agents.prompts import get_prompt, prompt_hash
 from tree.io import paths
 from tree.planner.dag import build_dag
 from tree.planner.manifest import manifest_generation_id, scan_materials
@@ -34,8 +35,8 @@ class PlannerError(RuntimeError):
     pass
 
 
-ARCHIVIST_ALGORITHM_VERSION = "v2-content-lineage"
-DAGGER_ALGORITHM_VERSION = "v2-generation-validated"
+ARCHIVIST_ALGORITHM_VERSION = "v3-strict-agent-schema"
+DAGGER_ALGORITHM_VERSION = "v3-explicit-prerequisites"
 
 
 class HasDagger(Protocol):
@@ -291,6 +292,12 @@ def planner_producer_signature(settings: Any) -> str:
             "ocr": planner_ocr_signature(settings),
             "archivist_model": getattr(archivist, "model", ""),
             "archivist_base_url": getattr(archivist, "base_url", ""),
+            "archivist_repair_attempts": getattr(
+                settings, "archivist_mtu_repair_attempts", 2
+            ),
+            "prompts": _effective_prompt_hashes(
+                settings, ("archivist_clean", "archivist_mtu")
+            ),
             "long_document_threshold": 100_000,
         }
     )
@@ -304,6 +311,9 @@ def planner_ocr_signature(settings: Any) -> str:
             "orientation": True,
             "unwarping": True,
             "chart_recognition": True,
+            "pdf_max_pages_per_job": getattr(
+                settings, "source_ocr_pdf_max_pages_per_job", 99
+            ),
         }
     )
 
@@ -317,6 +327,16 @@ def planner_generation_id(manifest: dict[str, Any], settings: Any) -> str:
             "dagger_algorithm": DAGGER_ALGORITHM_VERSION,
             "dagger_model": getattr(dagger, "model", ""),
             "dagger_base_url": getattr(dagger, "base_url", ""),
+            "dagger_repair_attempts": getattr(settings, "dagger_repair_attempts", 2),
+            "dagger_max_nodes_per_call": getattr(
+                settings, "dagger_max_nodes_per_call", 400
+            ),
+            "dagger_cluster_auto_accept_singleton": getattr(
+                settings, "dagger_cluster_auto_accept_singleton", True
+            ),
+            "prompts": _effective_prompt_hashes(
+                settings, ("dagger", "dagger_prerequisites")
+            ),
             "embed_cluster_enabled": getattr(settings, "dagger_embed_cluster_enabled", True),
             "cluster_similarity_threshold": getattr(
                 settings, "dagger_cluster_similarity_threshold", 0.80
@@ -326,6 +346,15 @@ def planner_generation_id(manifest: dict[str, Any], settings: Any) -> str:
             "max_unassigned_ratio": getattr(settings, "dagger_max_unassigned_ratio", 0.10),
         }
     )[:24]
+
+
+def _effective_prompt_hashes(settings: Any, names: tuple[str, ...]) -> dict[str, str]:
+    root_value = getattr(settings, "project_root", None)
+    project_root = Path(root_value) if root_value else None
+    return {
+        name: prompt_hash(get_prompt(name, project_root=project_root))
+        for name in names
+    }
 
 
 def _validate_dagger_fallback_rate(dag: dict[str, Any], mtus: list[MTU], settings: Any) -> None:

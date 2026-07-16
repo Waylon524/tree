@@ -189,6 +189,7 @@ async def revise_node_from_feedback(root: Path, node_id: str, feedback: str) -> 
             prior_contents=[],
             retrieved=retrieved + finished,
             node_context=_learning_node_context(node_id, dag, nodes_by_id, parents, children),
+            node_id=node_id,
         )
         revised = result.draft_content.strip()
         if not revised:

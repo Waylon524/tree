@@ -2,6 +2,33 @@
 
 本文件记录项目每次已落地变更，按时间倒序维护。未来计划请查看 [PLAN.md](PLAN.md)。
 
+## Unreleased - 2026-07-16
+
+### Added
+
+- 为 Archivist 与 Dagger 的全部 AI JSON 边界增加严格 Pydantic schema 和唯一 JSON 对象提取；字段类型、必填内容、未知字段与跨对象一致性错误现在进入受控 repair，并在耗尽后失败关闭。
+- 为 Examiner 生成的 Writer Instructions 增加严格结构模型，校验覆盖节点、教学范围、必需概念、公式、推导、禁止越界项和先修缺口后才允许传给 Writer。
+- 增加 `auto`、`deepseek`、`openai`、`generic` provider profile，以及全局/角色级 context window、输出预留和安全余量；未知兼容端点只发送标准字段，明确的不支持参数会在当前 provider/model 下做一次可观测降级并缓存。
+- 增加请求前 token 硬门槛、RAG/repair 可选上下文裁剪和 Dagger 覆盖输入递归分批；预算日志只记录数量，不记录提示词、密钥或学生答案。
+- 增加覆盖全部 AI 调用的 operation 规格，按任务配置输出 token、timeout、thinking/reasoning、JSON 模式和重试上限，并记录安全的 usage、耗时、重试、终止原因与降级遥测。
+
+### Changed
+
+- LLM 响应现在统一验证 choices、message、content、refusal、tool calls 与 `finish_reason`，仅在完整响应通过契约后记录 provider 成功；异常退出会把流水线、当前阶段和 active 状态统一收敛到失败或停止终态。
+- Examiner 要求完整且唯一的五段试卷、路由与 reconciliation 标记，并验证 `Covered_Node_IDs`；Writer 拒绝空教学正文和带项目符号/编号/引用变体的试卷或答案区块。
+- Writer 的规则优先级固定为代码硬约束、结构化 Writer Instructions、动态上下文；草稿、Bottleneck、RAG 和反馈统一作为不可信数据传入，已完成先修默认只引用而不重教。
+- Dagger 的每个目标节点必须显式返回 `internal_prerequisite_decision=selected|none`，不再把缺失返回静默解释为无前置；建图会验证覆盖、define 来源和自依赖，并对异常高根节点比例执行一次全局复核而不强制补边。
+- Dagger 遇到节点构建输出截断时不再原样重试，而是递归拆批；环修复只允许删除当前环上的必要前置边，并冻结非环节点、外部前置和合法多根/并行结构。
+- Planner 缓存签名现在包含有效 Archivist/Dagger prompt 哈希、算法/schema 版本和相应语义配置；API key 与原始 prompt 正文不进入签名。
+
+### Fixed
+
+- 修复含超大嵌入资源的 PDF 在 OCR 分块时触发 pypdf `LimitReachedError` 的问题；只在本地读取期间把声明流上限提升到文件实际字节数，处理后恢复默认 75 MB 阈值，并保留其他解压与图片安全限制。
+- 修复某个并发材料失败后，迟到 OCR 回调把采集、筛净和分种重新显示为“进行中”的竞态；失败阶段、全局阶段和结构化错误现在原子写入，旧失败快照也会在 API 展示层归一化。
+- 修复生长页在常用桌面窗口中状态徽标逐字断行、长文件名挤压进度列和异常信息重复的问题；进度行改为响应式网格，失败摘要集中到单个错误卡片，并覆盖紧凑窗口布局。
+- 修复“重新生长”沿用旧试卷、草稿和迭代历史的问题；Regrow 现在从新试卷开始并清空旧输出状态，普通失败恢复仍保留检查点。
+- 修复 Archivist metadata repair 的 system prompt 要求外层 `unit`、解析器却只接受字段对象的契约冲突；标题、defines 和摘要修复现在与严格 schema 完全一致。
+
 ## 0.3.7 - 2026-07-15
 
 ### Added

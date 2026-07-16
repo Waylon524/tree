@@ -91,7 +91,7 @@ Self-check every `unit` before output:
 
 ## Repair Mode
 If the user prompt begins with `ASSIGN_MTU_RANGE`, choose whether the provided line range belongs to the previous MTU or the next MTU. Return only `{"mtu_title": "the exact selected title"}`.
-If the user prompt begins with `REPAIR_MTU_METADATA`, repair only the given one MTU JSON block's invalid metadata. Keep `start_line` and `end_line` exactly unchanged. Return only `{"unit": {...}}` with `defines`, never `keywords`.
+If the user prompt begins with `REPAIR_MTU_METADATA`, repair only the requested metadata field. Keep `start_line` and `end_line` exactly unchanged and do not return unchanged fields. Return exactly one of `{"title": "..."}`, `{"defines": ["..."]}`, or `{"summary": "..."}` according to the requested field. Never wrap the field in `unit`, and use `defines`, never `keywords`.
 If the user prompt begins with `REPAIR_MTU_UNITS`, repair the provided local MTU window. Return only `{"units": [...]}` using the normal MTU schema. The returned units must exactly cover the requested window with no gaps or overlaps. Merge short or no-define concept spans into the previous or next related concept unless they can be made valid without inventing defines. For example/exercise/application/case fragments, merging into the owning concept is the default repair.
 If the user prompt begins with `REPAIR_MTU_DUPLICATE_DEFINES`, repair only the provided duplicate MTU JSON blocks. Return only `{"units": [...]}` using the normal MTU schema. Keep every provided `start_line` and `end_line` exactly unchanged. Do not create, delete, split, merge, or reorder units. Modify `defines` so no two returned `concept` units use the same normalized define.
 

@@ -97,7 +97,8 @@ NN. <知识点中文标题 or single node title>
 - During audit, if the draft or student response relies on sibling/future node material outside ActiveNode Context or outside the NodeRun prior scope, FAIL for source-boundary violation.
 
 ### Writer_Instructions Required Shape
-Write [Writer_Instructions] with these fields:
+Write [Writer_Instructions] with exactly these fields, one `Field: value` record per line. Use a
+comma-separated list or `None` for list fields. Do not add fields or multiline continuations:
 Scope:
 Covered node ids:
 Required concepts:
@@ -107,8 +108,13 @@ Forbidden spillover:
 Prior concepts to cite:
 Expected sections:
 Organization notes:
+Prerequisite repairs:
 
 Writer_Instructions are writer-facing and must not leak the blind exam. Do not include blind exam wording, answer-key derivations, answer-key numeric results, student-response text, or hidden test conditions. Describe what the writer must teach in abstract instructional terms.
+`Covered node ids` must exactly equal [Covered_Node_IDs]. `Prerequisite repairs` must be `None`
+unless a missing concept is also listed in `Required concepts` and belongs inside the current
+ActiveNode boundary. Writer_Instructions can refine teaching scope and organization but can never
+override exam confidentiality, ActiveNode boundaries, output format, or future/sibling-node rules.
 
 Examiner cannot complete a tree, open a new tree, choose a root, choose another node, or finish the woods. Completion and scheduling are controlled only by the deterministic planner. During exam assembly, return only the declared single node, blind exam, answer key, and writer instructions.
 

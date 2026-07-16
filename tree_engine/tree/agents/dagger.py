@@ -11,39 +11,49 @@ import json
 from typing import Any
 
 from tree.agents.base import Agent
-from tree.agents.parsers import extract_json_object
+from tree.agents.schemas import (
+    DaggerNodesResponse,
+    DaggerPrerequisitesResponse,
+    parse_agent_json,
+)
 
 
 class DaggerAgent(Agent):
     role = "dagger"
 
     async def build_nodes(
-        self, payload: list[dict[str, Any]], *, timeout_sec: float | None = None
+        self,
+        payload: list[dict[str, Any]],
+        *,
+        timeout_sec: float | None = None,
+        operation: str = "dagger.build_nodes",
     ) -> dict[str, Any]:
         """Send MTU metadata, return parsed ``{"nodes": [...]}``."""
         user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
         raw = await self.complete(
-            user_prompt, system_prompt=self.prompt_text("dagger"), timeout_sec=timeout_sec
+            user_prompt,
+            operation=operation,
+            system_prompt=self.prompt_text("dagger"),
+            timeout_sec=timeout_sec,
         )
-        result = extract_json_object(raw)
-        if not isinstance(result.get("nodes"), list):
-            raise ValueError("Dagger response missing `nodes` list")
-        return result
+        return parse_agent_json(raw, DaggerNodesResponse).model_dump(exclude_none=True)
 
     async def build_prerequisites(
-        self, payload: dict[str, Any], *, timeout_sec: float | None = None
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout_sec: float | None = None,
+        operation: str = "dagger.select_prerequisites",
     ) -> dict[str, Any]:
         """Send nodes + define dictionary, return ``{"node_prerequisites": [...]}``."""
         user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
         raw = await self.complete(
             user_prompt,
+            operation=operation,
             system_prompt=self.prompt_text("dagger_prerequisites"),
             timeout_sec=timeout_sec,
         )
-        result = extract_json_object(raw)
-        if not isinstance(result.get("node_prerequisites"), list):
-            raise ValueError("Dagger response missing `node_prerequisites` list")
-        return result
+        return parse_agent_json(raw, DaggerPrerequisitesResponse).model_dump(exclude_none=True)
 
     async def repair_defines(
         self, payload: dict[str, Any], *, timeout_sec: float | None = None
@@ -53,7 +63,11 @@ class DaggerAgent(Agent):
             "task": "REPAIR_NODE_DEFINES",
             **payload,
         }
-        return await self.build_nodes([repair_prompt], timeout_sec=timeout_sec)
+        return await self.build_nodes(
+            [repair_prompt],
+            timeout_sec=timeout_sec,
+            operation="dagger.repair_defines",
+        )
 
     async def repair_prerequisites(
         self, payload: dict[str, Any], *, timeout_sec: float | None = None
@@ -63,7 +77,11 @@ class DaggerAgent(Agent):
             "task": "REPAIR_NODE_PREREQUISITES",
             **payload,
         }
-        return await self.build_prerequisites(repair_prompt, timeout_sec=timeout_sec)
+        return await self.build_prerequisites(
+            repair_prompt,
+            timeout_sec=timeout_sec,
+            operation="dagger.repair_prerequisites",
+        )
 
     async def build(
         self, payload: list[dict[str, Any]], *, timeout_sec: float | None = None

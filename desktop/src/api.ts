@@ -559,6 +559,9 @@ export interface AdvancedSettings {
   max_format_retries: string;
   llm_timeout_sec: string;
   llm_provider_concurrency: string;
+  llm_context_window: string;
+  llm_max_output_tokens: string;
+  llm_prompt_safety_tokens: string;
   pro_degradation_threshold: string;
   pro_degradation_cooldown_sec: string;
   source_ingest_concurrency: string;
@@ -586,6 +589,7 @@ export interface SettingsData {
   llm_api_key_configured: boolean;
   llm_base_url: string;
   llm_model: string;
+  llm_provider_profile: string;
   role_models: RoleModels;
   paddleocr_api_token_configured: boolean;
   paddleocr_api_url: string;
@@ -599,6 +603,9 @@ export interface SettingsData {
   max_format_retries: number;
   llm_timeout_sec: number;
   llm_provider_concurrency: number;
+  llm_context_window: number;
+  llm_max_output_tokens: number;
+  llm_prompt_safety_tokens: number;
   pro_degradation_threshold: number;
   pro_degradation_cooldown_sec: number;
   source_ingest_concurrency: number;
@@ -626,6 +633,7 @@ export interface SettingsSave extends AdvancedSettings {
   llm_api_key: string;
   llm_base_url: string;
   llm_model: string;
+  llm_provider_profile: string;
   role_models: RoleModels;
   paddleocr_api_token: string;
   paddleocr_api_url: string;

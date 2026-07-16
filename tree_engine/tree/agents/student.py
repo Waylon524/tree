@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tree.agents.base import Agent
+from tree.agents.context import bounded_rag_hits
 
 
 class StudentAgent(Agent):
@@ -28,12 +29,12 @@ class StudentAgent(Agent):
         if learned_hits:
             parts.append(_format_learned(learned_hits))
         parts.append(f"\n## [Blind_Exam]\n{blind_exam}\n")
-        return await self.complete("\n".join(parts))
+        return await self.complete("\n".join(parts), operation="student.answer")
 
 
 def _format_learned(hits: list[dict]) -> str:
     parts = ["Retrieved RAG context from already learned materials:\n"]
-    for i, hit in enumerate(hits, start=1):
+    for i, hit in enumerate(bounded_rag_hits(hits), start=1):
         meta = hit.get("metadata") or {}
         source = meta.get("path") or meta.get("filename") or meta.get("doc_id") or "unknown"
         score = hit.get("score")
