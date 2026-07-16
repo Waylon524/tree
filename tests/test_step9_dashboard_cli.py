@@ -88,6 +88,29 @@ def test_build_watch_model_summarizes_runtime(tmp_path):
     assert model["node_display_labels"]["n1"] == "001. A"
 
 
+def test_stopped_run_hides_checkpointed_nodes_from_live_active_state(tmp_path):
+    _seed_workspace(tmp_path)
+    progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
+    progress["phase"] = "stopped"
+    progress["stages"]["noderun"]["status"] = "partial"
+    progress["stages"]["noderun"]["active"] = []
+    write_json_atomic(paths.progress_path(tmp_path), progress)
+
+    stopped = build_watch_model(tmp_path)
+
+    assert stopped["active_node_runs"] == []
+    assert stopped["running_node_ids"] == []
+    state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+    assert state.node_executions[0].status == "in_progress"
+    assert state.node_runs[0].status == "running"
+
+    progress["phase"] = "running"
+    write_json_atomic(paths.progress_path(tmp_path), progress)
+    resumed = build_watch_model(tmp_path)
+    assert resumed["active_node_runs"] == ["n1"]
+    assert resumed["running_node_ids"] == ["n1"]
+
+
 def test_build_watch_model_prefers_planner_node_count_during_link(tmp_path):
     _seed_workspace(tmp_path)
     progress = json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))
@@ -187,7 +210,7 @@ def test_watch_rendering_wraps_dashboard_and_surfaces_errors(tmp_path):
     assert "edges" not in output
     assert "phase blocked" not in output
     assert "message TREE_BLOCKED" not in output
-    assert "active 1" in output
+    assert "active 0" in output
     assert "Stage" in output
     assert "█" in output
     assert "░" in output

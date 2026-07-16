@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
@@ -12,7 +13,9 @@ from tree.ingest.ocr_engine import (
     OCREngine,
     PdfCryptoDependencyError,
     PdfPasswordRequiredError,
+    _PdfProgressTracker,
     _allow_local_pdf_streams,
+    _progress_pages,
     pdf_crypto_runtime_status,
     set_job_store_root,
 )
@@ -77,6 +80,35 @@ def test_pdf_chunks_are_ocrd_with_max_five_concurrent_files(tmp_path, monkeypatc
 
     assert max_active == 5
     assert result_holder["text"].split("\n\n") == [chunk.stem for chunk in chunks]
+
+
+def test_pdf_chunk_progress_is_monotonic_when_events_arrive_out_of_order():
+    tracker = _PdfProgressTracker(165)
+    chunk_1 = {
+        "chunks_total": 2,
+        "file_pages_total": 165,
+        "chunk_index": 1,
+        "chunk_pages_total": 99,
+        "_file_progress_tracker": tracker,
+    }
+    chunk_2 = {
+        "chunks_total": 2,
+        "file_pages_total": 165,
+        "chunk_index": 2,
+        "chunk_pages_total": 66,
+        "_file_progress_tracker": tracker,
+    }
+
+    updates = [
+        _progress_pages(62, 66, chunk_2)[0],
+        _progress_pages(20, 99, chunk_1)[0],
+        _progress_pages(8, 66, chunk_2)[0],
+        _progress_pages(99, 99, chunk_1)[0],
+        _progress_pages(66, 66, chunk_2)[0],
+    ]
+
+    assert updates == [62, 82, 82, 161, 165]
+    assert updates == sorted(updates)
 
 
 def test_direct_ocr_files_share_global_five_file_gate(tmp_path, monkeypatch):
@@ -268,6 +300,30 @@ def test_local_pdf_stream_limit_is_bounded_by_file_size_and_restored(tmp_path, m
         assert filters.MAX_DECLARED_STREAM_LENGTH == pdf.stat().st_size
 
     assert filters.MAX_DECLARED_STREAM_LENGTH == 128
+
+
+def test_local_pdf_scope_summarizes_known_pypdf_warnings(tmp_path, caplog):
+    pdf = tmp_path / "recoverable.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    reader_logger = logging.getLogger("pypdf._reader")
+    dictionary_logger = logging.getLogger("pypdf.generic._data_structures")
+    caplog.set_level(logging.WARNING)
+
+    with _allow_local_pdf_streams(pdf):
+        reader_logger.warning("Object 12 0 not defined.")
+        reader_logger.warning("Object 12 0 not defined.")
+        dictionary_logger.warning(
+            "Multiple definitions in dictionary at byte 42 for key /Filter"
+        )
+        reader_logger.warning("EOF marker seems truncated")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert not any("Object 12 0 not defined" in message for message in messages)
+    assert not any("Multiple definitions in dictionary" in message for message in messages)
+    assert sum("pypdf recovered warnings for recoverable.pdf" in message for message in messages) == 1
+    assert any("undefined_object=2" in message for message in messages)
+    assert any("duplicate_filter=1" in message for message in messages)
+    assert any("EOF marker seems truncated" in message for message in messages)
 
 
 def test_remote_job_id_is_resumed_after_poll_timeout(tmp_path, monkeypatch):

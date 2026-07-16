@@ -21,7 +21,12 @@ def build_watch_model(root: Path) -> dict[str, Any]:
     dag = load_dag(root)
     nodes = load_nodes(root)
     covered = ledger_covered_node_ids(root)
-    active = [be.node_id for be in state.node_executions if be.status == "in_progress"]
+    process_is_running = str(progress.get("phase") or "").strip().lower() == "running"
+    active = (
+        [be.node_id for be in state.node_executions if be.status == "in_progress"]
+        if process_is_running
+        else []
+    )
     completed = [be.node_id for be in state.node_executions if be.status == "completed"]
     failed = [
         be.node_id
@@ -46,7 +51,11 @@ def build_watch_model(root: Path) -> dict[str, Any]:
         "active_node_runs": active,
         "completed_node_runs": completed,
         "failed_node_ids": sorted(failed),
-        "running_node_ids": sorted({run.node_id for run in state.node_runs if run.status == "running"}),
+        "running_node_ids": sorted(
+            {run.node_id for run in state.node_runs if run.status == "running"}
+            if process_is_running
+            else set()
+        ),
         "failed_running_node_ids": sorted(
             {
                 run.node_id

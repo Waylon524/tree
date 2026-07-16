@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tree.io import paths
+from tree.observability.progress import ProgressTracker
 from tree.planner.store import envelope, write_json_atomic
 from tree.state.manager import StateManager
 from tree.state.models import (
@@ -209,6 +210,7 @@ def test_dag_payload_labels_edges_and_statuses(workspace):
             ],
         )
     )
+    ProgressTracker(workspace).begin_run()
     client = _authed_client(workspace)
 
     data = client.get("/api/dag").json()
@@ -940,6 +942,26 @@ def test_status_includes_engine_state(workspace):
     client = _authed_client(workspace)
     data = client.get(f"/api/status?token={TOKEN}").json()
     assert data["engine"] in {"running", "stopped"}
+    assert data["llm_operations"] == []
+
+
+def test_llm_operation_diagnostics_api_reads_safe_records(workspace):
+    from tree.observability.operation_log import OperationLog
+
+    OperationLog(workspace).append(
+        {
+            "event": "complete",
+            "operation": "archivist.clean",
+            "role": "archivist",
+            "provider": "generic",
+        }
+    )
+
+    client = _authed_client(workspace)
+    response = client.get("/api/diagnostics/llm-operations")
+
+    assert response.status_code == 200
+    assert response.json()["operations"][-1]["operation"] == "archivist.clean"
 
 
 def test_open_dag_opens_existing_svg(workspace, monkeypatch):

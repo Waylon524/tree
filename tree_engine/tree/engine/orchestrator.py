@@ -151,10 +151,16 @@ class TreeEngine:
                 active=list(running),
                 message="Running active nodes",
             )
-            completed, _pending = await asyncio.wait(
-                running.values(),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            try:
+                completed, _pending = await asyncio.wait(
+                    running.values(),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except asyncio.CancelledError:
+                for task in running.values():
+                    task.cancel()
+                await asyncio.gather(*running.values(), return_exceptions=True)
+                raise
             for task in completed:
                 node_id = next(key for key, value in running.items() if value is task)
                 running.pop(node_id, None)

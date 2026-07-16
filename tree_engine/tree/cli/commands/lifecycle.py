@@ -9,6 +9,7 @@ from pathlib import Path
 from tree.cli import theme
 from tree.config import load_runtime_env
 from tree.io import paths, process
+from tree.observability.progress import ProgressTracker
 from tree.rag.service import start_embedding_service, stop_embedding_service
 
 
@@ -62,6 +63,7 @@ def _engine_run_argv() -> list[str]:
 
 
 def stop_engine(root: Path) -> LifecycleResult:
+    ProgressTracker(root).stop()
     pid_path = paths.service_pid_path(root, "engine")
     if not pid_path.exists():
         embedding = stop_embedding_service(force=True)
@@ -69,7 +71,7 @@ def stop_engine(root: Path) -> LifecycleResult:
             f"{theme.label('engine')} {theme.status('not found')}\n{embedding.message}"
         )
     pid = int(pid_path.read_text(encoding="utf-8").strip())
-    process.terminate_pid(pid)
+    process.terminate_pid(pid, force=True)
     pid_path.unlink(missing_ok=True)
     embedding = stop_embedding_service(force=True)
     return LifecycleResult(

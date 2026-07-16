@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from tree.config import ROLES, RoleConfig, Settings
 from tree.model.budget import PromptBudgetExceededError, estimate_chat_tokens
 from tree.model.operations import LLMOperationSpec, resolve_operation_spec
+from tree.observability.operation_log import OperationLog
 from tree.observability.retry import (
     AdaptiveConcurrencyLimiter,
     DegradationTracker,
@@ -82,6 +83,7 @@ class LLMClient:
         self._max_retries = settings.max_retries
         self._timeout_sec = settings.llm_timeout_sec
         self._prompt_safety_tokens = settings.llm_prompt_safety_tokens
+        self._operation_log = OperationLog(settings.project_root)
 
         for role_name in ROLES:
             config = settings.role(role_name)
@@ -161,6 +163,22 @@ class LLMClient:
                 max_output_tokens,
                 context_window,
             )
+            self._operation_log.append(
+                {
+                    "event": "rejected",
+                    "operation": operation_id,
+                    "role": role,
+                    "effective_role": effective_role,
+                    "provider": capabilities.name,
+                    "model": model,
+                    "estimated_input_tokens": estimated_input_tokens,
+                    "requested_output_tokens": max_output_tokens,
+                    "input_budget_tokens": max(0, input_budget_tokens),
+                    "finish_reason": "prompt_budget",
+                    "retries": 0,
+                    "degraded": effective_role != role,
+                }
+            )
             raise PromptBudgetExceededError(
                 role=role,
                 estimated_input_tokens=estimated_input_tokens,
@@ -210,6 +228,21 @@ class LLMClient:
                         model,
                         unsupported,
                     )
+                    self._operation_log.append(
+                        {
+                            "event": "capability_downgrade",
+                            "operation": operation_id,
+                            "role": role,
+                            "effective_role": effective_role,
+                            "provider": capabilities.name,
+                            "model": model,
+                            "option": unsupported,
+                            "estimated_input_tokens": estimated_input_tokens,
+                            "requested_output_tokens": max_output_tokens,
+                            "retries": retry_count,
+                            "degraded": True,
+                        }
+                    )
                     resp = await _create_completion(
                         client,
                         model=model,
@@ -226,6 +259,8 @@ class LLMClient:
             content = _extract_chat_content(resp)
             await limiter.record_success()
             usage_input, usage_output = _response_usage(resp)
+            finish_reason = _finish_reason(resp) or "unknown"
+            latency_ms = int((time.monotonic() - started_at) * 1000)
             logger.info(
                 "LLM call complete operation=%s role=%s effective_role=%s provider=%s model=%s "
                 "estimated_input=%d requested_output=%d usage_input=%s usage_output=%s "
@@ -239,10 +274,28 @@ class LLMClient:
                 max_output_tokens,
                 usage_input,
                 usage_output,
-                _finish_reason(resp) or "unknown",
+                finish_reason,
                 retry_count,
-                int((time.monotonic() - started_at) * 1000),
+                latency_ms,
                 effective_role != role,
+            )
+            self._operation_log.append(
+                {
+                    "event": "complete",
+                    "operation": operation_id,
+                    "role": role,
+                    "effective_role": effective_role,
+                    "provider": capabilities.name,
+                    "model": model,
+                    "estimated_input_tokens": estimated_input_tokens,
+                    "requested_output_tokens": max_output_tokens,
+                    "usage_input_tokens": usage_input,
+                    "usage_output_tokens": usage_output,
+                    "finish_reason": finish_reason,
+                    "retries": retry_count,
+                    "latency_ms": latency_ms,
+                    "degraded": effective_role != role,
+                }
             )
             return content
 
@@ -258,6 +311,22 @@ class LLMClient:
                 _attempt,
                 _delay,
                 type(exc).__name__,
+            )
+            self._operation_log.append(
+                {
+                    "event": "retry",
+                    "operation": operation_id,
+                    "role": role,
+                    "effective_role": effective_role,
+                    "provider": capabilities.name,
+                    "model": model,
+                    "estimated_input_tokens": estimated_input_tokens,
+                    "requested_output_tokens": max_output_tokens,
+                    "retry_attempt": _attempt,
+                    "retry_delay_sec": round(_delay, 3),
+                    "retry_reason": type(exc).__name__,
+                    "degraded": effective_role != role,
+                }
             )
 
         try:
@@ -284,6 +353,23 @@ class LLMClient:
                 retry_count,
                 int((time.monotonic() - started_at) * 1000),
                 type(exc).__name__,
+            )
+            self._operation_log.append(
+                {
+                    "event": "failed",
+                    "operation": operation_id,
+                    "role": role,
+                    "effective_role": effective_role,
+                    "provider": capabilities.name,
+                    "model": model,
+                    "estimated_input_tokens": estimated_input_tokens,
+                    "requested_output_tokens": max_output_tokens,
+                    "finish_reason": _exception_finish_reason(exc),
+                    "retries": retry_count,
+                    "latency_ms": int((time.monotonic() - started_at) * 1000),
+                    "error_type": type(exc).__name__,
+                    "degraded": effective_role != role,
+                }
             )
             if isinstance(exc, LLMOutputTruncatedError):
                 raise LLMOutputTruncatedError(
@@ -411,6 +497,18 @@ def _response_usage(resp: object) -> tuple[int | None, int | None]:
         return None
 
     return read("prompt_tokens", "input_tokens"), read("completion_tokens", "output_tokens")
+
+
+def _exception_finish_reason(exc: Exception) -> str:
+    if isinstance(exc, LLMOutputTruncatedError):
+        return "length"
+    if isinstance(exc, LLMContentFilteredError):
+        return "content_filter"
+    if isinstance(exc, LLMRefusalError):
+        return "refusal"
+    if isinstance(exc, LLMToolCallError):
+        return "tool_calls"
+    return "error"
 
 
 def _extract_chat_content(resp: object) -> str:

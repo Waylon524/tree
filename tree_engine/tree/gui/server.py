@@ -57,6 +57,7 @@ from tree.learning import (
     revise_node_from_feedback,
 )
 from tree.observability.progress import STAGES
+from tree.observability.operation_log import recent_operation_events
 from tree.planner.pipeline import load_dag
 from tree.planner.store import read_json, write_json_atomic
 from tree.planner.svg import write_dag_svg
@@ -156,6 +157,11 @@ def create_app(root: Path, *, token: str) -> FastAPI:
     def api_status(request: Request) -> dict[str, Any]:
         _require(request)
         return _status(root)
+
+    @app.get("/api/diagnostics/llm-operations")
+    def api_llm_operations(request: Request) -> dict[str, list[dict[str, Any]]]:
+        _require(request)
+        return {"operations": recent_operation_events(root, limit=20)}
 
     @app.get("/api/dag")
     def api_dag(request: Request) -> dict[str, Any]:
@@ -580,6 +586,7 @@ def _status(root: Path) -> dict[str, Any]:
         "embedding_server": embedding_service_status(),
         "embedding_backend": local_embed_backend_status(),
         "errors": model.get("errors") or [],
+        "llm_operations": recent_operation_events(root, limit=5),
         "rows": _stage_rows(model),
     }
 

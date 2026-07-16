@@ -22,7 +22,8 @@ from tree.planner.models import MTU
 from tree.planner.pipeline import load_nodes, planner_generation_id, rebuild_planner
 from tree.planner.store import artifact_hash, read_envelope_data, read_json
 
-LONG_DOCUMENT_CHAR_THRESHOLD = 100_000
+CLEAN_CHUNK_MIN_LINES = 700
+CLEAN_CHUNK_MAX_LINES = 1_000
 CLEAN_CHUNK_MIN_CHARS = 70_000
 CLEAN_CHUNK_MAX_CHARS = 100_000
 
@@ -516,19 +517,37 @@ def _is_api_concurrency_error(exc: Exception) -> bool:
 
 
 def split_raw_markdown_for_cleaning(raw_markdown: str) -> list[str]:
-    """Split raw OCR Markdown into cleanable chunks using heading boundaries."""
-    if len(raw_markdown) <= LONG_DOCUMENT_CHAR_THRESHOLD:
+    """Split OCR Markdown into chunks bounded by both line and character counts."""
+    parts = _cleaning_parts(raw_markdown)
+    if len(parts) <= CLEAN_CHUNK_MAX_LINES and len(raw_markdown) <= CLEAN_CHUNK_MAX_CHARS:
         return [raw_markdown]
 
     chunks: list[str] = []
     start = 0
-    while len(raw_markdown) - start > CLEAN_CHUNK_MAX_CHARS:
-        cut = _find_heading_cut(raw_markdown, start)
-        chunks.append(raw_markdown[start:cut])
-        start = cut
-    if start < len(raw_markdown):
-        chunks.append(raw_markdown[start:])
+    while start < len(parts):
+        hard_end = start
+        char_count = 0
+        while hard_end < len(parts) and hard_end - start < CLEAN_CHUNK_MAX_LINES:
+            part_length = len(parts[hard_end][0])
+            if hard_end > start and char_count + part_length > CLEAN_CHUNK_MAX_CHARS:
+                break
+            char_count += part_length
+            hard_end += 1
+
+        cut = _preferred_heading_part_cut(parts, start=start, hard_end=hard_end)
+        end = cut if cut is not None else hard_end
+        chunks.append("".join(part for part, _is_line_start in parts[start:end]))
+        start = end
     return [chunk for chunk in chunks if chunk]
+
+
+def _cleaning_parts(raw_markdown: str) -> list[tuple[str, bool]]:
+    """Return line-aware pieces that individually fit the character ceiling."""
+    parts: list[tuple[str, bool]] = []
+    for line in raw_markdown.splitlines(keepends=True):
+        for offset in range(0, len(line), CLEAN_CHUNK_MAX_CHARS):
+            parts.append((line[offset : offset + CLEAN_CHUNK_MAX_CHARS], offset == 0))
+    return parts
 
 
 def remove_ocr_image_html(raw_markdown: str) -> str:
@@ -570,24 +589,26 @@ def chunk_source_file_name(source_file: str, *, index: int, total: int) -> str:
     return f"{source_file}.part-{index:03d}"
 
 
-def _find_heading_cut(raw_markdown: str, start: int) -> int:
-    window_start = min(start + CLEAN_CHUNK_MIN_CHARS, len(raw_markdown))
-    window_end = min(start + CLEAN_CHUNK_MAX_CHARS, len(raw_markdown))
+def _preferred_heading_part_cut(
+    parts: list[tuple[str, bool]],
+    *,
+    start: int,
+    hard_end: int,
+) -> int | None:
+    """Prefer a nearby H1/H2/H3 boundary without violating either hard limit."""
     for level in (1, 2, 3):
-        match = _find_heading_in_region(raw_markdown, window_start, window_end, level)
-        if match is not None:
-            return match
-    return window_start
-
-
-def _find_heading_in_region(raw_markdown: str, start: int, end: int, level: int) -> int | None:
-    hashes = "#" * level
-    pattern = rf"(?m)^{re.escape(hashes)}(?!#)\s+\S"
-    for match in re.finditer(pattern, raw_markdown):
-        if start <= match.start() < end:
-            return match.start()
-        if match.start() >= end:
-            break
+        pattern = re.compile(rf"^{'#' * level}(?!#)\s+\S")
+        prefix_chars = 0
+        for index in range(start, hard_end):
+            part, is_line_start = parts[index]
+            if (
+                index > start
+                and is_line_start
+                and (index - start >= CLEAN_CHUNK_MIN_LINES or prefix_chars >= CLEAN_CHUNK_MIN_CHARS)
+                and pattern.match(part)
+            ):
+                return index
+            prefix_chars += len(part)
     return None
 
 

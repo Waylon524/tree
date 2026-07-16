@@ -30,10 +30,12 @@ from tree.planner.mtu import (
     number_lines,
     validate_and_normalize,
 )
+from tree.observability.retry import LLMOutputTruncatedError
 
 logger = logging.getLogger(__name__)
 
 _MIN_FINAL_MTU_LINES = 20
+_CLEAN_TRUNCATION_MIN_LINES = 100
 
 
 class ArchivistAgent(Agent):
@@ -46,7 +48,62 @@ class ArchivistAgent(Agent):
         timeout_sec: float | None = None,
         repair_attempts: int = 1,
     ) -> str:
-        """Remove non-teaching OCR lines using an LLM delete plan."""
+        """Remove non-teaching OCR lines, bisecting windows truncated by the model."""
+        return await self._clean_with_truncation_split(
+            raw_markdown,
+            timeout_sec=timeout_sec,
+            repair_attempts=repair_attempts,
+        )
+
+    async def _clean_with_truncation_split(
+        self,
+        raw_markdown: str,
+        *,
+        timeout_sec: float | None,
+        repair_attempts: int,
+    ) -> str:
+        try:
+            return await self._clean_window(
+                raw_markdown,
+                timeout_sec=timeout_sec,
+                repair_attempts=repair_attempts,
+            )
+        except LLMOutputTruncatedError:
+            lines = raw_markdown.splitlines()
+            if len(lines) <= _CLEAN_TRUNCATION_MIN_LINES:
+                logger.warning(
+                    "Clean response remained truncated for a %d-line window; "
+                    "keeping the window unchanged",
+                    len(lines),
+                )
+                return raw_markdown.strip()
+
+            midpoint = len(lines) // 2
+            logger.warning(
+                "Clean response truncated for a %d-line window; retrying as %d and %d lines",
+                len(lines),
+                midpoint,
+                len(lines) - midpoint,
+            )
+            left = await self._clean_with_truncation_split(
+                "\n".join(lines[:midpoint]),
+                timeout_sec=timeout_sec,
+                repair_attempts=repair_attempts,
+            )
+            right = await self._clean_with_truncation_split(
+                "\n".join(lines[midpoint:]),
+                timeout_sec=timeout_sec,
+                repair_attempts=repair_attempts,
+            )
+            return "\n".join(part for part in (left, right) if part).strip()
+
+    async def _clean_window(
+        self,
+        raw_markdown: str,
+        *,
+        timeout_sec: float | None,
+        repair_attempts: int,
+    ) -> str:
         lines = raw_markdown.splitlines()
         line_count = len(lines)
         if line_count == 0:

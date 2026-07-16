@@ -63,6 +63,10 @@ _IMAGE_LIST_ITEM_RE = re.compile(
     r"^\s*(?:[-*+]\s+)?(?:https?://\S+|[\\/\w .-]+\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?))(?:\s*)$",
     re.IGNORECASE,
 )
+_PYPDF_RECOVERABLE_LOGGERS = (
+    "pypdf._reader",
+    "pypdf.generic._data_structures",
+)
 
 
 class PdfCryptoDependencyError(RuntimeError):
@@ -75,6 +79,49 @@ class PdfPasswordRequiredError(RuntimeError):
 
 class PdfStreamLimitError(RuntimeError):
     """A PDF declares a stream larger than the local file can safely contain."""
+
+
+class _PdfProgressTracker:
+    """Aggregate per-chunk OCR progress monotonically for one source PDF."""
+
+    def __init__(self, file_pages_total: int) -> None:
+        self.file_pages_total = max(0, int(file_pages_total))
+        self._chunk_pages_done: dict[int, int] = {}
+        self._lock = threading.Lock()
+
+    def update(self, chunk_index: int, pages_done: int, chunk_pages_total: int | None) -> int:
+        index = max(1, int(chunk_index))
+        done = max(0, int(pages_done))
+        if chunk_pages_total is not None:
+            done = min(done, max(0, int(chunk_pages_total)))
+        with self._lock:
+            self._chunk_pages_done[index] = max(
+                self._chunk_pages_done.get(index, 0),
+                done,
+            )
+            return min(self.file_pages_total, sum(self._chunk_pages_done.values()))
+
+
+class _PypdfWarningCollector(logging.Handler):
+    """Count only known recoverable pypdf warnings and forward everything else."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.counts = {"undefined_object": 0, "duplicate_filter": 0}
+        self.thread_id = threading.get_ident()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if record.thread != self.thread_id:
+            logger.log(record.levelno, "pypdf %s: %s", record.name, message)
+            return
+        if re.search(r"\bObject \d+ \d+ not defined\b", message):
+            self.counts["undefined_object"] += 1
+            return
+        if "Multiple definitions in dictionary" in message and "/Filter" in message:
+            self.counts["duplicate_filter"] += 1
+            return
+        logger.log(record.levelno, "pypdf %s: %s", record.name, message)
 
 
 @contextmanager
@@ -96,11 +143,25 @@ def _allow_local_pdf_streams(pdf_path: Path) -> Iterator[None]:
     file_size = max(0, pdf_path.stat().st_size)
     with _PDF_READER_LOCK:
         original_limit = filters.MAX_DECLARED_STREAM_LENGTH
+        collector = _PypdfWarningCollector()
+        logger_states: list[tuple[logging.Logger, bool]] = []
+        for logger_name in _PYPDF_RECOVERABLE_LOGGERS:
+            pypdf_logger = logging.getLogger(logger_name)
+            logger_states.append((pypdf_logger, pypdf_logger.propagate))
+            pypdf_logger.addHandler(collector)
+            pypdf_logger.propagate = False
         filters.MAX_DECLARED_STREAM_LENGTH = max(original_limit, file_size)
         try:
             yield
         finally:
             filters.MAX_DECLARED_STREAM_LENGTH = original_limit
+            for pypdf_logger, original_propagate in logger_states:
+                pypdf_logger.removeHandler(collector)
+                pypdf_logger.propagate = original_propagate
+            recovered = {key: value for key, value in collector.counts.items() if value}
+            if recovered:
+                summary = ", ".join(f"{key}={value}" for key, value in recovered.items())
+                logger.warning("pypdf recovered warnings for %s: %s", pdf_path.name, summary)
 
 
 def pdf_crypto_runtime_status() -> tuple[bool, str]:
@@ -248,6 +309,7 @@ class OCREngine:
         )
         with tempfile.TemporaryDirectory(prefix="tree-pdf-split-") as temp_dir:
             chunk_paths = self._split_pdf(pdf_path, Path(temp_dir), max_pages)
+            progress_tracker = _PdfProgressTracker(page_count)
             jobs = []
             for index, chunk_path in enumerate(chunk_paths, start=1):
                 chunk_pages = self._pdf_page_count(chunk_path)
@@ -263,6 +325,7 @@ class OCREngine:
                             "chunk_pages_total": chunk_pages,
                             "pdf_max_pages_per_job": max_pages,
                             "source_sha256": source_sha256,
+                            "_file_progress_tracker": progress_tracker,
                         },
                     )
                 )
@@ -348,7 +411,19 @@ class OCREngine:
         if checkpoint.get("status") == "downloaded" and result_path and result_path.exists():
             text = result_path.read_text(encoding="utf-8")
             if text.strip() and _text_sha256(text) == checkpoint.get("result_sha256"):
-                _emit_progress({"state": "reused_result", **context})
+                pages_done, pages_total = _progress_pages(
+                    _int_or_none(context.get("chunk_pages_total")),
+                    _int_or_none(context.get("chunk_pages_total")),
+                    context,
+                )
+                _emit_progress(
+                    {
+                        "state": "reused_result",
+                        "pages_done": pages_done,
+                        "pages_total": pages_total,
+                        **context,
+                    }
+                )
                 return text
 
         job_id = str(checkpoint.get("job_id") or "")
@@ -660,10 +735,13 @@ class OCREngine:
             raise RuntimeError(
                 f"OCR result contained no usable text for {context.get('current_chunk', 'document')}"
             )
+        pages_done, pages_total = _progress_pages(page_count, expected_pages, context)
         _emit_progress(
             {
                 **context,
                 "state": "downloaded_result",
+                "pages_done": pages_done,
+                "pages_total": pages_total,
                 "jsonl_lines": line_count,
                 "result_pages": page_count,
                 "text_chars": len(text),
@@ -784,7 +862,7 @@ def _emit_progress(event: dict[str, Any]) -> None:
     if _progress_callback is None:
         return
     try:
-        _progress_callback(event)
+        _progress_callback({key: value for key, value in event.items() if not key.startswith("_")})
     except Exception:
         logger.debug("OCR progress callback failed", exc_info=True)
 
@@ -911,6 +989,8 @@ def _progress_pages(
     if file_total is None or pages_done is None:
         return pages_done, pages_total
 
-    max_pages = _int_or_none(context.get("pdf_max_pages_per_job")) or _PDF_MAX_PAGES_PER_JOB
-    pages_before_chunk = max(0, chunk_index - 1) * max_pages
-    return min(file_total, pages_before_chunk + pages_done), file_total
+    tracker = context.get("_file_progress_tracker")
+    if not isinstance(tracker, _PdfProgressTracker):
+        return min(file_total, max(0, pages_done)), file_total
+    chunk_total = _int_or_none(context.get("chunk_pages_total"))
+    return tracker.update(chunk_index, pages_done, chunk_total), file_total

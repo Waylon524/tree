@@ -35,7 +35,7 @@ class PlannerError(RuntimeError):
     pass
 
 
-ARCHIVIST_ALGORITHM_VERSION = "v3-strict-agent-schema"
+ARCHIVIST_ALGORITHM_VERSION = "v4-clean-window-limits"
 DAGGER_ALGORITHM_VERSION = "v3-explicit-prerequisites"
 
 
@@ -298,7 +298,8 @@ def planner_producer_signature(settings: Any) -> str:
             "prompts": _effective_prompt_hashes(
                 settings, ("archivist_clean", "archivist_mtu")
             ),
-            "long_document_threshold": 100_000,
+            "clean_chunk_max_lines": 1_000,
+            "clean_chunk_max_chars": 100_000,
         }
     )
 

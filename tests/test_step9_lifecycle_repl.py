@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -176,7 +177,7 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
     monkeypatch.setattr("tree.cli.commands.lifecycle.process.spawn_detached", _fake_spawn)
     monkeypatch.setattr(
         "tree.cli.commands.lifecycle.process.terminate_pid",
-        lambda pid, *, force=False: killed.append(pid),
+        lambda pid, *, force=False: killed.append((pid, force)),
     )
     monkeypatch.setattr(
         "tree.cli.commands.lifecycle.start_embedding_service",
@@ -201,9 +202,10 @@ def test_start_and_stop_manage_engine_pid_file(tmp_path, monkeypatch):
     assert stop.exit_code == 0
     assert "stopped" in stop.stdout
     assert "embedding stopped" in stop.stdout
-    assert killed == [4242]
+    assert killed == [(4242, True)]
     assert embedding_stops == [True]
     assert not paths.service_pid_path(tmp_path, "engine").exists()
+    assert json.loads(paths.progress_path(tmp_path).read_text(encoding="utf-8"))["phase"] == "stopped"
 
 
 def test_start_engine_uses_frozen_executable_command(tmp_path, monkeypatch):

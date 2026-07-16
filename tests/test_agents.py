@@ -11,6 +11,7 @@ from tree.agents.prompts import ARCHIVIST_MTU_PROMPT, save_prompt_override
 from tree.agents.student import StudentAgent
 from tree.agents.writer import WriterAgent, sanitize_writer_context
 from tree.planner.mtu import MtuCoverageError
+from tree.observability.retry import LLMOutputTruncatedError
 from tree.state.models import AuditExamDefectKind, ExamReconciliationAction, Route
 
 _EXAM_OUTPUT = """## [Next_Knowledge_Point]
@@ -266,6 +267,42 @@ async def test_archivist_clean_trims_repair_deleted_ranges_to_unlocked_segments(
     cleaned = await agent.clean("line 1\nline 2\nline 3\nline 4\nline 5\nline 6", repair_attempts=1)
 
     assert cleaned == "line 1\nline 6"
+
+
+async def test_archivist_clean_bisects_a_truncated_response():
+    raw = _markdown_lines(202)
+
+    def response(user):
+        if "TOTAL_LINES: 202" in user:
+            raise LLMOutputTruncatedError("finish_reason=length")
+        return """{
+          "deleted_ranges": [
+            {"start_line": 1, "end_line": 1, "reason": "noise"}
+          ]
+        }"""
+
+    client = _FakeClient({"archivist": response})
+    agent = ArchivistAgent(client)
+
+    cleaned = await agent.clean(raw)
+
+    assert len(client.calls) == 3
+    assert "line 1" not in cleaned.splitlines()
+    assert "line 102" not in cleaned.splitlines()
+    assert len(cleaned.splitlines()) == 200
+
+
+async def test_archivist_clean_keeps_a_small_window_after_truncation():
+    raw = _markdown_lines(80)
+
+    def response(_user):
+        raise LLMOutputTruncatedError("finish_reason=length")
+
+    client = _FakeClient({"archivist": response})
+    agent = ArchivistAgent(client)
+
+    assert await agent.clean(raw) == raw
+    assert len(client.calls) == 1
 
 
 async def test_archivist_cut_mtus_accepts_short_title_without_metadata_retry():

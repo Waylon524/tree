@@ -96,6 +96,56 @@ async def test_tree_engine_run_schedules_ready_node_and_finishes(tmp_path, monke
     assert noderun["status"] == "complete"
 
 
+async def test_tree_engine_cancel_stops_children_and_resumes_checkpoint(tmp_path, monkeypatch):
+    paths.ensure_workspace_dirs(tmp_path)
+    _seed_dag(tmp_path, [{"node_id": "n1", "title": "A", "collections": ["课件"]}])
+
+    async def _noop_prepare(engine):
+        return {"mtu_count": 0}
+
+    monkeypatch.setattr("tree.engine.orchestrator.prepare_sources", _noop_prepare)
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class WaitingRunner:
+        async def run_one(self, node_id: str) -> str:
+            started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    engine = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1),
+        node_runner=WaitingRunner(),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+    task = asyncio.create_task(engine.run())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cancelled.is_set()
+    progress = engine.progress.load()
+    assert progress["phase"] == "stopped"
+    assert progress["stages"]["noderun"]["active"] == []
+    state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+    assert state.node_executions[0].status == "in_progress"
+    assert state.node_runs[0].status == "running"
+
+    resumed = TreeEngine(
+        SimpleNamespace(project_root=tmp_path, max_active_node_runs=1),
+        node_runner=_FakeRunner(tmp_path),
+        agents=SimpleNamespace(dagger=_ExplodingDagger()),
+    )
+    await resumed.run()
+    state = StateManager(paths.pipeline_state_path(tmp_path)).load()
+    assert state.node_executions[0].status == "completed"
+    assert resumed.progress.load()["phase"] == "complete"
+
+
 async def test_tree_engine_prepare_failure_closes_active_stage(tmp_path, monkeypatch):
     paths.ensure_workspace_dirs(tmp_path)
 

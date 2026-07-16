@@ -11,6 +11,7 @@ from tree.config import RoleConfig, Settings
 from tree.model import client as model_client
 from tree.model.budget import PromptBudgetExceededError
 from tree.model.operations import OPERATION_SPECS, resolve_operation_spec
+from tree.observability.operation_log import recent_operation_events
 from tree.observability.retry import (
     LLMContentFilteredError,
     LLMOutputTruncatedError,
@@ -41,7 +42,7 @@ class _FakeAsyncOpenAI:
         pass
 
 
-def _settings() -> Settings:
+def _settings(project_root: Path | None = None) -> Settings:
     role = RoleConfig(api_key="k", base_url="https://api.deepseek.com", model="deepseek-v4-flash")
     return Settings(
         examiner=role,
@@ -50,6 +51,7 @@ def _settings() -> Settings:
         archivist=role,
         dagger=role,
         max_retries=0,
+        project_root=project_root or Path("/tmp/tree-model-client-tests"),
     )
 
 
@@ -360,7 +362,7 @@ async def test_operation_specs_negotiate_deepseek_openai_and_generic(monkeypatch
     assert "extra_body" not in calls["archivist"]
 
 
-async def test_operation_telemetry_records_usage_without_prompt_text(monkeypatch, caplog):
+async def test_operation_telemetry_records_usage_without_prompt_text(monkeypatch, caplog, tmp_path):
     class UsageCompletions(_FakeCompletions):
         async def create(self, **kwargs):
             self.calls.append(kwargs)
@@ -379,7 +381,7 @@ async def test_operation_telemetry_records_usage_without_prompt_text(monkeypatch
             UsageClient.instances.append(self)
 
     monkeypatch.setattr(model_client, "AsyncOpenAI", UsageClient)
-    client = model_client.LLMClient(_settings())
+    client = model_client.LLMClient(_settings(tmp_path))
     caplog.set_level("INFO", logger="tree.model.client")
 
     await client.call(
@@ -399,6 +401,60 @@ async def test_operation_telemetry_records_usage_without_prompt_text(monkeypatch
     assert "retries=0" in log
     assert "SECRET_SYSTEM_PROMPT" not in log
     assert "SECRET_USER_PROMPT" not in log
+
+    records = recent_operation_events(tmp_path)
+    assert records[-1] == {
+        "timestamp": records[-1]["timestamp"],
+        "event": "complete",
+        "operation": "dagger.select_prerequisites",
+        "role": "dagger",
+        "effective_role": "dagger",
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "estimated_input_tokens": records[-1]["estimated_input_tokens"],
+        "requested_output_tokens": 2048,
+        "usage_input_tokens": 123,
+        "usage_output_tokens": 45,
+        "finish_reason": "stop",
+        "retries": 0,
+        "latency_ms": records[-1]["latency_ms"],
+        "degraded": False,
+    }
+    serialized = str(records)
+    assert "SECRET_SYSTEM_PROMPT" not in serialized
+    assert "SECRET_USER_PROMPT" not in serialized
+    assert "Authorization" not in serialized
+    assert "api_key" not in serialized
+
+
+async def test_operation_telemetry_records_output_truncation(monkeypatch, tmp_path):
+    class TruncatedCompletions(_FakeCompletions):
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="partial", refusal=None, tool_calls=None),
+                        finish_reason="length",
+                    )
+                ]
+            )
+
+    class TruncatedClient(_FakeAsyncOpenAI):
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=TruncatedCompletions())
+
+    monkeypatch.setattr(model_client, "AsyncOpenAI", TruncatedClient)
+    client = model_client.LLMClient(_settings(tmp_path))
+
+    with pytest.raises(LLMOutputTruncatedError):
+        await client.call("archivist", "system", "user", operation="archivist.clean")
+
+    failed = recent_operation_events(tmp_path)[-1]
+    assert failed["event"] == "failed"
+    assert failed["operation"] == "archivist.clean"
+    assert failed["finish_reason"] == "length"
+    assert failed["error_type"] == "LLMOutputTruncatedError"
 
 
 def test_operation_registry_covers_all_agent_call_classes():

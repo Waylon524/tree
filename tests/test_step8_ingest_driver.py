@@ -338,7 +338,7 @@ def test_split_raw_markdown_prefers_nearest_level_one_heading_in_window():
     assert chunks[1].startswith("# 第一章")
 
 
-def test_split_raw_markdown_falls_back_from_h1_to_h2_to_h3_then_70k():
+def test_split_raw_markdown_falls_back_from_h1_to_h2_to_h3_then_hard_limit():
     h2_raw = "a" * 70_020 + "\n## 二级标题\n" + "b" * 40_000
     h3_raw = "a" * 70_030 + "\n### 三级标题\n" + "b" * 40_000
     plain_raw = "a" * 110_000
@@ -349,7 +349,7 @@ def test_split_raw_markdown_falls_back_from_h1_to_h2_to_h3_then_70k():
 
     assert h2_chunks[1].startswith("## 二级标题")
     assert h3_chunks[1].startswith("### 三级标题")
-    assert [len(chunk) for chunk in plain_chunks] == [70_000, 40_000]
+    assert [len(chunk) for chunk in plain_chunks] == [100_000, 10_000]
 
 
 def test_split_raw_markdown_does_not_treat_window_start_as_line_start():
@@ -357,7 +357,23 @@ def test_split_raw_markdown_does_not_treat_window_start_as_line_start():
 
     chunks = split_raw_markdown_for_cleaning(raw)
 
-    assert [len(chunk) for chunk in chunks] == [70_000, len(raw) - 70_000]
+    assert [len(chunk) for chunk in chunks] == [100_000, len(raw) - 100_000]
+
+
+def test_split_raw_markdown_applies_line_limit_even_below_character_limit():
+    raw = "\n".join(f"line {index}" for index in range(2_032))
+
+    chunks = split_raw_markdown_for_cleaning(raw)
+
+    assert "".join(chunks) == raw
+    assert [len(chunk.splitlines()) for chunk in chunks] == [1_000, 1_000, 32]
+    assert all(len(chunk) <= 100_000 for chunk in chunks)
+
+
+def test_split_raw_markdown_keeps_exactly_one_thousand_lines_together():
+    raw = "\n".join(f"line {index}" for index in range(1_000))
+
+    assert split_raw_markdown_for_cleaning(raw) == [raw]
 
 
 async def test_prepare_sources_cleans_and_cuts_each_long_chunk_independently(tmp_path, monkeypatch):

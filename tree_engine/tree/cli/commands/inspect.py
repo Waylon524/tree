@@ -52,7 +52,18 @@ def materials_text(root: Path) -> str:
 
 
 def logs_text(root: Path) -> str:
-    log_paths = sorted(paths.pipeline_temp_root(root).glob("*.log")) if paths.pipeline_temp_root(root).exists() else []
+    log_paths: list[Path] = []
+    if paths.services_root(root).exists():
+        log_paths.extend(
+            sorted(
+                path
+                for path in paths.services_root(root).iterdir()
+                if path.is_file()
+                and (path.suffix in {".log", ".jsonl"} or ".jsonl." in path.name)
+            )
+        )
+    if paths.pipeline_temp_root(root).exists():
+        log_paths.extend(sorted(paths.pipeline_temp_root(root).glob("*.log")))
     if not log_paths:
         return "No logs found."
     return "\n".join(str(path.relative_to(root)) for path in log_paths)
