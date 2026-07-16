@@ -26,47 +26,47 @@ class LLMOperationSpec:
 
 
 _ROLE_DEFAULTS = {
-    "archivist": LLMOperationSpec("archivist", 8_192, "disabled", json_mode=True),
+    "archivist": LLMOperationSpec("archivist", 131_072, "disabled", json_mode=True),
     "dagger": LLMOperationSpec(
-        "dagger", 8_192, "enabled", json_mode=True, reasoning_effort="high"
+        "dagger", 131_072, "enabled", json_mode=True, reasoning_effort="high"
     ),
-    "examiner": LLMOperationSpec("examiner", 8_192, "enabled"),
-    "student": LLMOperationSpec("student", 8_192, "disabled"),
-    "writer": LLMOperationSpec("writer", 8_192, "enabled"),
+    "examiner": LLMOperationSpec("examiner", 131_072, "enabled"),
+    "student": LLMOperationSpec("student", 131_072, "disabled"),
+    "writer": LLMOperationSpec("writer", 131_072, "enabled"),
 }
 
 
 OPERATION_SPECS: dict[str, LLMOperationSpec] = {
     # Archivist
-    "archivist.clean": LLMOperationSpec("archivist", 4_096, "disabled", json_mode=True),
+    "archivist.clean": LLMOperationSpec("archivist", 65_536, "disabled", json_mode=True),
     "archivist.clean_range_repair": LLMOperationSpec(
-        "archivist", 2_048, "disabled", json_mode=True, timeout_sec=240, max_retries=1
+        "archivist", 32_768, "disabled", json_mode=True, timeout_sec=240, max_retries=1
     ),
     "archivist.mtu_segment": LLMOperationSpec(
-        "archivist", 8_192, "disabled", json_mode=True
+        "archivist", 131_072, "disabled", json_mode=True
     ),
     "archivist.mtu_assignment": LLMOperationSpec(
-        "archivist", 512, "disabled", json_mode=True, timeout_sec=180, max_retries=1
+        "archivist", 8_192, "disabled", json_mode=True, timeout_sec=180, max_retries=1
     ),
     "archivist.mtu_metadata_repair": LLMOperationSpec(
-        "archivist", 512, "disabled", json_mode=True, timeout_sec=180, max_retries=1
+        "archivist", 8_192, "disabled", json_mode=True, timeout_sec=180, max_retries=1
     ),
     "archivist.mtu_units_repair": LLMOperationSpec(
-        "archivist", 4_096, "disabled", json_mode=True, timeout_sec=240, max_retries=1
+        "archivist", 65_536, "disabled", json_mode=True, timeout_sec=240, max_retries=1
     ),
     "archivist.mtu_duplicate_define_repair": LLMOperationSpec(
-        "archivist", 2_048, "disabled", json_mode=True, timeout_sec=240, max_retries=1
+        "archivist", 32_768, "disabled", json_mode=True, timeout_sec=240, max_retries=1
     ),
     # Dagger
     "dagger.build_nodes": LLMOperationSpec(
-        "dagger", 8_192, "enabled", json_mode=True, reasoning_effort="high"
+        "dagger", 131_072, "enabled", json_mode=True, reasoning_effort="high"
     ),
     "dagger.select_prerequisites": LLMOperationSpec(
-        "dagger", 2_048, "enabled", json_mode=True, timeout_sec=240
+        "dagger", 32_768, "enabled", json_mode=True, timeout_sec=240
     ),
     "dagger.repair_defines": LLMOperationSpec(
         "dagger",
-        4_096,
+        65_536,
         "enabled",
         json_mode=True,
         reasoning_effort="high",
@@ -75,32 +75,32 @@ OPERATION_SPECS: dict[str, LLMOperationSpec] = {
     ),
     "dagger.repair_prerequisites": LLMOperationSpec(
         "dagger",
-        8_192,
+        131_072,
         "enabled",
         json_mode=True,
         reasoning_effort="high",
         max_retries=1,
     ),
     # Examiner
-    "examiner.compose": LLMOperationSpec("examiner", 8_192, "enabled"),
-    "examiner.audit": LLMOperationSpec("examiner", 8_192, "enabled"),
+    "examiner.compose": LLMOperationSpec("examiner", 131_072, "enabled"),
+    "examiner.audit": LLMOperationSpec("examiner", 131_072, "enabled"),
     "examiner.reconcile": LLMOperationSpec(
-        "examiner", 8_192, "enabled", reasoning_effort="high"
+        "examiner", 131_072, "enabled", reasoning_effort="high"
     ),
     "examiner.compose_format_repair": LLMOperationSpec(
-        "examiner", 8_192, "disabled", timeout_sec=300, max_retries=1
+        "examiner", 131_072, "disabled", timeout_sec=300, max_retries=1
     ),
     "examiner.audit_format_repair": LLMOperationSpec(
-        "examiner", 4_096, "disabled", timeout_sec=240, max_retries=1
+        "examiner", 65_536, "disabled", timeout_sec=240, max_retries=1
     ),
     "examiner.reconcile_format_repair": LLMOperationSpec(
-        "examiner", 8_192, "disabled", timeout_sec=300, max_retries=1
+        "examiner", 131_072, "disabled", timeout_sec=300, max_retries=1
     ),
     # Student / Writer natural-language operations
-    "student.answer": LLMOperationSpec("student", 8_192, "disabled"),
-    "writer.create": LLMOperationSpec("writer", 8_192, "enabled"),
-    "writer.optimize": LLMOperationSpec("writer", 8_192, "enabled"),
-    "writer.feedback_revision": LLMOperationSpec("writer", 8_192, "enabled"),
+    "student.answer": LLMOperationSpec("student", 131_072, "disabled"),
+    "writer.create": LLMOperationSpec("writer", 131_072, "enabled"),
+    "writer.optimize": LLMOperationSpec("writer", 131_072, "enabled"),
+    "writer.feedback_revision": LLMOperationSpec("writer", 131_072, "enabled"),
 }
 
 

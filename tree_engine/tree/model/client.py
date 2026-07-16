@@ -401,7 +401,7 @@ def _request_options(
     operation: LLMOperationSpec,
     *,
     capabilities: ProviderCapabilities | None = None,
-    max_output_tokens: int = 8_192,
+    max_output_tokens: int = 32_768,
     disabled: set[str] | None = None,
 ) -> dict[str, object]:
     capabilities = capabilities or _PROVIDER_PROFILES["deepseek"]

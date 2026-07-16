@@ -733,8 +733,8 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["llm_base_url"] == "https://api.deepseek.com"
     assert data["llm_model"] == "deepseek-v4-flash"
     assert data["llm_provider_profile"] == "auto"
-    assert data["llm_context_window"] == 128_000
-    assert data["llm_max_output_tokens"] == 8_192
+    assert data["llm_context_window"] == 1_000_000
+    assert data["llm_max_output_tokens"] == 131_072
     assert data["llm_prompt_safety_tokens"] == 1_024
     assert data["role_models"] == {
         "examiner": "deepseek-v4-flash",

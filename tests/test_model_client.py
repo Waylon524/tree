@@ -151,13 +151,13 @@ async def test_llm_client_sets_role_specific_deepseek_options(monkeypatch):
 
     assert calls["archivist"]["response_format"] == {"type": "json_object"}
     assert calls["archivist"]["extra_body"] == {"thinking": {"type": "disabled"}}
-    assert calls["archivist"]["max_tokens"] == 8192
+    assert calls["archivist"]["max_tokens"] == 131072
     assert "reasoning_effort" not in calls["archivist"]
 
     assert calls["dagger"]["response_format"] == {"type": "json_object"}
     assert calls["dagger"]["extra_body"] == {"thinking": {"type": "enabled"}}
     assert calls["dagger"]["reasoning_effort"] == "high"
-    assert calls["dagger"]["max_tokens"] == 8192
+    assert calls["dagger"]["max_tokens"] == 131072
 
     assert "response_format" not in calls["examiner"]
     assert calls["examiner"]["extra_body"] == {"thinking": {"type": "enabled"}}
@@ -192,7 +192,7 @@ async def test_unknown_compatible_provider_gets_only_standard_options(monkeypatc
 
     dagger_index = list(model_client.ROLES).index("dagger")
     call = _FakeAsyncOpenAI.instances[dagger_index].chat.completions.calls[0]
-    assert call["max_tokens"] == 8192
+    assert call["max_tokens"] == 131072
     assert "extra_body" not in call
     assert "reasoning_effort" not in call
     assert "response_format" not in call
@@ -297,7 +297,7 @@ async def test_operation_spec_clamps_short_repair_budget_and_timeout(monkeypatch
 
     archivist_index = list(model_client.ROLES).index("archivist")
     call = _FakeAsyncOpenAI.instances[archivist_index].chat.completions.calls[0]
-    assert call["max_tokens"] == 512
+    assert call["max_tokens"] == 8_192
     assert call["timeout"] == 180.0
     assert call["extra_body"] == {"thinking": {"type": "disabled"}}
     assert call["response_format"] == {"type": "json_object"}
@@ -347,17 +347,17 @@ async def test_operation_specs_negotiate_deepseek_openai_and_generic(monkeypatch
         for role, fake in zip(model_client.ROLES, _FakeAsyncOpenAI.instances)
         if fake.chat.completions.calls
     }
-    assert calls["dagger"]["max_tokens"] == 2_048
+    assert calls["dagger"]["max_tokens"] == 32_768
     assert calls["dagger"]["extra_body"] == {"thinking": {"type": "enabled"}}
     assert calls["dagger"]["response_format"] == {"type": "json_object"}
     assert "reasoning_effort" not in calls["dagger"]
 
-    assert calls["examiner"]["max_completion_tokens"] == 8_192
+    assert calls["examiner"]["max_completion_tokens"] == 131_072
     assert "max_tokens" not in calls["examiner"]
     assert "extra_body" not in calls["examiner"]
     assert "reasoning_effort" not in calls["examiner"]
 
-    assert calls["archivist"]["max_tokens"] == 512
+    assert calls["archivist"]["max_tokens"] == 8_192
     assert "response_format" not in calls["archivist"]
     assert "extra_body" not in calls["archivist"]
 
@@ -394,7 +394,7 @@ async def test_operation_telemetry_records_usage_without_prompt_text(monkeypatch
     log = caplog.text
     assert "operation=dagger.select_prerequisites" in log
     assert "provider=deepseek" in log
-    assert "requested_output=2048" in log
+    assert "requested_output=32768" in log
     assert "usage_input=123" in log
     assert "usage_output=45" in log
     assert "finish_reason=stop" in log
@@ -412,7 +412,7 @@ async def test_operation_telemetry_records_usage_without_prompt_text(monkeypatch
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
         "estimated_input_tokens": records[-1]["estimated_input_tokens"],
-        "requested_output_tokens": 2048,
+        "requested_output_tokens": 32768,
         "usage_input_tokens": 123,
         "usage_output_tokens": 45,
         "finish_reason": "stop",

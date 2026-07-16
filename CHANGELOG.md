@@ -15,6 +15,7 @@
 
 ### Changed
 
+- 将全部 AI operation 的 Max Tokens 上限提高到原配置的十六倍：`512→8192`、`2048→32768`、`4096→65536`、`8192→131072`；默认角色级输出上限同步提高到 `131072`，默认 DeepSeek V4 Flash context window 校准为 `1000000`，在保持短修复请求分档的同时降低长输出截断概率。
 - LLM 响应现在统一验证 choices、message、content、refusal、tool calls 与 `finish_reason`，仅在完整响应通过契约后记录 provider 成功；异常退出会把流水线、当前阶段和 active 状态统一收敛到失败或停止终态。
 - Examiner 要求完整且唯一的五段试卷、路由与 reconciliation 标记，并验证 `Covered_Node_IDs`；Writer 拒绝空教学正文和带项目符号/编号/引用变体的试卷或答案区块。
 - Writer 的规则优先级固定为代码硬约束、结构化 Writer Instructions、动态上下文；草稿、Bottleneck、RAG 和反馈统一作为不可信数据传入，已完成先修默认只引用而不重教。

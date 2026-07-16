@@ -159,8 +159,8 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | `SOURCE_MTU_CHUNK_TOKENS` | `20000` | Source MTU chunk 阈值。UI/API 限制为 `500..32768`。 |
 | `LLM_PROVIDER_CONCURRENCY` | `4` | 同一 LLM 端点与凭据共享的并发上限；限流时会自动降低。 |
 | `LLM_PROVIDER_PROFILE` | `auto` | 能力 profile：`auto`、`deepseek`、`openai` 或 `generic`；未知兼容端点自动采用 `generic`，不发送 DeepSeek 专属参数。 |
-| `LLM_CONTEXT_WINDOW` | `128000` | 每个角色默认的总上下文预算；必须与所选 provider/model 的真实限制一致。 |
-| `LLM_MAX_OUTPUT_TOKENS` | `8192` | 从 context window 中预留的最大输出 token。 |
+| `LLM_CONTEXT_WINDOW` | `1000000` | 每个角色默认的总上下文预算，与默认 DeepSeek V4 Flash 的 1M 上下文一致；更换 provider/model 时必须改为其真实限制。 |
+| `LLM_MAX_OUTPUT_TOKENS` | `131072` | 从 context window 中预留的角色级最大输出 token；operation 会按任务使用 `8192`、`32768`、`65536` 或 `131072` 的更小上限。 |
 | `LLM_PROMPT_SAFETY_TOKENS` | `1024` | 为 tokenizer 估算误差和消息封装保留的安全余量。 |
 | `SOURCE_INGEST_CONCURRENCY` | `4` | 并行处理的材料数。 |
 | `ARCHIVIST_CHUNK_CONCURRENCY` | `2` | 单次材料清洗/切分的并行分块数。 |
