@@ -24,7 +24,13 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 | Windows x64 | [TREE_0.4.0_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v0.4.0/TREE_0.4.0_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
 | Windows x64 | [TREE_0.4.0_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v0.4.0/TREE_0.4.0_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
 
-SHA-256 校验值随 Release 资产提供：[macOS 清单](https://github.com/Waylon524/tree/releases/download/v0.4.0/SHA256SUMS-macos.txt) · [Windows 清单](https://github.com/Waylon524/tree/releases/download/v0.4.0/SHA256SUMS-windows.txt)
+SHA-256 校验值：
+
+- `TREE_0.4.0_macos.dmg`: `73be66790d709f8cdad7736876dabc2aaa4fe8ff6a888b14e078504e705dab9d`
+- `TREE_0.4.0_x64-setup.exe`: `0f8282fb64c44c188cc0f5ffa813213f1af813ac26ada9022d897ab58ddd36fc`
+- `TREE_0.4.0_x64_en-US.msi`: `17261f265fe3224d90b864a6d95d90cdd82b831583f05fa974f5fe4dcae74607`
+
+Release 同时提供可直接校验的 [macOS 清单](https://github.com/Waylon524/tree/releases/download/v0.4.0/SHA256SUMS-macos.txt) 和 [Windows 清单](https://github.com/Waylon524/tree/releases/download/v0.4.0/SHA256SUMS-windows.txt)。
 
 ## TREE 是什么
 
