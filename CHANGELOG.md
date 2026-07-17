@@ -10,7 +10,7 @@
 - 将 NodeRun 标准/快速模式切换器从照料页移动到生长页的生长/休眠按钮左侧；点击模式后立即单独保存，不再依赖照料页的整表设置保存操作。
 - 将连接页、扩展准备页、果园和主工作台左上角的旧叶子与 `T.R.E.E.` 字样统一替换为新应用图标和 `Tree` 品牌名。
 - 放松标准模式 Writer Instructions 的纯格式门槛：教学范围和目标节点继续强校验，其他建议字段允许缺省并使用保守默认值，同时兼容 Markdown 列表前缀及下划线字段名，减少无意义的 Examiner 格式修复调用。
-- macOS 正式发布只向 Apple 提交已包含签名 App 的 DMG；公证、staple 和镜像校验完成后，会从最终 DMG 挂载并复验内部 App 的 Developer ID 签名与 Gatekeeper 状态。
+- macOS 正式发布会在 Tauri 打包阶段显式隔离环境中的 Apple API 公证变量，只向 Apple 提交已包含签名 App 的 DMG；公证、staple 和镜像校验完成后，会从最终 DMG 挂载并复验内部 App 的 Developer ID 签名与 Gatekeeper 状态。
 
 ### Fixed
 

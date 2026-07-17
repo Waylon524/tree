@@ -23,7 +23,17 @@ npm test
 npm run build
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo test --locked --manifest-path src-tauri/Cargo.toml
-npm run tauri -- build --bundles dmg
+# Tauri auto-notarizes the App bundle when Apple API credentials are present in
+# the ambient shell. This release flow intentionally signs the App, places it
+# in the DMG, and submits only that DMG to notarytool below.
+env \
+  -u APPLE_API_ISSUER \
+  -u APPLE_API_KEY \
+  -u APPLE_API_KEY_PATH \
+  -u APPLE_ID \
+  -u APPLE_PASSWORD \
+  -u APPLE_TEAM_ID \
+  npm run tauri -- build --bundles dmg
 cd "$ROOT"
 
 APP="$(find desktop/src-tauri/target/release/bundle -type d -name 'TREE.app' -print -quit)"
