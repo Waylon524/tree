@@ -107,18 +107,31 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  margin: 0;
   color: var(--accent-strong);
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+  line-height: 1;
 }
-.brand::before {
-  content: "";
-  width: 12px;
-  height: 12px;
-  border-radius: 0 65% 0 65%;
-  background: linear-gradient(135deg, var(--leaf-young), var(--leaf-mature));
-  transform: rotate(6deg);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--leaf-young) 22%, transparent);
+.brand-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  object-fit: cover;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--trunk) 20%, transparent);
+}
+h1.brand {
+  font-size: 22px;
+}
+h1.brand .brand-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+.brand-name {
+  color: var(--accent-strong);
 }
 .bar {
   display: flex;
@@ -663,24 +676,6 @@ textarea {
   background: var(--bg);
   color: var(--text);
 }
-.node-run-mode {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-}
-.node-run-mode strong {
-  color: var(--text);
-  font-size: 13px;
-}
-.node-run-mode p {
-  margin: 4px 0 0;
-}
 .mode-toggle {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1166,13 +1161,19 @@ textarea {
     align-items: flex-start;
     flex-direction: column;
   }
-  .node-run-mode {
-    align-items: stretch;
-    flex-direction: column;
-  }
   .mode-toggle {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+  .grow-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .grow-actions {
+    width: 100%;
+  }
+  .grow-mode-toggle {
+    flex: 1 1 auto;
   }
   .project-chip {
     margin-left: 0;
@@ -1913,6 +1914,20 @@ textarea {
 .grow-head > div {
   min-width: 0;
 }
+.grow-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.grow-mode-toggle {
+  background: color-mix(in srgb, var(--bg) 76%, var(--card));
+}
+.grow-mode-toggle button {
+  min-width: 76px;
+  min-height: 32px;
+}
 .grow-toggle {
   flex: 0 0 auto;
   min-width: 76px;
@@ -2150,9 +2165,6 @@ textarea {
 .settings-form .role-grid {
   padding-top: 14px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-}
-.settings-runtime-section .node-run-mode {
-  background: var(--card);
 }
 .settings-form > .settings-details {
   background: color-mix(in srgb, var(--bg) 72%, var(--card));

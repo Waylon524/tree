@@ -602,7 +602,7 @@ export interface SettingsData {
   paddleocr_model: string;
   llama_server_ctx: number;
   source_mtu_chunk_tokens: number;
-  node_run_mode: "standard" | "fast";
+  node_run_mode: NodeRunMode;
   max_iterations: number;
   max_active_node_runs: number;
   max_examiner_span_nodes: number;
@@ -647,8 +647,10 @@ export interface SettingsSave extends AdvancedSettings {
   paddleocr_model: string;
   llama_server_ctx: string;
   source_mtu_chunk_tokens: string;
-  node_run_mode: "standard" | "fast";
+  node_run_mode: NodeRunMode;
 }
+
+export type NodeRunMode = "standard" | "fast";
 
 export async function fetchSettings(): Promise<SettingsData> {
   const resp = await expectOk(await fetch(url("/api/settings")));
@@ -661,6 +663,17 @@ export async function saveSettings(fields: SettingsSave): Promise<SettingsData> 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(fields),
+    }),
+  );
+  return (await resp.json()) as SettingsData;
+}
+
+export async function saveNodeRunMode(nodeRunMode: NodeRunMode): Promise<SettingsData> {
+  const resp = await expectOk(
+    await fetch(url("/api/settings/node-run-mode"), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_run_mode: nodeRunMode }),
     }),
   );
   return (await resp.json()) as SettingsData;

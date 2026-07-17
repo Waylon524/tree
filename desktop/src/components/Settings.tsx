@@ -493,34 +493,6 @@ export function Settings() {
             <legend>
               {t("tend.climate")} <small className="legend-note">({t("tend.note.runtime")})</small>
             </legend>
-            <div className="node-run-mode">
-              <div>
-                <strong>{t("settings.nodeRunMode")}</strong>
-                <p className="hint">
-                  {fields.node_run_mode === "fast"
-                    ? t("settings.nodeRunMode.fastHint")
-                    : t("settings.nodeRunMode.standardHint")}
-                </p>
-              </div>
-              <div className="mode-toggle" role="group" aria-label={t("settings.nodeRunMode")}>
-                <button
-                  type="button"
-                  className={fields.node_run_mode === "standard" ? "active" : ""}
-                  aria-pressed={fields.node_run_mode === "standard"}
-                  onClick={() => setFields((prev) => ({ ...prev, node_run_mode: "standard" }))}
-                >
-                  {t("settings.nodeRunMode.standard")}
-                </button>
-                <button
-                  type="button"
-                  className={fields.node_run_mode === "fast" ? "active" : ""}
-                  aria-pressed={fields.node_run_mode === "fast"}
-                  onClick={() => setFields((prev) => ({ ...prev, node_run_mode: "fast" }))}
-                >
-                  {t("settings.nodeRunMode.fast")}
-                </button>
-              </div>
-            </div>
             <div className="form-grid">
               <Field
                 label={t("settings.llamaCtx")}

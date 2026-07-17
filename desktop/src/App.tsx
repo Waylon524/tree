@@ -2,12 +2,15 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import {
   type AppBootstrap,
+  fetchSettings,
   getToken,
   fetchExtension,
   installExtension,
+  type NodeRunMode,
   type ProjectSelection,
   type ProjectSummary,
   runPipeline,
+  saveNodeRunMode,
   setToken,
   stopPipeline,
 } from "./api";
@@ -18,6 +21,7 @@ import { ProgressPanel } from "./components/ProgressPanel";
 import { Outputs } from "./components/Outputs";
 import { Settings } from "./components/Settings";
 import { ProjectLibrary } from "./components/ProjectLibrary";
+import { Brand } from "./components/Brand";
 import { Seedling } from "./components/illustrations";
 import { Button } from "./components/ui/Button";
 import { Message } from "./components/ui/Message";
@@ -127,7 +131,7 @@ function TokenGate({ onToken }: { onToken: (value: string) => void }) {
   const [value, setValue] = useState<string>("");
   return (
     <div className="gate">
-      <h1 className="brand">T.R.E.E.</h1>
+      <Brand heading />
       <p className="muted">{t("gate.token.desc")}</p>
       <input
         value={value}
@@ -220,7 +224,7 @@ function ExtensionGate({
 
   return (
     <div className="gate extension-gate">
-      <h1 className="brand">T.R.E.E.</h1>
+      <Brand heading />
       <section className="card soil-card">
         <Seedling />
         <div>
@@ -285,8 +289,25 @@ function Dashboard({
   const [selectedDagNodeId, setSelectedDagNodeId] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string>("");
+  const [nodeRunMode, setNodeRunMode] = useState<NodeRunMode | null>(null);
+  const [modeBusy, setModeBusy] = useState<boolean>(false);
+  const [modeError, setModeError] = useState<string>("");
   const growBlockReason = getGrowBlockReason(status, extension);
   const engineActive = status?.engine === "running" || status?.engine === "starting";
+
+  useEffect(() => {
+    let active = true;
+    fetchSettings()
+      .then((settings) => {
+        if (active) setNodeRunMode(settings.node_run_mode);
+      })
+      .catch((err: unknown) => {
+        if (active) setModeError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const runAction = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true);
@@ -300,6 +321,23 @@ function Dashboard({
     }
   };
 
+  const switchNodeRunMode = async (nextMode: NodeRunMode): Promise<void> => {
+    if (modeBusy || nodeRunMode === nextMode) return;
+    const previousMode = nodeRunMode;
+    setNodeRunMode(nextMode);
+    setModeBusy(true);
+    setModeError("");
+    try {
+      const saved = await saveNodeRunMode(nextMode);
+      setNodeRunMode(saved.node_run_mode);
+    } catch (err) {
+      setNodeRunMode(previousMode);
+      setModeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
   const openReader = (target: ReaderTarget): void => {
     setReaderTarget(target);
     if (target.nodeId) setSelectedDagNodeId(target.nodeId);
@@ -309,7 +347,7 @@ function Dashboard({
   return (
     <div className="app">
       <header className="bar">
-        <span className="brand">T.R.E.E.</span>
+        <Brand />
         <nav className="tabs" aria-label={t("nav.primary")}>
           {NAV.map((item) => (
             <button
@@ -355,15 +393,47 @@ function Dashboard({
                 <h2 className="grow-title">{t("grow.heading")}</h2>
                 <p className="muted">{t("grow.subtitle")}</p>
               </div>
-              <Button
-                className="grow-toggle"
-                variant={engineActive ? "ghost" : "primary"}
-                onClick={() => void runAction(engineActive ? stopPipeline : runPipeline)}
-                disabled={busy || (!engineActive && Boolean(growBlockReason))}
-                aria-label={engineActive ? t("grow.rest") : t("grow.grow")}
-              >
-                {engineActive ? t("grow.rest") : t("grow.grow")}
-              </Button>
+              <div className="grow-actions">
+                <div
+                  className="mode-toggle grow-mode-toggle"
+                  role="group"
+                  aria-label={t("settings.nodeRunMode")}
+                  aria-busy={modeBusy}
+                  title={
+                    nodeRunMode === "fast"
+                      ? t("settings.nodeRunMode.fastHint")
+                      : t("settings.nodeRunMode.standardHint")
+                  }
+                >
+                  <button
+                    type="button"
+                    className={nodeRunMode === "standard" ? "active" : ""}
+                    aria-pressed={nodeRunMode === "standard"}
+                    disabled={modeBusy || nodeRunMode === null}
+                    onClick={() => void switchNodeRunMode("standard")}
+                  >
+                    {t("settings.nodeRunMode.standard")}
+                  </button>
+                  <button
+                    type="button"
+                    className={nodeRunMode === "fast" ? "active" : ""}
+                    aria-pressed={nodeRunMode === "fast"}
+                    disabled={modeBusy || nodeRunMode === null}
+                    onClick={() => void switchNodeRunMode("fast")}
+                  >
+                    {t("settings.nodeRunMode.fast")}
+                  </button>
+                </div>
+                <Button
+                  className="grow-toggle"
+                  variant={engineActive ? "ghost" : "primary"}
+                  onClick={() => void runAction(engineActive ? stopPipeline : runPipeline)}
+                  disabled={busy || (!engineActive && Boolean(growBlockReason))}
+                  aria-label={engineActive ? t("grow.rest") : t("grow.grow")}
+                >
+                  {engineActive ? t("grow.rest") : t("grow.grow")}
+                </Button>
+              </div>
             </div>
             {growBlockReason === "extension" && (
               <div className="grow-readiness">
@@ -381,6 +451,7 @@ function Dashboard({
                 </Button>
               </div>
             )}
+            {modeError && <Message kind="error">{modeError}</Message>}
             {actionError && <Message kind="error">{actionError}</Message>}
             <ProgressPanel status={status} />
           </section>

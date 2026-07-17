@@ -101,8 +101,10 @@ NN. <知识点中文标题 or single node title>
 - During audit, if the draft or student response relies on sibling/future node material outside ActiveNode Context or outside the NodeRun prior scope, FAIL for source-boundary violation.
 
 ### Writer_Instructions Required Shape
-Write [Writer_Instructions] with exactly these fields, one `Field: value` record per line. Use a
-comma-separated list or `None` for list fields. Do not add fields or multiline continuations:
+Write [Writer_Instructions] as one `Field: value` record per line. `Scope` and
+`Covered node ids` are required. The remaining fields are recommended; when they do not apply,
+they may be omitted and TREE will supply conservative defaults. Use a comma-separated list or
+`None` for list fields. Do not add unknown fields or multiline continuations:
 Scope:
 Covered node ids:
 Required concepts:

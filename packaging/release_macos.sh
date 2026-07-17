@@ -35,7 +35,26 @@ xcrun notarytool submit "$DMG" --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE"
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 hdiutil verify "$DMG"
-spctl --assess --type execute --verbose=4 "$APP"
+
+MOUNT_DIR="$(mktemp -d)"
+MOUNTED=0
+cleanup_mount() {
+  if [[ "$MOUNTED" == "1" ]]; then
+    hdiutil detach "$MOUNT_DIR" >/dev/null
+  fi
+  rmdir "$MOUNT_DIR" 2>/dev/null || true
+}
+trap cleanup_mount EXIT
+hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DMG" >/dev/null
+MOUNTED=1
+BUNDLED_APP="$(find "$MOUNT_DIR" -maxdepth 1 -type d -name 'TREE.app' -print -quit)"
+test -n "$BUNDLED_APP"
+codesign --verify --deep --strict --verbose=4 "$BUNDLED_APP"
+spctl --assess --type execute --verbose=4 "$BUNDLED_APP"
+hdiutil detach "$MOUNT_DIR" >/dev/null
+MOUNTED=0
+rmdir "$MOUNT_DIR"
+trap - EXIT
 
 VERSION="${TAG#v}"
 FINAL="packaging/TREE_${VERSION}_macos.dmg"

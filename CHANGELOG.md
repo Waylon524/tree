@@ -2,6 +2,20 @@
 
 本文件记录项目每次已落地变更，按时间倒序维护。未来计划请查看 [PLAN.md](PLAN.md)。
 
+## 1.0.0 - 2026-07-17
+
+### Changed
+
+- 将 Tauri 默认桌面图标替换为 TREE 专属知识树图标，并统一重建 macOS ICNS、Windows ICO、Windows Store 方形图标和桌面 PNG 尺寸资源。
+- 将 NodeRun 标准/快速模式切换器从照料页移动到生长页的生长/休眠按钮左侧；点击模式后立即单独保存，不再依赖照料页的整表设置保存操作。
+- 将连接页、扩展准备页、果园和主工作台左上角的旧叶子与 `T.R.E.E.` 字样统一替换为新应用图标和 `Tree` 品牌名。
+- 放松标准模式 Writer Instructions 的纯格式门槛：教学范围和目标节点继续强校验，其他建议字段允许缺省并使用保守默认值，同时兼容 Markdown 列表前缀及下划线字段名，减少无意义的 Examiner 格式修复调用。
+- macOS 正式发布只向 Apple 提交已包含签名 App 的 DMG；公证、staple 和镜像校验完成后，会从最终 DMG 挂载并复验内部 App 的 Developer ID 签名与 Gatekeeper 状态。
+
+### Fixed
+
+- Windows 桌面 App 启动 `tre-engine.exe` sidecar 时使用 `CREATE_NO_WINDOW`，不再弹出可被误关并导致后台功能中断的控制台窗口；直接运行 sidecar 的命令行诊断输出保持不变。
+
 ## 0.4.0 - 2026-07-16
 
 ### Added

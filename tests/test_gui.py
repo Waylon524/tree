@@ -768,6 +768,7 @@ def test_settings_requires_token(workspace):
     client = _client(workspace)
     assert client.get("/api/settings").status_code == 403
     assert client.post("/api/settings", json={}).status_code == 403
+    assert client.patch("/api/settings/node-run-mode", json={}).status_code == 403
 
 
 def test_settings_get_returns_defaults_and_masked_key_state(workspace):
@@ -809,6 +810,47 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["dagger_cluster_auto_accept_same_collection"] is False
     assert "llm_api_key" not in data
     assert "paddleocr_api_token" not in data
+
+
+def test_node_run_mode_patch_updates_only_mode(workspace):
+    config = paths.global_config_path()
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "LLM_API_KEY=sk-existing\nLLM_MODEL=existing-model\nMAX_ITERATIONS=9\n",
+        encoding="utf-8",
+    )
+    client = _authed_client(workspace)
+
+    response = client.patch(
+        "/api/settings/node-run-mode",
+        json={"node_run_mode": "fast"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["node_run_mode"] == "fast"
+    assert data["invalidated_stages"] == ["NodeRun"]
+    assert set(config.read_text(encoding="utf-8").splitlines()) == {
+        "LLM_API_KEY=sk-existing",
+        "LLM_MODEL=existing-model",
+        "MAX_ITERATIONS=9",
+        "NODE_RUN_MODE=fast",
+    }
+
+
+def test_node_run_mode_patch_rejects_invalid_mode_without_writing(workspace):
+    config = paths.global_config_path()
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("NODE_RUN_MODE=standard\n", encoding="utf-8")
+    client = _authed_client(workspace)
+
+    response = client.patch(
+        "/api/settings/node-run-mode",
+        json={"node_run_mode": "turbo"},
+    )
+
+    assert response.status_code == 400
+    assert config.read_text(encoding="utf-8") == "NODE_RUN_MODE=standard\n"
 
 
 def test_settings_post_writes_global_config_with_role_models(workspace):

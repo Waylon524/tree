@@ -15,6 +15,7 @@ import {
 import { useT } from "../i18n";
 import { formatBytes } from "../lib/format";
 import { FruitTreeMark, OrchardScene } from "./illustrations";
+import { Brand } from "./Brand";
 import { Button } from "./ui/Button";
 import { ConfirmByName } from "./ui/ConfirmByName";
 import { Menu } from "./ui/Menu";
@@ -223,7 +224,7 @@ export function ProjectLibrary({
   return (
     <div className="project-library">
       <header className="project-library-bar">
-        <span className="brand">T.R.E.E.</span>
+        <Brand />
         {onBack && (
           <Button variant="ghost" onClick={onBack}>
             {t("orchard.back")}

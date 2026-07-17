@@ -68,6 +68,43 @@ def test_parse_exam_sections():
     assert exam.writer_instruction_spec.covered_node_ids == ["n1", "n2"]
 
 
+def test_parse_exam_sections_defaults_optional_writer_instruction_fields():
+    minimal = _EXAM.replace(
+        "Scope: 教化学平衡\n"
+        "Covered node ids: n1, n2\n"
+        "Required concepts: 化学平衡\n"
+        "Required formulas: None\n"
+        "Required derivations: None\n"
+        "Forbidden spillover: None\n"
+        "Prior concepts to cite: None\n"
+        "Expected sections: 学习目标, 核心概念\n"
+        "Organization notes: 按概念到应用组织\n"
+        "Prerequisite repairs: None",
+        "- Scope: 教化学平衡\n- Covered_Node_IDs: n1, n2",
+    )
+
+    spec = parse_exam_sections(minimal).writer_instruction_spec
+
+    assert spec is not None
+    assert spec.covered_node_ids == ["n1", "n2"]
+    assert spec.required_concepts == []
+    assert spec.expected_sections == [
+        "学习目标",
+        "背景与应用场景",
+        "核心概念与符号约定",
+        "原理与方法",
+        "例题",
+        "常见误区与检查点",
+    ]
+    assert spec.organization_notes == "Follow the standard TREE node structure."
+
+
+def test_parse_exam_sections_still_requires_writer_instruction_scope():
+    invalid = _EXAM.replace("Scope: 教化学平衡\n", "")
+    with pytest.raises(ParseError, match="Missing Writer Instructions fields: scope"):
+        parse_exam_sections(invalid)
+
+
 def test_parse_exam_sections_rejects_unknown_writer_instruction_field():
     invalid = _EXAM.replace(
         "Prerequisite repairs: None",

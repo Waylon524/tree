@@ -429,6 +429,31 @@ def create_app(root: Path, *, token: str) -> FastAPI:
         after["invalidated_stages"] = _settings_invalidation_stages(before, after)
         return after
 
+    @app.patch("/api/settings/node-run-mode")
+    def api_save_node_run_mode(
+        request: Request,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        _require(request)
+        mode = payload.get("node_run_mode")
+        if not isinstance(mode, str) or not mode.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="node_run_mode must be standard or fast.",
+            )
+        before = config_cmd.read_settings_config(root, env_path=paths.global_config_path())
+        try:
+            config_cmd.write_settings_config(
+                root,
+                env_path=paths.global_config_path(),
+                settings={"node_run_mode": mode},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        after = config_cmd.read_settings_config(root, env_path=paths.global_config_path())
+        after["invalidated_stages"] = _settings_invalidation_stages(before, after)
+        return after
+
     @app.get("/api/materials")
     def api_materials(request: Request) -> dict[str, list[str]]:
         _require(request)

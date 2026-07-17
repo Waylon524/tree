@@ -161,6 +161,24 @@ _WRITER_INSTRUCTION_LIST_FIELDS = {
     "expected_sections",
     "prerequisite_repairs",
 }
+_WRITER_INSTRUCTION_REQUIRED_FIELDS = {"scope", "covered_node_ids"}
+_WRITER_INSTRUCTION_DEFAULTS: dict[str, object] = {
+    "required_concepts": [],
+    "required_formulas": [],
+    "required_derivations": [],
+    "forbidden_spillover": [],
+    "prior_concepts_to_cite": [],
+    "expected_sections": [
+        "学习目标",
+        "背景与应用场景",
+        "核心概念与符号约定",
+        "原理与方法",
+        "例题",
+        "常见误区与检查点",
+    ],
+    "organization_notes": "Follow the standard TREE node structure.",
+    "prerequisite_repairs": [],
+}
 _EMPTY_INSTRUCTION_VALUES = {"none", "null", "n/a", "(none)", "无", "无要求"}
 _CONTROL_INJECTION_RE = re.compile(
     r"(?:ignore\s+(?:all\s+)?(?:previous|prior|system|developer)|"
@@ -174,7 +192,7 @@ _CONTROL_INJECTION_RE = re.compile(
 def _parse_writer_instruction_fields(text: str) -> dict[str, object]:
     values: dict[str, object] = {}
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
+        line = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", raw_line.strip())
         if not line:
             continue
         match = re.match(r"^([^:：]+)[:：]\s*(.*)$", line)
@@ -182,7 +200,8 @@ def _parse_writer_instruction_fields(text: str) -> dict[str, object]:
             raise ValueError(
                 f"Writer Instructions line {line_number} must be one `Field: value` record"
             )
-        label = " ".join(match.group(1).strip().lower().split())
+        label = re.sub(r"[_-]+", " ", match.group(1).strip().lower())
+        label = " ".join(label.split())
         try:
             field = _WRITER_INSTRUCTION_LABELS[label]
         except KeyError as exc:
@@ -198,10 +217,12 @@ def _parse_writer_instruction_fields(text: str) -> dict[str, object]:
     missing = [
         label
         for label, field in _WRITER_INSTRUCTION_LABELS.items()
-        if field not in values
+        if field in _WRITER_INSTRUCTION_REQUIRED_FIELDS and field not in values
     ]
     if missing:
         raise ValueError("Missing Writer Instructions fields: " + ", ".join(missing))
+    for field, default in _WRITER_INSTRUCTION_DEFAULTS.items():
+        values.setdefault(field, list(default) if isinstance(default, list) else default)
     return values
 
 

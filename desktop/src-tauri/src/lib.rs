@@ -12,6 +12,8 @@ use std::fs;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -22,6 +24,8 @@ use tauri::{Manager, RunEvent, State};
 
 const ARCHIVE_MANIFEST: &str = "tree-parent-tree.json";
 const ARCHIVE_SCHEMA: &str = "tree.parent-tree";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ApiConfig {
@@ -1457,7 +1461,11 @@ fn sidecar_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 fn spawn_sidecar(binary: PathBuf, root: &Path, port: u16, token: &str) -> Result<Child, String> {
     let root_arg = path_to_string(root);
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
         .args([
             "serve",
             "--host",

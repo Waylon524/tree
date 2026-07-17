@@ -13,6 +13,8 @@ venv/
 *.egg-info/
 build/
 dist/
+packaging/TREE_*_macos.dmg
+packaging/SHA256SUMS-macos.txt
 
 # Env / secrets
 .env
