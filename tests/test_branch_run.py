@@ -297,6 +297,9 @@ async def test_node_run_fail_then_pass_records_single_node_output(tmp_path):
     assert student.calls[0]["learned_hits"] == [{"text": "prior hit", "metadata": {"path": "outputs/001.前置.md"}}]
 
     assert ledger_covered_node_ids(tmp_path) == {"n0", "n1"}
+    ledger = json.loads(paths.knowledge_ledger_path(tmp_path).read_text(encoding="utf-8"))
+    record = next(item for item in ledger["records"] if item["node_id"] == "n1")
+    assert record["output_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
     state = StateManager(paths.pipeline_state_path(tmp_path)).load()
     execution = state.node_executions[0]
     assert execution.status == "completed"
