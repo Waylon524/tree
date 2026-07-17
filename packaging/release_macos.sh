@@ -36,11 +36,10 @@ env \
   npm run tauri -- build --bundles dmg
 cd "$ROOT"
 
-APP="$(find desktop/src-tauri/target/release/bundle -type d -name 'TREE.app' -print -quit)"
 DMG="$(find desktop/src-tauri/target/release/bundle -type f -name '*.dmg' -print -quit)"
-test -n "$APP" && test -n "$DMG"
+test -n "$DMG"
 
-codesign --verify --deep --strict --verbose=4 "$APP"
+codesign --verify --strict --verbose=4 "$DMG"
 xcrun notarytool submit "$DMG" --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" --wait
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"

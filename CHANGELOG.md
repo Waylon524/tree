@@ -15,6 +15,7 @@
 ### Fixed
 
 - Windows 桌面 App 启动 `tre-engine.exe` sidecar 时使用 `CREATE_NO_WINDOW`，不再弹出可被误关并导致后台功能中断的控制台窗口；直接运行 sidecar 的命令行诊断输出保持不变。
+- 修复 Tauri 生成 DMG 后清理临时 staging App 会让 macOS 发布脚本在公证前退出的问题；发布验证现在只依赖最终 DMG，并从挂载镜像中检查实际交付的 App。
 
 ## 0.4.0 - 2026-07-16
 
