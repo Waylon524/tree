@@ -62,6 +62,7 @@ const EMPTY_ADVANCED_FIELDS: AdvancedSettings = {
   source_ocr_pdf_max_pages_per_job: "99",
   source_ocr_upload_interval_sec: "5",
   source_embedding_concurrency: "1",
+  embed_request_timeout_sec: "300",
   archivist_mtu_cut_timeout_sec: "480",
   archivist_mtu_repair_attempts: "8",
   archivist_chunk_concurrency: "2",
@@ -183,6 +184,7 @@ const ADVANCED_GROUPS: AdvancedGroup[] = [
       { key: "source_ocr_pdf_max_pages_per_job", kind: "number", min: "1", max: "500" },
       { key: "source_ocr_upload_interval_sec", kind: "number", min: "0", max: "120", step: "0.1" },
       { key: "source_embedding_concurrency", kind: "number", min: "1", max: "16" },
+      { key: "embed_request_timeout_sec", kind: "number", min: "10", max: "3600", step: "1" },
     ],
   },
   {
@@ -229,6 +231,7 @@ function advancedFieldsFromSettings(settings: SettingsData): AdvancedSettings {
     source_ocr_pdf_max_pages_per_job: String(settings.source_ocr_pdf_max_pages_per_job),
     source_ocr_upload_interval_sec: String(settings.source_ocr_upload_interval_sec),
     source_embedding_concurrency: String(settings.source_embedding_concurrency),
+    embed_request_timeout_sec: String(settings.embed_request_timeout_sec),
     archivist_mtu_cut_timeout_sec: String(settings.archivist_mtu_cut_timeout_sec),
     archivist_mtu_repair_attempts: String(settings.archivist_mtu_repair_attempts),
     archivist_chunk_concurrency: String(settings.archivist_chunk_concurrency),

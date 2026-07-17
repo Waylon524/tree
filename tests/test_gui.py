@@ -796,6 +796,7 @@ def test_settings_get_returns_defaults_and_masked_key_state(workspace):
     assert data["paddleocr_model"] == "PaddleOCR-VL-1.6"
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
+    assert data["embed_request_timeout_sec"] == 300.0
     assert data["node_run_mode"] == "standard"
     assert data["max_iterations"] == 5
     assert data["max_active_node_runs"] == 3
@@ -874,6 +875,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
             "paddleocr_model": "PaddleOCR-VL-Next",
             "llama_server_ctx": "22000",
             "source_mtu_chunk_tokens": "20000",
+            "embed_request_timeout_sec": "420",
             "node_run_mode": "fast",
             "max_iterations": "7",
             "max_active_node_runs": "3",
@@ -897,6 +899,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert data["role_models"]["dagger"] == "dagger-model"
     assert data["llama_server_ctx"] == 22_000
     assert data["source_mtu_chunk_tokens"] == 20_000
+    assert data["embed_request_timeout_sec"] == 420.0
     assert data["llm_provider_profile"] == "generic"
     assert data["llm_context_window"] == 64_000
     assert data["llm_max_output_tokens"] == 4_096
@@ -932,6 +935,7 @@ def test_settings_post_writes_global_config_with_role_models(workspace):
     assert "PADDLEOCR_MODEL=PaddleOCR-VL-Next" in written
     assert "LLAMA_SERVER_CTX=22000" in written
     assert "SOURCE_MTU_CHUNK_TOKENS=20000" in written
+    assert "EMBED_REQUEST_TIMEOUT_SEC=420" in written
     assert "NODE_RUN_MODE=fast" in written
     assert "MAX_ITERATIONS=7" in written
     assert "MAX_ACTIVE_NODE_RUNS=3" in written

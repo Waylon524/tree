@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tree.rag.embed import EmbeddingClient
@@ -137,7 +139,7 @@ def test_embedding_client_includes_http_error_body(monkeypatch):
     import urllib.error
 
     def fake_urlopen(req, timeout=None):
-        assert timeout == 60
+        assert timeout == 300
         raise urllib.error.HTTPError(
             req.full_url,
             400,
@@ -157,6 +159,83 @@ def test_embedding_client_includes_http_error_body(monkeypatch):
     assert "context length exceeded" in message
     assert "inputs=1" in message
     assert "max_chars=10" in message
+
+
+def test_local_embedding_client_gives_each_existing_chunk_its_own_timeout(monkeypatch):
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        payload = json.loads(req.data)
+        calls.append((payload["input"], timeout))
+        value = 1.0 if payload["input"] == ["left"] else 2.0
+        return _Response(
+            {
+                "data": [
+                    {"index": 0, "embedding": [value, 0.0]},
+                ]
+            }
+        )
+
+    monkeypatch.setattr("tree.rag.embed.urllib.request.urlopen", fake_urlopen)
+    client = EmbeddingClient(base_url="http://localhost:8788", model="m")
+
+    assert client.embed(["left", "right"]) == [[1.0, 0.0], [2.0, 0.0]]
+    assert calls == [(["left"], 300.0), (["right"], 300.0)]
+
+
+def test_external_embedding_client_keeps_batch_request(monkeypatch):
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        payload = json.loads(req.data)
+        calls.append((payload["input"], timeout))
+        return _Response(
+            {
+                "data": [
+                    {"index": 0, "embedding": [1.0, 0.0]},
+                    {"index": 1, "embedding": [2.0, 0.0]},
+                ]
+            }
+        )
+
+    monkeypatch.setattr("tree.rag.embed.urllib.request.urlopen", fake_urlopen)
+    client = EmbeddingClient(base_url="https://embed.example.test", model="m")
+
+    assert client.embed(["left", "right"]) == [[1.0, 0.0], [2.0, 0.0]]
+    assert calls == [(["left", "right"], 300.0)]
+
+
+def test_embedding_timeout_reports_segment_and_recovery_guidance(monkeypatch):
+    def fake_urlopen(req, timeout=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("tree.rag.embed.urllib.request.urlopen", fake_urlopen)
+    client = EmbeddingClient(
+        base_url="http://localhost:8788", model="m", timeout_sec=12
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        client.embed(["left", "x" * 10])
+
+    message = str(exc.value)
+    assert "after 12s" in message
+    assert "segment=1/2" in message
+    assert "max_chars=4" in message
+    assert "EMBED_REQUEST_TIMEOUT_SEC" in message
+
+
+class _Response:
+    def __init__(self, data: dict):
+        self._data = json.dumps(data).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._data
 
 
 class _Body:

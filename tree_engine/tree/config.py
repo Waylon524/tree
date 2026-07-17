@@ -24,6 +24,7 @@ ROLES = ("examiner", "student", "writer", "archivist", "dagger")
 
 DEFAULT_LLAMA_SERVER_CTX = 22_000
 DEFAULT_SOURCE_MTU_CHUNK_TOKENS = 20_000
+DEFAULT_EMBED_REQUEST_TIMEOUT_SEC = 300.0
 DEFAULT_LLM_CONTEXT_WINDOW = 1_000_000
 DEFAULT_LLM_MAX_OUTPUT_TOKENS = 131_072
 DEFAULT_LLM_PROMPT_SAFETY_TOKENS = 1_024
@@ -88,6 +89,7 @@ class Settings:
     source_ocr_upload_interval_sec: float = 5.0
     source_embedding_concurrency: int = 1
     source_mtu_chunk_tokens: int = DEFAULT_SOURCE_MTU_CHUNK_TOKENS
+    embed_request_timeout_sec: float = DEFAULT_EMBED_REQUEST_TIMEOUT_SEC
 
     # Archivist (MTU cutting)
     archivist_mtu_cut_timeout_sec: float = 480.0
@@ -175,6 +177,9 @@ class Settings:
             source_embedding_concurrency=_env_int("SOURCE_EMBEDDING_CONCURRENCY", 1),
             source_mtu_chunk_tokens=_env_int(
                 "SOURCE_MTU_CHUNK_TOKENS", DEFAULT_SOURCE_MTU_CHUNK_TOKENS
+            ),
+            embed_request_timeout_sec=_env_float(
+                "EMBED_REQUEST_TIMEOUT_SEC", DEFAULT_EMBED_REQUEST_TIMEOUT_SEC
             ),
             archivist_mtu_cut_timeout_sec=_env_float("ARCHIVIST_MTU_CUT_TIMEOUT_SEC", 480.0),
             archivist_mtu_repair_attempts=_env_int("ARCHIVIST_MTU_REPAIR_ATTEMPTS", 8),

@@ -575,6 +575,7 @@ export interface AdvancedSettings {
   source_ocr_pdf_max_pages_per_job: string;
   source_ocr_upload_interval_sec: string;
   source_embedding_concurrency: string;
+  embed_request_timeout_sec: string;
   archivist_mtu_cut_timeout_sec: string;
   archivist_mtu_repair_attempts: string;
   archivist_chunk_concurrency: string;
@@ -620,6 +621,7 @@ export interface SettingsData {
   source_ocr_pdf_max_pages_per_job: number;
   source_ocr_upload_interval_sec: number;
   source_embedding_concurrency: number;
+  embed_request_timeout_sec: number;
   archivist_mtu_cut_timeout_sec: number;
   archivist_mtu_repair_attempts: number;
   archivist_chunk_concurrency: number;

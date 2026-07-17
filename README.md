@@ -2,7 +2,7 @@
 
 TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Markdown 等课程资料整理成一棵“知识果树”：采集和清洗资料、建立知识图谱、为知识点生成学习文件，再让你按依赖关系学习、记录阅读进度、对讲解提出反馈，并把整个项目迁移到另一台设备继续使用。
 
-当前推荐入口是 **TREE 桌面 App**；CLI 保留给自动化、调试和高级用户。当前源码版本为 `1.0.0`；正式安装包见下方下载区。
+当前推荐入口是 **TREE 桌面 App**；CLI 保留给自动化、调试和高级用户。当前源码版本为 `1.1.0`；正式安装包见下方下载区。
 
 ## 当前状态
 
@@ -160,6 +160,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | `LLM_MAX_OUTPUT_TOKENS` | `131072` | 从 context window 中预留的角色级最大输出 token；operation 会按任务使用 `8192`、`32768`、`65536` 或 `131072` 的更小上限。 |
 | `LLM_PROMPT_SAFETY_TOKENS` | `1024` | 为 tokenizer 估算误差和消息封装保留的安全余量。 |
 | `SOURCE_INGEST_CONCURRENCY` | `4` | 并行处理的材料数。 |
+| `EMBED_REQUEST_TIMEOUT_SEC` | `300` | 单个 embedding 请求的超时秒数；本地服务按既有物理段逐段请求，每段独立使用该预算。 |
 | `ARCHIVIST_CHUNK_CONCURRENCY` | `2` | 单次材料清洗/切分的并行分块数。 |
 | `DAGGER_PREREQUISITE_CONCURRENCY` | `3` | Dagger 先修关系请求并发数。 |
 | `NODE_RUN_MODE` | `standard` | NodeRun 模式：`standard` 使用多智能体质量循环，`fast` 每个新节点只调用一次 Fast Writer。 |
@@ -170,7 +171,7 @@ TREE 是本地桌面 App，但运行时需要模型和 OCR 服务：
 | `EMBED_AUTO_START` | App 管理 | 如果你自己管理 embedding 服务，可设为 `false`。 |
 | `LLAMA_SERVER_BIN` | App 管理 | 指定自定义 `llama-server` 可执行文件。 |
 
-照料页还开放了更多高级运行参数，包括 `MAX_ITERATIONS`、`MAX_EXAMINER_SPAN_NODES`、`MAX_RETRIES`、`MAX_FORMAT_RETRIES`、`LLM_TIMEOUT_SEC`、token 预算、`SOURCE_OCR_CONCURRENCY`、`SOURCE_EMBEDDING_CONCURRENCY`、`ARCHIVIST_MTU_REPAIR_ATTEMPTS`、`DAGGER_REPAIR_ATTEMPTS` 和 Dagger cluster 相关阈值。界面默认值与引擎一致，保存后会说明下次运行需要重算的最早阶段；普通项目建议保留自适应并发的默认设置。
+照料页还开放了更多高级运行参数，包括 `MAX_ITERATIONS`、`MAX_EXAMINER_SPAN_NODES`、`MAX_RETRIES`、`MAX_FORMAT_RETRIES`、`LLM_TIMEOUT_SEC`、token 预算、`SOURCE_OCR_CONCURRENCY`、`SOURCE_EMBEDDING_CONCURRENCY`、`EMBED_REQUEST_TIMEOUT_SEC`、`ARCHIVIST_MTU_REPAIR_ATTEMPTS`、`DAGGER_REPAIR_ATTEMPTS` 和 Dagger cluster 相关阈值。界面默认值与引擎一致，保存后会说明下次运行需要重算的最早阶段；普通项目建议保留自适应并发的默认设置。
 
 每个角色都可以通过 `<ROLE>_PROVIDER_PROFILE`、`<ROLE>_CONTEXT_WINDOW` 和 `<ROLE>_MAX_OUTPUT_TOKENS` 覆盖全局值，例如 `DAGGER_CONTEXT_WINDOW=160000`。调用前 TREE 会估算 system + user 输入；operation 的输出预算只会在角色上限以内收紧，短 JSON 修复不会默认占用与长文生成相同的输出额度和推理强度。超出输入预算时会先缩减低优先级 RAG/repair 上下文或为 Dagger 覆盖输入分批，仍无法容纳时在请求 provider 前返回包含 operation、角色和预算数字的错误。
 
