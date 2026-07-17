@@ -17,21 +17,21 @@ TREE 是一个桌面学习工作台。它把 PDF、课件、Word、图片、Mark
 
 ## 下载
 
-当前发布版本：[v1.1.0](https://github.com/Waylon524/tree/releases/tag/v1.1.0)
+当前发布版本：[v1.1.1](https://github.com/Waylon524/tree/releases/tag/v1.1.1)
 
 | 平台 | 安装包 | 说明 |
 | --- | --- | --- |
-| macOS Apple Silicon | [TREE_1.1.0_macos.dmg](https://github.com/Waylon524/tree/releases/download/v1.1.0/TREE_1.1.0_macos.dmg) | 已使用 Developer ID 签名、公证并 stapled。 |
-| Windows x64 | [TREE_1.1.0_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v1.1.0/TREE_1.1.0_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
-| Windows x64 | [TREE_1.1.0_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v1.1.0/TREE_1.1.0_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
+| macOS Apple Silicon | [TREE_1.1.1_macos.dmg](https://github.com/Waylon524/tree/releases/download/v1.1.1/TREE_1.1.1_macos.dmg) | 已使用 Developer ID 签名、公证并 stapled。 |
+| Windows x64 | [TREE_1.1.1_x64-setup.exe](https://github.com/Waylon524/tree/releases/download/v1.1.1/TREE_1.1.1_x64-setup.exe) | NSIS 安装包。Windows 可能因新应用信誉不足显示 SmartScreen 提醒。 |
+| Windows x64 | [TREE_1.1.1_x64_en-US.msi](https://github.com/Waylon524/tree/releases/download/v1.1.1/TREE_1.1.1_x64_en-US.msi) | MSI 安装包，适合偏好 Windows Installer 的场景。 |
 
 SHA-256 校验值：
 
-- `TREE_1.1.0_macos.dmg`: `04527a539164216679e05cb092f01facf06ae4aa5c087f357467a4503d1ccc9b`
-- `TREE_1.1.0_x64-setup.exe`: `e300a552aca23a04b38391c8bc4d0d6f247170ad292c3a168508b12e2560ff79`
-- `TREE_1.1.0_x64_en-US.msi`: `5ded427d0f80117407e8f742001e72d16b5dbe85c326263349e9528d35423b0e`
+- `TREE_1.1.1_macos.dmg`: `41e643c1c185afe57128d0dcf400fdb12f5f4acb4c581723ae34e8a1417fab46`
+- `TREE_1.1.1_x64-setup.exe`: `41cde9130ee7976ec7ff406111332dde733193729854e533ef74b8b552223e9f`
+- `TREE_1.1.1_x64_en-US.msi`: `449227af5ed118587113f9f3f103586246a036edd2fb07544a5cbb460f9289ee`
 
-Release 同时提供可直接校验的 [macOS 清单](https://github.com/Waylon524/tree/releases/download/v1.1.0/SHA256SUMS-macos.txt) 和 [Windows 清单](https://github.com/Waylon524/tree/releases/download/v1.1.0/SHA256SUMS-windows.txt)。
+Release 同时提供可直接校验的 [macOS 清单](https://github.com/Waylon524/tree/releases/download/v1.1.1/SHA256SUMS-macos.txt) 和 [Windows 清单](https://github.com/Waylon524/tree/releases/download/v1.1.1/SHA256SUMS-windows.txt)。
 
 ## TREE 是什么
 
